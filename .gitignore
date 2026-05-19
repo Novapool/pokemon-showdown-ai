@@ -71,3 +71,10 @@ local_settings.py
 pip-log.txt
 # redis dumps
 *.rdb
+
+# ML training artifacts
+__pycache__/
+models/**/checkpoints/*.pt
+models/**/checkpoints/*.pkl
+models/q_learning/qtable.pkl
+output/
