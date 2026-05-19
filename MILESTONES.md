@@ -1,471 +1,387 @@
 # Pokemon Showdown AI Training — Milestones
 
-Goal: Build a genuinely intelligent Pokemon trainer AI via ML training + evaluation on Pokemon Showdown simulator.
+Goal: Build a genuinely intelligent Pokemon trainer AI. Target architecture:
+**Transformer-based policy + value network trained with PPO, eventually augmented
+with MCTS for lookahead.**
 
-Strategy: Model exploration phase (M2) before committing to an architecture. Hypothesis: Deep RL (DQN/PPO) beats tabular and heuristic baselines. Prove it empirically.
+Strategy: Structured state → transformer encoder → MCTS on top of learned value
+function → opponent modeling. Each milestone unblocks the next.
 
 ---
 
 ## M0: Foundation ✅ COMPLETE
 
-**Status:** ✅ Complete  
-**Duration:** (Prior work)  
-**Artifacts:** docs suite, baseline AI reference
-
-> **Important:** `simulate.js` in the repo root is an unrelated gym-leader simulation script (not part of this ML project). It exists as a useful reference for concurrency patterns and `DamageFirstAI` implementation, but its output (`output/raw_battles.csv`) is not training data for this project.
+**Status:** ✅ Complete
+**Artifacts:** docs suite, build system, baseline AI reference
 
 ### Deliverables
 - Build system functional (`./build` → `dist/`)
 - Documentation suite: 8 core reference files in `docs/`
-- Verified: `RandomPlayerAI` base class available at `sim/tools/random-player-ai.ts`
+- Verified: `RandomPlayerAI` base class at `sim/tools/random-player-ai.ts`
 - Verified: `BattleStream` API works for programmatic parallel battles
 
 ### Key Files
-- `sim/tools/random-player-ai.ts` — base `RandomPlayerAI` class (extend this for custom policies)
+- `sim/tools/random-player-ai.ts` — base AI class (extend for custom policies)
 - `docs/SETUP.md`, `docs/SIMULATOR-API.md`, `docs/PARALLEL-SIMULATION.md`, `docs/AI-PLAYERS.md`
-- `simulate.js` — **reference only** (concurrency patterns, `DamageFirstAI` example); not a project artifact
+- `simulate.js` — **reference only** (concurrency patterns, `DamageFirstAI` example); not an ML project artifact
 
 ---
 
-## M1: Environment & Baseline Agent ✅ COMPLETE
+## M1: Environment & Baseline Agents ✅ COMPLETE
 
-**Status:** ✅ Complete  
-**Duration:** ~1 session  
-**Goals:** Define observation/action spaces, reward function, evaluation protocol
+**Status:** ✅ Complete
+**Goals:** Gym wrapper, flat-vector feature extractor, evaluation protocol, and
+baseline agent implementations (tabular Q, DQN, PPO)
 
 ### Deliverables
+1. `sim/tools/pokemon-gym.ts` — `PokemonGymEnv`: `reset()`, `step(action)`, `validActions()`, `destroy()`
+2. `sim/tools/feature-extractor.ts` — `extractFeatures()`, `OBS_SIZE = 100` flat Float32Array
+3. `sim/tools/evaluator.ts` — parallel battle evaluator, `evaluateVsRandom()`
+4. `models/gym_bridge.js` + `models/gym_client.py` — Python-Node stdio bridge
+5. `models/q_learning/` — tabular Q-learning (confirms tabular limitation; archived)
+6. `models/dqn/` — DQN with experience replay (regression baseline)
+7. `models/ppo/` — PPO actor-critic with GAE (training algorithm going forward)
+8. `models/evaluate.py` — checkpoint evaluation CLI
 
-1. **Gym Wrapper** (`sim/tools/pokemon-gym.ts`)
-   - Class `PokemonGymEnv` wrapping `BattleStream`
-   - Methods: `reset()` → `obs`, `step(action)` → `(obs, reward, done, info)`
-   - Tracks: active Pokemon HP, team HP, status, boosts, held items, move PP
-   - Handles: forced switches, illegal moves, game-end conditions
-   - Format: `gen1randombattle` (fewest mechanics, fastest training)
+### Observation Space (current, to be replaced in M2)
+- Flat 100-dim Float32Array: own active [0–14], moves [15–54], switch mask [55–59], opponent active [60–74], padding [75–99]
+- Known limitations: no bench Pokémon info, opponent bench absent, stat boosts hardcoded at 0.5, 25 bytes of padding
 
-2. **Observation Space**
-   - Vector-based feature extraction from active request
-   - Features (per active Pokémon + opponent):
-     - HP ratio (0-1)
-     - Level
-     - Status condition (bitmask: burn, freeze, paralysis, poison, sleep, tox)
-     - Stat boosts (attack, defense, spa, spd, spe, accuracy, evasion): [-6 to +6]
-     - Held item ID
-     - Type (bitmask, if observable)
-   - Available moves (per move):
-     - Base power
-     - Accuracy
-     - PP remaining (as ratio of max)
-     - Type (bitmask)
-     - Category (physical/special/status)
-   - Switch options: valid switch-in Pokémon (bitmask)
-   - Opponent field state: active Pokémon (species/type/level if observable)
-   - **Total size:** ~100–150 features per turn
-   - Format: numpy-compatible flat array
+### Action Space
+- 9 discrete actions: move 1–4 (indices 0–3), switch 1–5 (indices 4–8)
+- Validity masking enforced at every step
 
-3. **Action Space**
-   - Discrete 9-action space:
-     - Move 1, 2, 3, 4 (indices 0–3)
-     - Switch 1–5 (indices 4–8)
-   - Validity masking: `env.valid_actions()` returns boolean mask
-   - Agent should respect mask to avoid illegal move penalty
-
-4. **Reward Function** (reward shaping)
-   - **Per-turn reward:**
-     - `+0.01` for each opponent Pokémon KO'd (normalized to [0,1])
-     - `-0.01` for each friendly Pokémon KO'd
-     - `+0.001` for favorable type matchup switch (heuristic)
-     - `-0.001` for unfavorable switch
-     - `+0.0001` for status effect inflicted (burn, paralysis, etc.)
-   - **Episode reward:**
-     - `+1.0` for winning the battle
-     - `-1.0` for losing
-     - `-0.001 × turns_taken` (penalize stalling)
-   - **Clipping:** reward in [-1, +1]
-
-5. **Evaluation Protocol**
-   - Metric 1: **Win Rate vs RandomPlayerAI** (target ≥ 90% after training)
-     - 1000 battles per checkpoint
-     - Report: win %, KO ratio, avg battle length
-   - Metric 2: **Win Rate vs DamageFirstAI** (target ≥ 70%)
-     - 500 battles per checkpoint
-   - Metric 3: **Battle Efficiency**
-     - Avg turns per battle (should not exceed 50 for gen1)
-     - Indicator of stalling / infinite loops
-   - Evaluation harness: `sim/tools/evaluator.ts`
-
-6. **Test Cases** (unit + integration)
-   - Gym reset: valid initial state
-   - Step: illegal move masked, legal move accepted
-   - Reward: KO detection, win/loss terminal states
-   - Observation shape consistency (100–150 features)
-   - Deterministic battle with fixed seed reproducibility
+### Reward Function
+- `+0.01` per opponent KO, `-0.01` per own KO
+- `+0.0001` per status inflicted on opponent
+- `+1.0` win, `-1.0` loss
+- `-0.001 × turns` stalling penalty
+- Clipped to `[-1, 1]`
 
 ### Success Criteria ✅
-- Gym wrapper loads, resets, and steps without errors ✅
-- Observation shape is consistent (100 features, `OBS_SIZE = 100`) ✅
-- Reward function produces sensible values (not NaN, not exploding) ✅
-- Battles terminate correctly (win detection via omniscient stream) ✅
-- All 10 gym unit tests pass ✅
-
-### Key Files Delivered
-- `sim/tools/pokemon-gym.ts` — `PokemonGymEnv` class
-- `sim/tools/evaluator.ts` — `evaluate()` and `evaluateVsRandom()`
-- `sim/tools/feature-extractor.ts` — `extractFeatures()`, `OBS_SIZE = 100`
-- `docs/AI-PLAYERS.md` — gym wrapper usage section added
-- `test/tools/gym.test.js` — 10 unit tests, all passing
+- Gym loads, resets, steps without errors
+- Observation shape consistent (100 features every turn)
+- Reward bounds correct (never NaN, always in `[-1, 1]`)
+- Battles terminate correctly via omniscient stream win detection
+- All gym unit tests pass (`test/tools/gym.test.js`)
 
 ---
 
-## M2: Model Exploration (Benchmark ≥3 Architectures) 🔜 UP NEXT
+## M2: Structured State Representation 🔜 UP NEXT
 
-**Status:** 🔜 Up Next — M1 complete, Python bridge needed first  
-**Duration:** ~2–3 weeks  
-**Goals:** Empirically compare model architectures; select winner for M3 scale-up
+**Status:** 🔜 Up Next
+**Goals:** Replace the flat 100-dim vector with a per-Pokémon tokenized
+representation. The gym wrapper is unchanged; only the feature extractor changes.
+Verify that PPO (with the trunk flattening the tokens) learns comparably to the
+old flat-vector baseline.
 
-### Model Candidates
+### Why This Matters
+The flat vector loses all relational structure between Pokémon. A transformer
+(M3) cannot reason about "my Slowbro vs their Gengar" if both are smeared into
+one undifferentiated vector. Structured tokens are the prerequisite for attention
+to be meaningful.
 
-| Model | Type | Framework | Entry Point | Expected Win Rate (Random) | Expected Win Rate (DamageFirst) | Est. Training Time (100k battles) | Notes |
-|-------|------|-----------|-------------|------|-----|----|----|
-| **Baseline: DamageFirstAI** | Heuristic | N/A | `sim/tools/damage-first-ai.ts` | 60% | — | N/A | Sanity check, already in M0 |
-| **Model A: Tabular Q-Learning** | RL (Tabular) | PyTorch + Python | `models/q_learning/train.py` | ~40–50% | ~20% | 1–2h | State discretization limits utility; gen3+ state space explodes. Prove tabular won't work. |
-| **Model B: DQN (Deep Q-Network)** | Deep RL | PyTorch + Python | `models/dqn/train.py` | ~80–90% | ~60–70% | 12–24h | Primary hypothesis. Fast convergence, stable. Small MLP (2×128). |
-| **Model C: PPO** | Policy Gradient | PyTorch + Python | `models/ppo/train.py` | ~85–95% | ~65–75% | 18–36h | More stable than DQN; handles action space well. Actor-critic. |
-| **Model D: MCTS + NN (optional)** | Tree Search + NN | PyTorch + C++ | `models/mcts/train.py` | TBD | TBD | 24–48h | Only if DQN/PPO plateau. AlphaZero-style; requires fast eval. |
+### What to Build
 
-### Per-Model Specifications
+**1. New feature extractor — `extractFeaturesStructured()`**
 
-#### Model A: Tabular Q-Learning (`models/q_learning/`)
+Returns a `(12, token_dim)` shaped array instead of a flat vector.
 
-**State Discretization:**
-- Health buckets: own HP / opponent HP (10 buckets each: 0–10%, 10–20%, ..., 90–100%)
-- Move types: compress to 3 types (physical, special, status) × 3 base power tiers (low/med/high)
-- Switch: yes/no (have valid switch)
-- Total state space: ~10 × 10 × 3 × 3 × 2 = 1800 states
+Token sequence (12 total for gen1 6v6):
+```
+[0]     own active Pokémon
+[1–5]   own bench Pokémon (slots 1–5)
+[6]     opponent active Pokémon
+[7–11]  opponent bench Pokémon (slots 1–5; mostly unknown)
+```
 
-**Implementation:**
-- Q-table: `{state_hash: {action: Q_value}}`
-- Training loop: 10k episodes, epsilon-greedy (ε=0.1 → 0.05)
-- Hyperparameters: α (learning rate) = 0.1, γ (discount) = 0.99
+Per-Pokémon token features:
+| Feature | Dim | Notes |
+|---------|-----|-------|
+| HP ratio | 1 | 0–1; 0 if fainted |
+| Level / 100 | 1 | |
+| Type 1 one-hot | 15 | gen1 has 15 types |
+| Type 2 one-hot | 15 | same as type 1 if single-type |
+| Status one-hot | 6 | brn, frz, par, psn, slp, tox |
+| Active flag | 1 | 1 if currently on field |
+| Unknown flag | 1 | 1 if this token is unrevealed opponent Pokémon |
+| Fainted flag | 1 | 1 if fainted |
+| Move 1–4 (each) | 6 | base_power/250, accuracy/100, PP_ratio, type_idx/15, category_idx/2, disabled |
 
-**Success Criteria:**
-- Learns to beat RandomPlayerAI (≥ 50% win rate)
-- Q-table grows to reasonable size (< 500k states encountered)
-- Falls short of DamageFirstAI (confirm tabular limitation)
+Total token_dim = 1+1+15+15+6+1+1+1 + 4×6 = **65**. Full tensor: **(12, 65)**.
 
-**Key Files:**
-- Create: `models/q_learning/train.py`
-- Create: `models/q_learning/q_agent.py`
-- Create: `models/q_learning/README.md` (results + analysis)
+**2. Unknown token handling**
 
----
+Opponent bench slots that haven't been revealed are filled with `unknown_flag=1`
+and all other features set to 0 (with the exception of `HP ratio = 1.0` to
+represent "assumed full HP"). This distinguishes "not yet revealed" from
+"fainted" (which has `HP ratio = 0, fainted_flag = 1`).
 
-#### Model B: DQN (Deep Q-Network) — **PRIMARY CANDIDATE**
+Do NOT use a zero vector for unknown — it looks identical to a fainted Pokémon.
 
-**Architecture:**
-- Input: 100–150 features (from gym wrapper)
-- Hidden layers: 2 × 128 ReLU
-- Output: 9 Q-values (one per action)
-- Target network: copy main network every 500 steps
+**3. Stat boost tracking**
 
-**Training:**
-- Environment: `PokemonGymEnv(format='gen1randombattle')`
-- Replay buffer: 50k capacity, batch size 32
-- Exploration: ε-greedy (ε: 0.5 → 0.01 over 50k steps)
-- Loss: MSE(Q_target - Q_pred)
-- Optimizer: Adam, learning rate = 1e-3
+The gym's omniscient reader already sees all `|-boost|` and `|-unboost|` lines.
+Add a boost accumulator to `PokemonGymEnv` that tracks boosts per slot, then
+pass them into `extractFeaturesStructured()`. Boosts for the active Pokémon
+replace the hardcoded 0.5 placeholder.
 
-**Hyperparameter Sweep:**
-- Learning rates: [1e-4, 1e-3, 1e-2]
-- Batch sizes: [16, 32, 64]
-- Exploration schedule: linear, exponential
-- Network depth: [1×128, 2×128, 3×256]
+**4. Bridge protocol update**
 
-**Success Criteria:**
-- Win rate ≥ 80% vs RandomPlayerAI after 100k battles
-- Win rate ≥ 60% vs DamageFirstAI
-- Training stable (Q-values not diverging)
-- Checkpoint at 25k, 50k, 75k, 100k battles
+`gym_bridge.js` currently serializes the obs as a flat `Array` of 100 floats.
+Change the serialization to pass a `(12 × 65 = 780)`-element flat array.
+`gym_client.py` reshapes it back to `(12, 65)` as a numpy array.
 
-**Key Files:**
-- Create: `models/dqn/train.py`
-- Create: `models/dqn/dqn_agent.py` (network + training loop)
-- Create: `models/dqn/replay_buffer.py`
-- Create: `models/dqn/README.md` (results + plots)
+Backward-compat: add a `--flat` flag to `gym_bridge.js` for running the old
+MLP PPO baseline against random as a regression check.
 
----
+**5. Existing helpers to keep**
 
-#### Model C: PPO (Proximal Policy Optimization)
+`parseHpRatio()`, `parseStatus()`, `fillStatusBitmask()`, `parseLevelFromDetails()`,
+`typeToIndex()`, `categoryToIndex()` — all reusable as-is from `feature-extractor.ts`.
 
-**Architecture:**
-- Actor (policy): input (100–150 features) → hidden (2 × 128) → output (9 action logits)
-- Critic (value): input (100–150 features) → hidden (2 × 128) → output (scalar value estimate)
-- Separate networks, shared encoder (optional)
-
-**Training:**
-- Rollout horizon: 2000 steps per update (8–16 batches of 2000-step trajectories)
-- PPO clip ratio: ε = 0.2
-- Entropy bonus: β = 0.01
-- GAE λ: 0.95
-- Optimizer: Adam, learning rate = 3e-4
-
-**Hyperparameter Sweep:**
-- Learning rates: [1e-4, 3e-4, 1e-3]
-- Rollout horizons: [1000, 2000, 4000]
-- Entropy bonus: [0.0, 0.01, 0.05]
-- Network depth: [1×128, 2×128, 3×256]
-
-**Success Criteria:**
-- Win rate ≥ 85% vs RandomPlayerAI after 100k battles
-- Win rate ≥ 65% vs DamageFirstAI
-- More stable than DQN (lower variance in rollouts)
-- Checkpoint at 25k, 50k, 75k, 100k battles
-
-**Key Files:**
-- Create: `models/ppo/train.py`
-- Create: `models/ppo/ppo_agent.py` (actor-critic + training loop)
-- Create: `models/ppo/trajectory_buffer.py`
-- Create: `models/ppo/README.md` (results + plots)
-
----
-
-#### Model D (Optional): MCTS + Value Network
-
-Only pursue if DQN/PPO plateau below 90% win rate.
-
-**Architecture:**
-- Value network: 3-layer MLP, predicts win probability from board state
-- MCTS: tree search over 10–20 plausible actions per turn (reduce branching)
-- Simulation: NN eval (fast) + shallow rollout (default random, 5–10 moves)
-
-**Expected Training:** 24–48h for 100k battles (slow; only if necessary)
-
----
-
-### M2 Timeline & Orchestration
-
-**Phase 1: Baseline Setup (Days 1–2)**
-- Verify gym wrapper from M1 is stable
-- Implement Python bridge: `PokemonGymClient` to call Node.js gym via subprocess
-- Write evaluation harness in Python
-
-**Phase 2: Model A — Tabular Q-Learning (Days 3–4)**
-- Implement state discretization
-- Train 10k episodes, measure win rate
-- Document state space growth, performance ceiling
-
-**Phase 3: Model B & C in Parallel (Days 5–14)**
-- Model B (DQN): train 100k battles, log metrics every 5k
-- Model C (PPO): train 100k battles, log metrics every 5k
-- Run hyperparameter sweeps on best candidates (top 3 configs each)
-
-**Phase 4: Comparison & Selection (Days 15–17)**
-- Consolidate results: win rate, training stability, sample efficiency
-- Ablation studies: layer count, learning rate sensitivity
-- Write comparison report (`docs/MODEL-COMPARISON.md`)
-- **Decision:** Select DQN or PPO (or both, if tie) for M3
-
-**Phase 5 (Optional): Model D — MCTS (Days 18–25)**
-- Only if winner < 90% vs RandomPlayerAI
-- Implement fast NN eval + search
-- Expected to take longer; justify time investment
-
-### Success Criteria for M2
-- **Model A:** Implemented, confirms tabular limitation
-- **Model B (DQN):** Achieves ≥ 80% win rate, training reproducible
-- **Model C (PPO):** Achieves ≥ 85% win rate, stable
-- **Model D (optional):** Only if above plateau
-- **Comparison:** Winner has ≥ 85% vs RandomPlayerAI, ≥ 60% vs DamageFirstAI
-- **Report:** 3–5 page analysis in `docs/MODEL-COMPARISON.md`
-
-### Key Files to Create
-- `models/q_learning/` (train.py, q_agent.py, README.md)
-- `models/dqn/` (train.py, dqn_agent.py, replay_buffer.py, README.md)
-- `models/ppo/` (train.py, ppo_agent.py, trajectory_buffer.py, README.md)
-- `models/mcts/` (optional; train.py, mcts_agent.py, README.md)
-- `models/` (root): `train_env.py` (Python gym client), `evaluate.py` (shared eval logic)
-- `docs/MODEL-COMPARISON.md` (results + winner selection)
-
----
-
-## M3: Deep RL Training at Scale ⬜ NOT STARTED
-
-**Status:** ⬜ Not Started  
-**Duration:** ~3–4 weeks  
-**Goals:** Scale winning architecture (DQN or PPO) to 1M+ battles, hyperparameter optimization, self-play
-
-### Deliverables
-
-1. **Scale Winner to 1M Battles**
-   - Extend training from 100k → 1M battles
-   - Format: `gen1randombattle` (primary), then `gen3randombattle` (stretch)
-   - Checkpoints: every 50k battles
-   - Metrics: win rate vs RandomPlayerAI, vs DamageFirstAI, vs self
-
-2. **Hyperparameter Optimization**
-   - Grid/random search over learning rates, batch sizes, network depth
-   - Early stopping: if win rate plateaus for 100k battles, stop
-   - Document all sweeps in `models/{dqn|ppo}/hyperparameter_sweep.csv`
-
-3. **Self-Play Training**
-   - After 500k battles: agent plays vs previous version (`main` vs `v1_500k`, etc.)
-   - Alternate: odd iterations vs RandomPlayerAI, even vs self
-   - Track ELO or win rate progression across versions
-
-4. **Format Progression**
-   - Milestone 1: Master `gen1randombattle` (current target)
-   - Milestone 2 (stretch): Train on `gen3randombattle` (more mechanics, larger state space)
-   - Milestone 3 (stretch): Evaluate on `gen7randombattle` (Dynamax, Terrain, etc.)
-
-5. **Checkpointing & Resumption**
-   - Save network weights, optimizer state, replay buffer every checkpoint
-   - Implement `load_checkpoint(path)` to resume training mid-run
-   - Allows recovery from interruptions
-
-6. **Final Evaluation**
-   - 5000 battles vs RandomPlayerAI (≥ 95% win rate)
-   - 2000 battles vs DamageFirstAI (≥ 75% win rate)
-   - 1000 battles vs previous champion model (if applicable)
-   - Report: mean reward per episode, KO ratio, avg battle length
+### Files to Create / Modify
+| File | Action |
+|------|--------|
+| `sim/tools/feature-extractor.ts` | Add `extractFeaturesStructured()`, export `TOKEN_DIM=65`, `N_TOKENS=12` |
+| `sim/tools/pokemon-gym.ts` | Add boost tracker; thread boosts into `extractFeaturesStructured()` |
+| `models/gym_bridge.js` | Change obs serialization to 780-element flat array; add `--flat` flag |
+| `models/gym_client.py` | Reshape `(780,)` → `(12, 65)` numpy array |
 
 ### Success Criteria
-- Trained agent achieves ≥ 95% win rate vs RandomPlayerAI
-- Trained agent achieves ≥ 75% win rate vs DamageFirstAI
-- Training stable: no divergence, no reward collapse
-- Format progression: eval on gen1 + gen3 at least
-- Self-play: demonstrates learning curve improvement across versions
+- `extractFeaturesStructured()` returns `Float32Array` of length `12 × 65 = 780`, shape-stable across move requests, switch requests, and end-of-episode
+- Unknown opponent bench tokens have `unknown_flag=1` and `HP_ratio=1.0`
+- Fainted tokens have `fainted_flag=1` and `HP_ratio=0`
+- PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles (parity with old flat-vector baseline confirms representation isn't broken)
+- Stat boosts for active Pokémon are non-constant (tracked from battle log)
 
-### Key Files to Create/Modify
-- Modify: `models/{dqn|ppo}/train.py` → add checkpointing, self-play mode
-- Create: `models/{dqn|ppo}/hyperparameter_sweep.py` (grid search harness)
-- Create: `models/{dqn|ppo}/TRAINING-RESULTS.md` (logs, plots, analysis)
-- Modify: `docs/ML-TRAINING.md` → add scaling guide and self-play section
+### Unblocks
+M3 (transformer encoder needs per-Pokémon tokens as input)
 
 ---
 
-## M4: Showdown Server Integration ⬜ NOT STARTED
+## M3: Transformer Encoder + PPO Baseline ⬜ AFTER M2
 
-**Status:** ⬜ Not Started  
-**Duration:** ~2 weeks  
-**Goals:** Connect trained model to live Pokemon Showdown server, accept battle challenges from humans
+**Status:** ⬜ Not Started
+**Goals:** Replace the MLP trunk with a small transformer encoder. Train with PPO
+and establish a transformer win-rate baseline to beat in subsequent milestones.
 
-### Deliverables
+### Architecture
 
-1. **WebSocket Client to Pokemon Showdown**
-   - Connect to `sim.smogon.com` or local test server
-   - Authenticate with bot credentials
-   - Listen for challenge events
+```
+Input:  (batch, 12, 65)  ← 12 Pokémon tokens, each 65-dim
 
-2. **Battle Handler**
-   - Receive battle state (standard Showdown protocol)
-   - Map to gym observation
-   - Run policy inference (forward pass through trained model)
-   - Send move choice within 2-second latency budget
+Linear(65 → d_model=128)   ← project tokens into model dimension
 
-3. **Local Server Setup (Testing)**
-   - Docker or local Node.js instance of Showdown
-   - Bot account registration
-   - Challenge acceptance via CLI or HTTP
+TransformerEncoder(
+  layers=2, nhead=4, d_model=128, d_ff=256, dropout=0.1
+)                          ← attention over Pokémon relationships
 
-4. **Inference Optimization**
-   - Model quantization (if needed): FP32 → FP16 or INT8
-   - Batch inference: queue moves, process multiple battles in parallel
-   - Latency profiling: ensure < 2s per move
+Mean-pool over 12 tokens   ← (batch, 128) context vector
 
-5. **Logging & Monitoring**
-   - Per-battle log: teams, moves, outcome, latency
-   - Per-bot metric: win rate on server, opponent diversity, response time
-   - Alert on crashes or timeout
+Policy head: Linear(128, 9)  → action logits
+Value head:  Linear(128, 1)  → state value scalar
+```
+
+No positional encoding (Pokémon are unordered; add only if ablation shows benefit).
+
+Unknown opponent tokens are attention-masked (key_padding_mask) so they don't
+pollute the context with learned noise before the opponent's team is revealed.
+
+Total parameters: ~500k–1M. Training target: 200k–500k battles.
+
+### Files to Create
+| File | Contents |
+|------|----------|
+| `models/transformer/transformer_agent.py` | `TransformerAgent(nn.Module)` with `act()`, `evaluate_actions()`, `update()`, `save()`, `load()` |
+| `models/transformer/train.py` | PPO loop — reuse `TrajectoryBuffer` from `models/ppo/trajectory_buffer.py`; swap agent class only |
+
+### Files to Modify
+| File | Change |
+|------|--------|
+| `models/evaluate.py` | Add `--model transformer` support |
+
+### Hyperparameters (starting point)
+```
+d_model=128, d_ff=256, nhead=4, n_layers=2, dropout=0.1
+lr=3e-4, clip_eps=0.2, value_coef=0.5, entropy_coef=0.01
+rollout_steps=512, ppo_epochs=4, batch_size=64
+```
+
+### Training Protocol
+1. Train transformer PPO for 200k battles
+2. At same battle count, run MLP PPO baseline for comparison
+3. Checkpoint every 25k battles
+4. Log: win rate vs RandomPlayerAI, attention weight entropy (check non-uniform)
 
 ### Success Criteria
-- Bot connects to Showdown and accepts challenges
-- Latency < 2 seconds per move decision
-- Wins ≥ 60% of matches vs random human/bot opponents
-- Runs for ≥ 100 consecutive battles without crashing
+- Transformer PPO ≥ 80% win rate vs RandomPlayerAI at 200k battles
+- Transformer PPO beats MLP PPO at the same battle count (demonstrates attention helps)
+- Attention weight entropy > 0.5 nats (model uses attention, not degenerate uniform)
+- Loss curves stable: no divergence, value loss decreasing monotonically in first 50k battles
+- ≥ 65% win rate vs DamageFirstAI at 200k battles
 
-### Key Files to Create
-- Create: `server/bot-client.ts` (WebSocket + auth)
-- Create: `server/battle-handler.ts` (state mapping, inference)
-- Create: `server/config.ts` (Showdown URL, credentials, latency budget)
-- Create: `server/logging.ts` (per-battle + per-bot metrics)
-- Create: `docs/DEPLOYMENT.md` (local server setup, Docker guide)
+### Unblocks
+M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head)
 
 ---
 
-## M5: Evaluation & Iteration ⬜ NOT STARTED
+## M4: MCTS Integration ⬜ AFTER M3
 
-**Status:** ⬜ Not Started  
-**Duration:** ~2 weeks (ongoing)  
-**Goals:** Comprehensive evaluation, human playtest, document failure modes and next research directions
+**Status:** ⬜ Not Started
+**Goals:** Layer UCT-based Monte Carlo Tree Search on top of the trained PPO
+transformer. Use the learned value network for leaf evaluation instead of random
+rollouts. Start with inference-time MCTS; add AlphaZero-style fine-tuning later.
 
-### Deliverables
+### Design
 
-1. **Elo Ladder**
-   - Track model rating across 1000+ battles vs varied opponents
-   - Update rating after each match (Glicko-2 or simplified Elo)
-   - Publish rating history (CSV)
+**Tree nodes:** `(state_obs: np.ndarray, valid_mask: bool[9])`
 
-2. **Tournament Mode**
-   - Round-robin: model versions play each other
-   - Format: gen1, gen3, gen7 (if trained on all)
-   - Output: tournament bracket, cross-version win rates
+**UCT selection:**
+```
+score(s, a) = Q(s, a) + c_puct × P(a|s) × sqrt(N(s)) / (1 + N(s, a))
+```
+where `P(a|s)` is the transformer policy prior and `V(s)` is the transformer
+value estimate at leaf nodes.
 
-3. **Failure Analysis**
-   - Identify loss patterns: specific types weak, stalling behaviors, etc.
-   - Per-format analysis: gen1 vs gen3 vs gen7
-   - Annotate 50–100 loss replays with decision points
+**Simulation budget:** N=100 simulations per move decision (tune: 50–200).
 
-4. **Human Playtest**
-   - User (and optionally other testers) play against model on Showdown
-   - Subjective feedback: difficult? fun? predictable?
-   - Win rate over 100+ battles
-   - Optional: compare vs public Showdown bots
+### Imperfect Information
 
-5. **Ablation Study (if time)**
-   - Feature importance: which observation features matter most?
-   - Architecture sensitivity: layer count, hidden size impact
-   - Reward shaping: which reward components drive learning?
+Gen1 hides the opponent's team composition and moves until revealed. Approach:
 
-6. **Research Directions Document** (`docs/FUTURE-WORK.md`)
-   - What worked: DQN/PPO, architecture decisions
-   - What didn't: failure modes, dead ends
-   - Next steps: multi-format transfer learning, opponent adaptation, curriculum learning, etc.
+**Determinization (start here):** At each MCTS rollout, sample a plausible
+opponent team from the prior distribution over gen1 Pokémon (weighted by tier
+usage), conditioned on what has already been revealed. Run MCTS on the fully
+observed determinized game. Simple and effective for shallow lookahead.
+
+Belief-state MCTS (Information Set MCTS) is more principled but significantly
+more complex — defer unless determinization plateaus.
+
+### Files to Create
+| File | Contents |
+|------|----------|
+| `models/mcts/mcts_agent.py` | `MCTSNode`, `MCTSAgent` with `search()`, `select()`, `expand()`, `backup()` |
+| `models/mcts/determinizer.py` | Samples plausible opponent teams given revealed Pokémon |
 
 ### Success Criteria
-- Elo ladder implemented and tracked for ≥ 500 matches
-- Tournament completed, cross-version analysis published
-- 50+ loss replays annotated with decision analysis
-- Human playtest completed (≥ 100 matches, feedback documented)
-- FUTURE-WORK.md written with 5+ concrete next-step ideas
+- MCTS(N=100) + transformer value beats PPO-only transformer by ≥ 5% win rate vs DamageFirstAI
+- Decision latency < 500ms per move (100 sims, gen1 is fast)
+- Win rate vs RandomPlayerAI ≥ 90%
+- Determinizer generates valid gen1randombattle-legal teams
 
-### Key Files to Create/Modify
-- Create: `server/elo-ladder.ts` (rating computation, history logging)
-- Create: `server/tournament.ts` (bracket generation, match orchestration)
-- Create: `eval/failure-analysis.py` (pattern detection, replay annotation)
-- Create: `docs/FUTURE-WORK.md` (research directions, next experiments)
-- Modify: `docs/ML-TRAINING.md` → add human playtest guide
+### Unblocks
+Self-play with MCTS policy (generates higher-quality training data for future fine-tuning)
+
+---
+
+## M5: Opponent Modeling Head ⬜ AFTER M3
+
+**Status:** ⬜ Not Started
+**Goals:** Add an auxiliary head to the transformer that predicts the opponent's
+next action. Train with a multi-task loss (PPO + opponent prediction). Use to
+improve the policy's anticipation of opposing moves.
+
+### Design
+
+The omniscient stream sees both players' choices. After each turn resolves, the
+opponent's choice is observable. This provides free supervised signal.
+
+```
+Transformer context vector (128-dim)
+    └─ policy head:   Linear(128, 9)   — own action logits  [PPO loss]
+    └─ value head:    Linear(128, 1)   — state value        [PPO value loss]
+    └─ opp_pred head: Linear(128, 9)  — opponent action     [cross-entropy]
+
+Total loss = PPO_loss + λ × CE(opp_pred, actual_opp_action)
+λ = 0.1 (tune: 0.05–0.3)
+```
+
+The opponent action label is gathered from the omniscient stream in `pokemon-gym.ts`
+after each turn and passed back via the `info` dict.
+
+### Files to Modify
+| File | Change |
+|------|--------|
+| `sim/tools/pokemon-gym.ts` | Parse opponent's choice from omniscient stream; add `opp_action` to `info` |
+| `models/transformer/transformer_agent.py` | Add `opp_action_head`, expose `opp_pred` in forward pass |
+| `models/transformer/train.py` | Collect `opp_action` from `info`; add auxiliary loss term |
+
+### Success Criteria
+- Opponent action prediction accuracy > 40% (random baseline ≈ 25% for 4-move space)
+- Policy trained with opponent head beats policy without it by ≥ 3% vs DamageFirstAI
+- Auxiliary loss weight tuned: policy performance does not regress vs PPO-only baseline
+
+---
+
+## M6: Server Integration & Ladder ⬜ AFTER M4+M5
+
+**Status:** ⬜ Not Started
+**Goals:** Connect trained model to live Pokemon Showdown server, accept challenges,
+track Elo rating.
+
+### What to Build
+- `server/bot-client.ts` — WebSocket connection to `sim.smogon.com` or local server
+- Battle state mapper: Showdown protocol lines → structured `(12, 65)` token obs
+- Inference service: load transformer checkpoint, respond within 2s latency budget
+- `server/elo-ladder.ts` — per-match rating updates, CSV history
+
+### Success Criteria
+- Bot connects and accepts challenges without crashing
+- Decision latency < 2s per move
+- ≥ 60% win rate vs random human/bot opponents on ladder
+- Runs ≥ 100 consecutive battles without crashing
+
+---
+
+## Architecture Reference
+
+```
+Battle state
+    │
+    ▼
+extractFeaturesStructured()      [M2]
+    │  (12 Pokémon tokens × 65 features each)
+    ▼
+TransformerEncoder (2L, 4H, d=128)  [M3]
+    │  mean-pool → 128-dim context
+    ├──▶ Policy head (128 → 9 logits)
+    ├──▶ Value head  (128 → 1 scalar)
+    └──▶ Opp pred   (128 → 9 logits)   [M5]
+    │
+    ▼  [M4]
+MCTS (UCT, N=100, determinized)
+    │  uses Policy as prior, Value at leaves
+    ▼
+Best action
+```
+
+---
+
+## Component Reuse Guide
+
+| Component | Status | Reuse in |
+|-----------|--------|----------|
+| `sim/tools/pokemon-gym.ts` | ✅ Keep as-is | All milestones |
+| `sim/tools/random-player-ai.ts` | ✅ Keep as-is | Opponent in all training |
+| `models/ppo/trajectory_buffer.py` | ✅ Keep as-is | M2 verification, M3 training |
+| `models/ppo/ppo_agent.py` PPO update logic | ✅ Reuse | M2, M3 (new trunk only) |
+| `models/evaluate.py` | ✅ Extend | M2, M3, M4 (add model types) |
+| `models/gym_client.py` + `gym_bridge.js` | ✅ Update serialization | M2 |
+| `feature-extractor.ts` helpers | ✅ Reuse | M2 (build on top of) |
+| `models/dqn/` | ⚠️ Regression baseline | Comparison only |
+| `models/q_learning/` | ❌ Archived | Tabular limitation confirmed |
 
 ---
 
 ## Summary Timeline
 
-| Milestone | Status | Duration | Approx. Dates |
-|-----------|--------|----------|---------------|
-| M0: Foundation | ✅ Complete | (Prior) | — |
-| M1: Environment & Baseline | ✅ Complete | ~1 session | — |
-| M2: Model Exploration | 🔜 Up Next | ~2–3 weeks | Week 1–4 |
-| M3: Scale Training | ⬜ Not Started | ~3–4 weeks | Week 5–9 |
-| M4: Showdown Integration | ⬜ Not Started | ~2 weeks | Week 9–11 |
-| M5: Evaluation & Iteration | ⬜ Not Started | ~2 weeks (ongoing) | Week 11–13+ |
-
-**Total critical path:** ~11–13 weeks (assuming parallelization in M2, M3).
-
----
-
-## Notes
-
-- **M0 is already complete.** Don't redo it.
-- **M1 is blocking:** gym wrapper is needed by M2 models.
-- **M2 is research:** three models running in parallel, expect some to fail.
-- **M3 builds on M2 winner:** only one model advances.
-- **M4–M5 are integration + evaluation:** overlap possible after M3 checkpoints are stable.
-- **Success metric throughout:** agent beats both RandomPlayerAI (≥ 90%) and DamageFirstAI (≥ 70%).
+| Milestone | Status | Core Deliverable | Unlocks |
+|-----------|--------|-----------------|---------|
+| M0: Foundation | ✅ | Build system, docs | — |
+| M1: Env + Baselines | ✅ | Gym, PPO, DQN, Q-learning | — |
+| M2: Structured State | 🔜 | Per-Pokémon token obs (12×65) | M3 |
+| M3: Transformer + PPO | ⬜ | Transformer encoder baseline | M4, M5 |
+| M4: MCTS | ⬜ | UCT search over value network | M6 |
+| M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
+| M6: Server Integration | ⬜ | Live ladder bot | — |

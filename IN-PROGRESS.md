@@ -1,53 +1,47 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-05-18
+Last updated: 2026-05-19
 
 ---
 
 ## Current Work
 
-**Milestone:** M2 (Model Exploration) — Infrastructure complete, ready to train  
-**Phase:** Run training loops and evaluate models
+**Milestone:** M2 (Structured State Representation) — Architecture direction locked, ready to build  
+**Phase:** Replace flat 100-dim feature vector with per-Pokémon token representation
 
 ### Active Tasks
-- [ ] Train Model A: `python models/q_learning/train.py --episodes 10000`
-- [ ] Train Model B: `python models/dqn/train.py --battles 100000`
-- [ ] Train Model C: `python models/ppo/train.py --battles 100000`
-- [ ] Evaluate all three: `python models/evaluate.py --model {q_learning|dqn|ppo} --checkpoint PATH`
-- [ ] Fill in results in `docs/MODEL-COMPARISON.md` and select winner for M3
+- [ ] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array
+- [ ] Add boost tracker to `sim/tools/pokemon-gym.ts` — thread stat boosts into token features
+- [ ] Update `models/gym_bridge.js` — serialize structured obs as 780-element flat array
+- [ ] Update `models/gym_client.py` — reshape `(780,)` → `(12, 65)` numpy array
+- [ ] Verify: run MLP PPO on flattened structured obs, confirm ≥ 50% win rate vs RandomPlayerAI at 50k battles
 
 ---
 
 ## Active Plan
 
-**M2 Execution Plan (starting next):**
+**M2 Execution Plan:**
 
-1. **Python Bridge Setup**
-   - Build `models/gym_client.py` wrapper (calls Node gym via stdio/HTTP)
-   - Test roundtrip: Python sends action → gym returns (obs, reward, done)
-   - Verify feature vector shape and reward bounds in Python
+1. **Token schema** (in `feature-extractor.ts`)
+   - 12 tokens: own active, own bench ×5, opponent active, opponent bench ×5
+   - Per token (65 dims): HP_ratio, level/100, type1_onehot(15), type2_onehot(15), status_onehot(6), active_flag, unknown_flag, fainted_flag, 4×move_features(6)
+   - Unknown opponent bench: `unknown_flag=1, HP_ratio=1.0`, all other features 0
+   - Fainted: `fainted_flag=1, HP_ratio=0`
 
-2. **Model A: Tabular Q-Learning**
-   - Discretize state space (hash active Pokémon + move availability)
-   - Train with ε-greedy policy on 50k battles
-   - Target: ≥50% vs Random, <70% vs DamageFirst (confirms state space limitation)
+2. **Stat boost tracking** (in `pokemon-gym.ts`)
+   - Parse `|-boost|` and `|-unboost|` lines from omniscient stream
+   - Accumulate per-slot boost dict; reset on switch
+   - Pass into `extractFeaturesStructured()` for the active Pokémon token
 
-3. **Model B: DQN** (can start after bridge, overlaps with A)
-   - Network: 2-hidden-layer MLP (128→64)
-   - Experience replay (buffer size 10k)
-   - Train on 500k battles, target net sync every 1000 steps
-   - Target: ≥80% vs Random, ≥60% vs DamageFirst
+3. **Bridge update** (in `gym_bridge.js` + `gym_client.py`)
+   - Serialize: flatten `(12, 65)` → 780-element array for JSON transport
+   - Python side: `np.array(obs).reshape(12, 65)`
+   - Keep `--flat` mode for backward compat with old MLP baseline
 
-4. **Model C: PPO** (starts after B infrastructure)
-   - Actor-Critic: shared trunk + separate policy/value heads
-   - Rollout buffer, advantage normalization
-   - Train on 500k battles, batch size 32
-   - Target: ≥85% vs Random, ≥65% vs DamageFirst
-
-5. **Comparison & Winner Selection**
-   - Run baseline eval on all three models
-   - Document in `models/MODEL-COMPARISON.md`
-   - Select winner (expected: Model B or C) for M3 scale training
+4. **Verification**
+   - PPO with trunk `Linear(780, 128) → ReLU → Linear(128, 128)` on flattened tokens
+   - Target: ≥ 50% vs RandomPlayerAI at 50k battles (parity with old flat vector confirms correctness)
+   - Check token shape stability across move requests, switch requests, end-of-episode
 
 ---
 
@@ -136,27 +130,29 @@ None. All components verified and working.
 
 ## Next Steps
 
-### Immediate (Next Session — M2 Phase 1)
-1. **Set up Python bridge**
-   - Create `models/gym_client.py` wrapper
-   - Connect to Node gym via stdio protocol (JSON messages)
-   - Verify roundtrip: action → (obs, reward, done) with correct shapes
+### Immediate (M2 — Structured State)
+1. **Build `extractFeaturesStructured()`** in `sim/tools/feature-extractor.ts`
+   - 12 tokens × 65 features, schema above
+   - Unknown-flag and fainted-flag semantics correct
 
-2. **Implement Model A: Tabular Q-Learning**
-   - State discretization: hash (active Pokémon, available moves, switch mask)
-   - Q-table with ε-greedy exploration
-   - Train on 50k battles
-   - Target: ≥50% vs Random baseline
+2. **Add boost tracker** to `sim/tools/pokemon-gym.ts`
+   - Parse `|-boost|` / `|-unboost|` from omniscient lines
+   - Thread into token features for own/opponent active
 
-### Follow-Up (Week 2 — M2 Phase 2 & 3)
-- After Model A trains, implement Model B (DQN) with experience replay
-- In parallel, set up Model C (PPO) infrastructure
-- Run evaluation on all three models vs Random and DamageFirst
+3. **Update bridge serialization** in `gym_bridge.js` + `gym_client.py`
+   - 780-element flat array over JSON; reshape to `(12, 65)` on Python side
 
-### Stretch (if infrastructure solid)
-- Implement curiosity-driven exploration for faster convergence
-- Early model checkpoint analysis to select winner for M3
-- Profile Python-Node communication latency
+4. **Verification run** — MLP PPO on flattened structured obs, 50k battles vs Random
+
+### Follow-Up (M3 — Transformer)
+After M2 verified:
+- Build `models/transformer/transformer_agent.py` (2-layer encoder, d=128)
+- Train with PPO, 200k–500k battles
+- Compare vs MLP PPO baseline at same battle count
+
+### Stretch
+- Attention weight visualization to confirm non-uniform attention
+- Start scoping MCTS determinizer (opponent team sampling from gen1 usage data)
 
 ---
 
