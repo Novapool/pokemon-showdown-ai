@@ -3,15 +3,13 @@ train.py — Rollout-based PPO training loop for Pokemon Showdown.
 
 Usage:
     python models/ppo/train.py
-    python models/ppo/train.py --battles 500000 --rollout-steps 512 --checkpoint-every 50000
-
-The loop collects rollout_steps environment steps per update cycle regardless
-of episode boundaries.  When a 'done' signal arrives mid-rollout, the
-environment is reset immediately so collection continues seamlessly.
+    python models/ppo/train.py --battles 500000 --rollout-steps 2048 --checkpoint-every 50000
+    python models/ppo/train.py --simple-reward   # terminal ±1.0 only, no intermediate rewards
 """
 
 import argparse
 import sys
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -38,14 +36,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--rollout-steps",
         type=int,
-        default=512,
-        help="Number of steps per rollout before a PPO update (default: 512)",
+        default=2048,
+        help="Number of steps per rollout before a PPO update (default: 2048)",
     )
     parser.add_argument(
         "--checkpoint-every",
         type=int,
         default=25000,
         help="Save a checkpoint every N steps (default: 25000)",
+    )
+    parser.add_argument(
+        "--win-rate-window",
+        type=int,
+        default=500,
+        help="Rolling window size for win rate tracking across episodes (default: 500)",
+    )
+    parser.add_argument(
+        "--simple-reward",
+        action="store_true",
+        help="Zero out intermediate rewards; use only terminal ±1.0 win/loss signal",
+    )
+    parser.add_argument(
+        "--entropy-coef",
+        type=float,
+        default=0.05,
+        help="Entropy bonus coefficient — higher keeps policy more exploratory (default: 0.05)",
+    )
+    parser.add_argument(
+        "--ppo-epochs",
+        type=int,
+        default=2,
+        help="PPO update epochs per rollout — fewer reduces drift on noisy advantages (default: 2)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=3e-4,
+        help="Adam learning rate (default: 3e-4)",
     )
     return parser.parse_args()
 
@@ -59,23 +86,29 @@ def main() -> None:
     checkpoint_dir = Path(__file__).parent / "checkpoints"
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    agent = PPOAgent()
+    agent = PPOAgent(
+        lr=args.lr,
+        entropy_coef=args.entropy_coef,
+        ppo_epochs=args.ppo_epochs,
+    )
     buffer = TrajectoryBuffer()
-    env = GymClient()
+    env = GymClient(flat_mode=True)
 
+    reward_mode = "simple (terminal ±1 only)" if args.simple_reward else "full (KO + status + win/loss)"
     print(
         f"Starting PPO training: {total_budget} steps | "
         f"rollout={rollout_steps} steps | "
-        f"checkpoint every {checkpoint_every} steps",
+        f"checkpoint every {checkpoint_every} steps | "
+        f"reward={reward_mode} | "
+        f"lr={args.lr} entropy={args.entropy_coef} ppo_epochs={args.ppo_epochs}",
         flush=True,
     )
 
     total_steps = 0
     last_checkpoint_step = 0
 
-    # Episode tracking within each rollout window
-    rollout_wins = 0
-    rollout_episodes = 0
+    # Rolling win rate across all episodes (spans rollout boundaries)
+    win_history: deque = deque(maxlen=args.win_rate_window)
 
     try:
         obs, valid_mask = env.reset()
@@ -101,16 +134,18 @@ def main() -> None:
                     done = False
                     continue
 
-                buffer.push(obs, action, reward, done, value, log_prob)
+                if args.simple_reward and not done:
+                    reward = 0.0
 
+                buffer.push(obs, action, reward, done, value, log_prob)
                 obs = next_obs
                 total_steps += 1
 
                 if done:
                     rollout_episodes += 1
-                    if info.get("winner") == "Gym":
-                        rollout_wins += 1
-                    # Start a new episode immediately
+                    won = 1 if info.get("winner") == "Gym" else 0
+                    rollout_wins += won
+                    win_history.append(won)
                     obs, valid_mask = env.reset()
                     done = False
 
@@ -119,7 +154,7 @@ def main() -> None:
                     ckpt_path = checkpoint_dir / f"ppo_step_{total_steps}.pt"
                     agent.save(str(ckpt_path))
                     last_checkpoint_step = total_steps
-                    print(f"[checkpoint] Saved {ckpt_path}")
+                    print(f"[checkpoint] Saved {ckpt_path}", flush=True)
 
             # ----------------------------------------------------------------
             # Compute advantages and update
@@ -139,13 +174,15 @@ def main() -> None:
             # ----------------------------------------------------------------
             # Log rollout summary
             # ----------------------------------------------------------------
-            win_rate = (
-                rollout_wins / rollout_episodes if rollout_episodes > 0 else float("nan")
-            )
+            rollout_wr = rollout_wins / rollout_episodes if rollout_episodes > 0 else float("nan")
+            rolling_wr = sum(win_history) / len(win_history) if win_history else float("nan")
             print(
                 f"Step {total_steps}/{total_budget} | "
-                f"Win rate (rollout): {win_rate:.2f} | "
-                f"Loss: {loss:.3f}"
+                f"Eps: {rollout_episodes} | "
+                f"WR(rollout): {rollout_wr:.2f} | "
+                f"WR(rolling-{args.win_rate_window}): {rolling_wr:.2f} | "
+                f"Loss: {loss:.3f}",
+                flush=True,
             )
 
     finally:

@@ -7,6 +7,12 @@ Protocol (one JSON object per line):
   step         → {"cmd":"step","action":<int>}
   valid_actions→ {"cmd":"valid_actions"}
   close        → {"cmd":"close"}
+
+Observation shape:
+  Default (structured): (12, 73) float32 — 12 per-Pokémon tokens, 73 features each.
+    Token layout: own active, own bench ×5, opponent active, opponent bench ×5.
+  Flat mode (--flat):   (876,) float32 — same data serialized as a flat vector,
+    kept for backward compatibility with old MLP baselines.
 """
 
 import json
@@ -24,12 +30,19 @@ DEBUG = False
 class GymClient:
     """Spawns gym_bridge.js and exposes a Gym-like interface over stdio JSON."""
 
-    def __init__(self, bridge_path: str = None):
+    def __init__(self, bridge_path: str = None, flat_mode: bool = False, opponent: str = "random"):
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
         self._bridge_path = bridge_path
+        self._flat_mode = flat_mode
+        self._opponent = opponent
+        cmd = ["node", bridge_path]
+        if flat_mode:
+            cmd.append("--flat")
+        if opponent != "random":
+            cmd.extend(["--opponent", opponent])
         self._proc = subprocess.Popen(
-            ["node", bridge_path],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -83,11 +96,12 @@ class GymClient:
         """Reset the environment and return (obs, valid_mask).
 
         Returns:
-            obs:        np.ndarray shape (100,), dtype float32
+            obs:        np.ndarray shape (12, 73) float32 (or (876,) in flat mode)
             valid_mask: list of bool, length 9
         """
         response = self._send({"cmd": "reset"})
-        obs = np.array(response["obs"], dtype=np.float32)
+        raw = np.array(response["obs"], dtype=np.float32)
+        obs = raw if self._flat_mode else raw.reshape(12, -1)
         mask = list(response["mask"])
         return obs, mask
 
@@ -99,14 +113,17 @@ class GymClient:
 
         Returns:
             (obs, reward, done, info, valid_mask)
-              obs        — np.ndarray shape (100,) float32
+              obs        — np.ndarray shape (12, TOKEN_DIM) float32 (or flat in flat mode)
               reward     — float
               done       — bool
               info       — dict
               valid_mask — list of bool, length 9
         """
         response = self._send({"cmd": "step", "action": action})
-        obs = np.array(response["obs"], dtype=np.float32)
+        if "reward" not in response:
+            raise RuntimeError(f"malformed step response (missing 'reward'): {list(response.keys())}")
+        raw = np.array(response["obs"], dtype=np.float32)
+        obs = raw if self._flat_mode else raw.reshape(12, -1)
         reward = float(response["reward"])
         done = bool(response["done"])
         info = response["info"]
@@ -144,7 +161,7 @@ if __name__ == "__main__":
     client = GymClient()
 
     obs, mask = client.reset()
-    print(f"reset obs shape: {obs.shape}")
+    print(f"reset obs shape: {obs.shape}")  # should print (12, 65)
     print(f"valid_actions mask: {mask}")
 
     obs, reward, done, info, mask = client.step(0)

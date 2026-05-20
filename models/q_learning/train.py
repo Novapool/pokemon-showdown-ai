@@ -39,7 +39,7 @@ def main() -> None:
     n_episodes = args.episodes
     log_every = min(500, max(1, n_episodes // 10))
 
-    env = GymClient()
+    env = GymClient(flat_mode=True)
     agent = QAgent()
 
     print(f"Starting Q-Learning training: {n_episodes} episodes (logging every {log_every})")

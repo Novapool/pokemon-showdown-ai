@@ -67,9 +67,9 @@ baseline agent implementations (tabular Q, DQN, PPO)
 
 ---
 
-## M2: Structured State Representation 🔜 UP NEXT
+## M2: Structured State Representation 🔄 IN PROGRESS
 
-**Status:** 🔜 Up Next
+**Status:** 🔄 In Progress (implementation complete — verification run pending)
 **Goals:** Replace the flat 100-dim vector with a per-Pokémon tokenized
 representation. The gym wrapper is unchanged; only the feature extractor changes.
 Verify that PPO (with the trunk flattening the tokens) learns comparably to the
@@ -106,9 +106,9 @@ Per-Pokémon token features:
 | Active flag | 1 | 1 if currently on field |
 | Unknown flag | 1 | 1 if this token is unrevealed opponent Pokémon |
 | Fainted flag | 1 | 1 if fainted |
-| Move 1–4 (each) | 6 | base_power/250, accuracy/100, PP_ratio, type_idx/15, category_idx/2, disabled |
+| Move 1–4 (each) | 7 | base_power/250, accuracy/100, PP_ratio, type_idx/15, category_idx/2, disabled, type_effectiveness/4 |
 
-Total token_dim = 1+1+15+15+6+1+1+1 + 4×6 = **65**. Full tensor: **(12, 65)**.
+Total token_dim = 1+1+15+15+6+1+1+1 + 4×7 = **69**. Full tensor: **(12, 69)**.
 
 **2. Unknown token handling**
 
@@ -129,8 +129,8 @@ replace the hardcoded 0.5 placeholder.
 **4. Bridge protocol update**
 
 `gym_bridge.js` currently serializes the obs as a flat `Array` of 100 floats.
-Change the serialization to pass a `(12 × 65 = 780)`-element flat array.
-`gym_client.py` reshapes it back to `(12, 65)` as a numpy array.
+Change the serialization to pass a `(12 × 69 = 828)`-element flat array.
+`gym_client.py` reshapes it back to `(12, 69)` as a numpy array.
 
 Backward-compat: add a `--flat` flag to `gym_bridge.js` for running the old
 MLP PPO baseline against random as a regression check.
@@ -143,13 +143,13 @@ MLP PPO baseline against random as a regression check.
 ### Files to Create / Modify
 | File | Action |
 |------|--------|
-| `sim/tools/feature-extractor.ts` | Add `extractFeaturesStructured()`, export `TOKEN_DIM=65`, `N_TOKENS=12` |
+| `sim/tools/feature-extractor.ts` | Add `extractFeaturesStructured()`, export `TOKEN_DIM=69`, `N_TOKENS=12` |
 | `sim/tools/pokemon-gym.ts` | Add boost tracker; thread boosts into `extractFeaturesStructured()` |
-| `models/gym_bridge.js` | Change obs serialization to 780-element flat array; add `--flat` flag |
-| `models/gym_client.py` | Reshape `(780,)` → `(12, 65)` numpy array |
+| `models/gym_bridge.js` | Change obs serialization to 828-element flat array; add `--flat` flag |
+| `models/gym_client.py` | Reshape `(828,)` → `(12, 69)` numpy array |
 
 ### Success Criteria
-- `extractFeaturesStructured()` returns `Float32Array` of length `12 × 65 = 780`, shape-stable across move requests, switch requests, and end-of-episode
+- `extractFeaturesStructured()` returns `Float32Array` of length `12 × 69 = 828`, shape-stable across move requests, switch requests, and end-of-episode
 - Unknown opponent bench tokens have `unknown_flag=1` and `HP_ratio=1.0`
 - Fainted tokens have `fainted_flag=1` and `HP_ratio=0`
 - PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles (parity with old flat-vector baseline confirms representation isn't broken)
@@ -160,18 +160,18 @@ M3 (transformer encoder needs per-Pokémon tokens as input)
 
 ---
 
-## M3: Transformer Encoder + PPO Baseline ⬜ AFTER M2
+## M3: Transformer Encoder + PPO Baseline 🔄 IN PROGRESS
 
-**Status:** ⬜ Not Started
+**Status:** 🔄 In Progress (transformer_agent.py and train.py created, smoke tests pass — training not yet run)
 **Goals:** Replace the MLP trunk with a small transformer encoder. Train with PPO
 and establish a transformer win-rate baseline to beat in subsequent milestones.
 
 ### Architecture
 
 ```
-Input:  (batch, 12, 65)  ← 12 Pokémon tokens, each 65-dim
+Input:  (batch, 12, 69)  ← 12 Pokémon tokens, each 69-dim
 
-Linear(65 → d_model=128)   ← project tokens into model dimension
+Linear(69 → d_model=128)   ← project tokens into model dimension
 
 TransformerEncoder(
   layers=2, nhead=4, d_model=128, d_ff=256, dropout=0.1
@@ -322,7 +322,7 @@ track Elo rating.
 
 ### What to Build
 - `server/bot-client.ts` — WebSocket connection to `sim.smogon.com` or local server
-- Battle state mapper: Showdown protocol lines → structured `(12, 65)` token obs
+- Battle state mapper: Showdown protocol lines → structured `(12, 69)` token obs
 - Inference service: load transformer checkpoint, respond within 2s latency budget
 - `server/elo-ladder.ts` — per-match rating updates, CSV history
 
@@ -341,7 +341,7 @@ Battle state
     │
     ▼
 extractFeaturesStructured()      [M2]
-    │  (12 Pokémon tokens × 65 features each)
+    │  (12 Pokémon tokens × 69 features each)
     ▼
 TransformerEncoder (2L, 4H, d=128)  [M3]
     │  mean-pool → 128-dim context
@@ -380,8 +380,8 @@ Best action
 |-----------|--------|-----------------|---------|
 | M0: Foundation | ✅ | Build system, docs | — |
 | M1: Env + Baselines | ✅ | Gym, PPO, DQN, Q-learning | — |
-| M2: Structured State | 🔜 | Per-Pokémon token obs (12×65) | M3 |
-| M3: Transformer + PPO | ⬜ | Transformer encoder baseline | M4, M5 |
+| M2: Structured State | 🔄 | Per-Pokémon token obs (12×69) | M3 |
+| M3: Transformer + PPO | 🔄 | Transformer encoder baseline | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |

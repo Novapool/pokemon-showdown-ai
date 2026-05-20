@@ -12,7 +12,9 @@ import { BattleStream, getPlayerStreams, BattlePlayer } from '../battle-stream';
 import { PRNG } from '../prng';
 import type { PRNGSeed } from '../prng';
 import { RandomPlayerAI } from './random-player-ai';
-import { extractFeatures } from './feature-extractor';
+import { DamageFirstAI } from './damage-first-ai';
+import { extractFeatures, extractFeaturesStructured } from './feature-extractor';
+import type { BoostData } from './feature-extractor';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
 
 // ---------------------------------------------------------------------------
@@ -90,6 +92,7 @@ class GymPlayer extends BattlePlayer {
 export class PokemonGymEnv {
 	private readonly _format: string;
 	private readonly _seed: PRNGSeed | undefined;
+	private readonly _opponent: string;
 
 	private _battleStream!: BattleStream;
 	private _streams!: ReturnType<typeof getPlayerStreams>;
@@ -111,9 +114,14 @@ export class PokemonGymEnv {
 	private _winResolve: ((winner: string) => void) | null = null;
 	private _winPromise: Promise<string> | null = null;
 
-	constructor(options: { seed?: PRNGSeed; format?: string } = {}) {
+	// Stat boost accumulators (reset on switch)
+	private _ownBoosts: Record<string, number> = {};
+	private _oppBoosts: Record<string, number> = {};
+
+	constructor(options: { seed?: PRNGSeed; format?: string; opponent?: 'random' | 'damage-first' } = {}) {
 		this._format = options.format ?? 'gen1randombattle';
 		this._seed = options.seed;
+		this._opponent = options.opponent ?? 'random';
 	}
 
 	// -------------------------------------------------------------------------
@@ -127,9 +135,9 @@ export class PokemonGymEnv {
 		this._streams = getPlayerStreams(this._battleStream);
 
 		this._gymPlayer = new GymPlayer(this._streams.p1);
-		this._randomOpponent = new RandomPlayerAI(this._streams.p2, {
-			seed: this._seed,
-		});
+		this._randomOpponent = this._opponent === 'damage-first'
+			? new DamageFirstAI(this._streams.p2, { seed: this._seed })
+			: new RandomPlayerAI(this._streams.p2, { seed: this._seed });
 
 		// Reset background reader state
 		this._omniscientLines = [];
@@ -138,6 +146,10 @@ export class PokemonGymEnv {
 		this._winResult = null;
 		this._winResolve = null;
 		this._winPromise = null;
+
+		// Reset boost accumulators
+		this._ownBoosts = {};
+		this._oppBoosts = {};
 
 		// Start players (they loop reading their streams)
 		void this._gymPlayer.start();
@@ -167,7 +179,7 @@ export class PokemonGymEnv {
 		this._turnCount = 0;
 		this._done = false;
 
-		return extractFeatures(this._currentRequest, null);
+		return extractFeaturesStructured(this._currentRequest!, null, this._currentBoosts());
 	}
 
 	// -------------------------------------------------------------------------
@@ -182,7 +194,7 @@ export class PokemonGymEnv {
 		// Validate action range
 		if (action < 0 || action > 8) {
 			return {
-				obs: extractFeatures(this._currentRequest!, null),
+				obs: extractFeaturesStructured(this._currentRequest!, null, this._currentBoosts()),
 				reward: -0.01,
 				done: false,
 				info: { illegalMove: true },
@@ -193,7 +205,7 @@ export class PokemonGymEnv {
 		const mask = this.validActions();
 		if (!mask[action]) {
 			return {
-				obs: extractFeatures(this._currentRequest!, null),
+				obs: extractFeaturesStructured(this._currentRequest!, null, this._currentBoosts()),
 				reward: -0.01,
 				done: false,
 				info: { illegalMove: true },
@@ -291,7 +303,7 @@ export class PokemonGymEnv {
 			this._currentRequest = result.request;
 		}
 
-		const obs = extractFeatures(this._currentRequest!, null);
+		const obs = extractFeaturesStructured(this._currentRequest!, null, this._currentBoosts());
 
 		return {
 			obs,
@@ -321,27 +333,17 @@ export class PokemonGymEnv {
 		}
 
 		if (isMoveRequest(request)) {
-			// Moves 0-3
+			// Moves 0-3 only — no voluntary switches.
+			// RandomPlayerAI never switches voluntarily (move=1.0), so including
+			// switch actions in the move-turn mask gives the gym agent a ~55% switch
+			// rate against a never-switching opponent, producing a ~4% win rate baseline
+			// instead of ~50%.  Force-switches (after KOs) are still handled below.
 			const activeSlot = request.active[0];
 			if (activeSlot) {
 				for (let i = 0; i < 4; i++) {
 					const move = activeSlot.moves[i];
 					if (move && !move.disabled) {
 						result[i] = true;
-					}
-				}
-			}
-
-			// Switches 4-8 — blocked when the active Pokemon is trapped
-			if (!activeSlot?.trapped) {
-				const pokemon = request.side.pokemon;
-				for (let slot = 1; slot <= 5; slot++) {
-					const poke = pokemon[slot];
-					if (!poke) continue;
-					const isFainted = poke.condition.endsWith(' fnt') || poke.condition === '0 fnt';
-					const isActive = poke.active === true;
-					if (!isFainted && !isActive) {
-						result[slot + 3] = true; // slot 1 -> index 4, slot 5 -> index 8
 					}
 				}
 			}
@@ -418,6 +420,32 @@ export class PokemonGymEnv {
 							resolve(winnerName);
 						}
 					}
+
+					// Track stat boosts: |-boost|p1a:<name>|<stat>|<amount>
+					// and switches: |switch|p1a: resets boosts for that side
+					if (line.startsWith('|-boost|') || line.startsWith('|-unboost|')) {
+						// split on '|': ['', '-boost'/'−unboost', 'p1a:...', 'stat', 'amount']
+						const parts = line.split('|');
+						const eventType = parts[1]; // '-boost' or '-unboost'
+						const pokemonIdent = parts[2] ?? ''; // e.g. 'p1a:Pikachu'
+						const stat = parts[3];
+						const amount = parseInt(parts[4], 10);
+						if (stat && !isNaN(amount)) {
+							if (pokemonIdent.startsWith('p1a:')) {
+								const cur = this._ownBoosts[stat] ?? 0;
+								this._ownBoosts[stat] = Math.max(-6, Math.min(6,
+									eventType === '-boost' ? cur + amount : cur - amount));
+							} else if (pokemonIdent.startsWith('p2a:')) {
+								const cur = this._oppBoosts[stat] ?? 0;
+								this._oppBoosts[stat] = Math.max(-6, Math.min(6,
+									eventType === '-boost' ? cur + amount : cur - amount));
+							}
+						}
+					} else if (line.startsWith('|switch|p1a:')) {
+						this._ownBoosts = {};
+					} else if (line.startsWith('|switch|p2a:')) {
+						this._oppBoosts = {};
+					}
 				}
 			}
 		} catch {
@@ -434,6 +462,16 @@ export class PokemonGymEnv {
 				this._omniscientNotify = null;
 			}
 		}
+	}
+
+	/**
+	 * Returns a snapshot of current boost data for both sides.
+	 */
+	private _currentBoosts(): BoostData {
+		return {
+			ownActive: { ...this._ownBoosts },
+			oppActive: { ...this._oppBoosts },
+		};
 	}
 
 	/**

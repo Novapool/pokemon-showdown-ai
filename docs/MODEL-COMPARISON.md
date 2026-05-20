@@ -10,15 +10,15 @@ Milestone 2 (M2) explores three reinforcement learning architectures for learnin
 
 ### Q-Learning (Tabular)
 
-A classic tabular Q-learning agent with epsilon-greedy exploration. The 100-feature observation vector is discretized into a compact 5-element state tuple (own HP bucket, active type, switch mask, opponent HP bucket, number of valid moves), enabling a lookup-table Q-function. Simple to implement and interpret, but state coverage is inherently limited by the coarse discretization — expected to plateau below DQN and PPO.
+A classic tabular Q-learning agent with epsilon-greedy exploration. The 828-feature observation vector (flattened 12×69 token array) is discretized into a compact 5-element state tuple (own HP bucket, active type, switch mask, opponent HP bucket, number of valid moves), enabling a lookup-table Q-function. Simple to implement and interpret, but state coverage is inherently limited by the coarse discretization — expected to plateau below DQN and PPO.
 
 ### DQN (Deep Q-Network)
 
-A two-hidden-layer MLP (100 → 128 → 128 → 9) approximating the Q-function directly from the raw 100-feature observation vector. Trained with experience replay (buffer size 10k) and a periodically-synced target network (sync every 1000 steps). Handles the full continuous state space and is expected to generalize significantly better than the tabular approach.
+A two-hidden-layer MLP (828 → 128 → 128 → 9) approximating the Q-function directly from the flattened 828-feature observation vector. Trained with experience replay (buffer size 10k) and a periodically-synced target network (sync every 1000 steps). Handles the full continuous state space and is expected to generalize significantly better than the tabular approach.
 
 ### PPO (Proximal Policy Optimization)
 
-An Actor-Critic agent with a shared trunk (100 → 128 → 128) feeding into separate policy (128 → 9) and value (128 → 1) heads. Trained with rollout-based advantage estimation (GAE), clipped surrogate objective, and entropy regularization. On-policy learning is more sample-inefficient than DQN but often more stable; PPO is the primary candidate for M3.
+An Actor-Critic agent with a shared trunk (828 → 128 → 128) feeding into separate policy (128 → 9) and value (128 → 1) heads. Trained with rollout-based advantage estimation (GAE), clipped surrogate objective, and entropy regularization. On-policy learning is more sample-inefficient than DQN but often more stable; PPO is the primary candidate for M3.
 
 ---
 

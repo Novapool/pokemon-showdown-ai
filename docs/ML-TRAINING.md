@@ -65,7 +65,7 @@ const result = await evaluateVsRandom(myAgentFactory, 1000, 50);
 console.log(`Win rate: ${(result.p1WinRate * 100).toFixed(1)}%`);
 ```
 
-See `docs/AI-PLAYERS.md` → **Gym Wrapper** section for the full API reference and observation space layout. The feature extractor is at `sim/tools/feature-extractor.ts` (`OBS_SIZE = 100`).
+See `docs/AI-PLAYERS.md` → **Gym Wrapper** section for the full API reference and observation space layout. The feature extractor is at `sim/tools/feature-extractor.ts` (`TOKEN_DIM = 69`, `N_TOKENS = 12`, flat obs_size = 828).
 
 ## Python-Node Bridge Protocol
 
@@ -75,7 +75,7 @@ See `docs/AI-PLAYERS.md` → **Gym Wrapper** section for the full API reference 
 
 | Direction | Command | Request | Response |
 |-----------|---------|---------|----------|
-| Python → Node | reset | `{"cmd":"reset"}` | `{"obs":[...100 floats...]}` |
+| Python → Node | reset | `{"cmd":"reset"}` | `{"obs":[...828 floats...]}` |
 | Python → Node | step | `{"cmd":"step","action":<int 0–8>}` | `{"obs":[...],"reward":<float>,"done":<bool>,"info":{}}` |
 | Python → Node | valid_actions | `{"cmd":"valid_actions"}` | `{"mask":[<9 booleans>]}` |
 | Python → Node | close | `{"cmd":"close"}` | `{"ok":true}` then process exits |
@@ -420,7 +420,7 @@ function parseHP(conditionStr) {
 
 Work through these sequentially. Do not skip ahead.
 
-> **Current status:** M0 (foundation) and M1 (gym wrapper, evaluator, feature extractor) are complete. M2 (model exploration: tabular Q, DQN, PPO) is next. See `MILESTONES.md` for the full plan.
+> **Current status:** M0, M1 complete. M2 (structured state representation) implementation complete — verification run pending. M3 (transformer encoder) files created and smoke-tested, training not yet run. See `MILESTONES.md` for the full plan.
 
 **Milestone 1 ✅:** Gym wrapper, feature extractor, and evaluation harness in place.
 

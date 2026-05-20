@@ -1,5 +1,16 @@
 'use strict';
 
+// --flat flag: launch with --flat to get 100-element obs (backward compat with pre-M2 builds).
+// Without this flag the bridge expects PokemonGymEnv to return 876-element observations
+// (12 tokens × 73 features, flattened from the structured extractor).
+// The bridge itself serializes obs generically via Array.from(), so no logic change is needed here —
+// the obs size is entirely determined by what PokemonGymEnv returns internally.
+const FLAT_MODE = process.argv.includes('--flat');
+const OPPONENT = (() => {
+  const idx = process.argv.indexOf('--opponent');
+  return idx !== -1 ? process.argv[idx + 1] : 'random';
+})();
+
 /**
  * gym_bridge.js — Line-delimited JSON stdio server wrapping PokemonGymEnv.
  *
@@ -7,11 +18,19 @@
  * line to stdout. All gym methods are async; commands are processed
  * sequentially (one at a time) to preserve request/response ordering.
  *
- * Supported commands:
- *   {"cmd":"reset"}                   → {"obs":[...100 floats...]}
- *   {"cmd":"step","action":3}         → {"obs":[...],"reward":0.01,"done":false,"info":{}}
+ * Supported commands (M2+, default):
+ *   {"cmd":"reset"}                   → {"obs":[...876 floats...],"mask":[...]}
+ *   {"cmd":"step","action":3}         → {"obs":[...876 floats...],"reward":0.01,"done":false,"info":{},"mask":[...]}
  *   {"cmd":"valid_actions"}           → {"mask":[true,true,...]}  (length 9)
  *   {"cmd":"close"}                   → {"ok":true}  then process.exit(0)
+ *
+ * Launch flags:
+ *   --flat                  Use 100-element obs (backward compat with pre-M2 builds)
+ *   --opponent <name>       Opponent AI: 'random' (default) or 'damage-first'
+ *
+ * Examples:
+ *   node gym_bridge.js --flat
+ *   node gym_bridge.js --opponent damage-first
  */
 
 const readline = require('readline');
@@ -40,7 +59,7 @@ async function processCommand(command) {
 
 	if (cmd === 'reset') {
 		if (env) env.destroy();
-		env = new PokemonGymEnv();
+		env = new PokemonGymEnv({ opponent: OPPONENT });
 		const obsFloat32 = await env.reset();
 		initialized = true;
 		respond({ obs: Array.from(obsFloat32), mask: env.validActions() });

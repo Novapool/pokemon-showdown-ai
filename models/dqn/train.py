@@ -54,7 +54,7 @@ def main() -> None:
 
     agent = DQNAgent()
     buffer = ReplayBuffer(capacity=10000)
-    env = GymClient()
+    env = GymClient(flat_mode=True)
 
     print(f"Starting DQN training: {total_budget} steps (logging every {log_every} episodes)", flush=True)
 

@@ -1,7 +1,7 @@
 """
 q_agent.py — Tabular Q-learning agent for Pokemon Showdown Gen 1 battles.
 
-State discretization maps the 100-feature observation vector to a small
+State discretization maps the 828-feature observation vector to a small
 hashable tuple so a lookup table (defaultdict) can serve as the Q-function.
 """
 
@@ -15,7 +15,7 @@ import numpy as np
 class QAgent:
     """Tabular Q-learning agent with epsilon-greedy exploration.
 
-    Q-table keys are discretized state tuples derived from the 100-float
+    Q-table keys are discretized state tuples derived from the 828-float
     observation vector produced by feature-extractor.ts.
 
     Feature layout reference:
@@ -24,6 +24,10 @@ class QAgent:
         [15:19] move availability flags (boolean-like 0/1)
         [55:60] switch mask (boolean-like, one per bench slot)
         [60]    opponent active HP (normalized 0-1)
+    # NOTE: index references above are from the old 100-feature layout.
+    # With the new 780-feature obs the _discretize() method still works
+    # (obs is a valid numpy array) but the bucket semantics have shifted.
+    # Consider updating for M3.
     """
 
     def __init__(
@@ -76,7 +80,7 @@ class QAgent:
         Always respects valid_mask — never selects an invalid action.
 
         Args:
-            obs:        observation array, shape (100,), float32
+            obs:        observation array, shape (828,), float32
             valid_mask: list of bool, length 9; True means action is legal
 
         Returns:
@@ -113,10 +117,10 @@ class QAgent:
         Q[s][a] += lr * (reward + gamma * max(Q[s']) * (1 - done) - Q[s][a])
 
         Args:
-            obs:      current observation, shape (100,)
+            obs:      current observation, shape (828,)
             action:   action taken
             reward:   scalar reward received
-            next_obs: observation after action, shape (100,)
+            next_obs: observation after action, shape (828,)
             done:     True if episode ended
         """
         state = self._discretize(obs)

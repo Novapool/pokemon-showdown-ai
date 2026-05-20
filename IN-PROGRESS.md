@@ -1,261 +1,212 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-05-19
+Last updated: 2026-05-20
 
 ---
 
 ## Current Work
 
-**Milestone:** M2 (Structured State Representation) — Architecture direction locked, ready to build  
-**Phase:** Replace flat 100-dim feature vector with per-Pokémon token representation
+**Phase:** M4 — Parallel gym + DamageFirstAI opponent  
+**Goal:** 4× episode throughput via VecGymClient + sharper learning signal via DamageFirstAI
 
 ### Active Tasks
-- [ ] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array
-- [ ] Add boost tracker to `sim/tools/pokemon-gym.ts` — thread stat boosts into token features
-- [ ] Update `models/gym_bridge.js` — serialize structured obs as 780-element flat array
-- [ ] Update `models/gym_client.py` — reshape `(780,)` → `(12, 65)` numpy array
-- [ ] Verify: run MLP PPO on flattened structured obs, confirm ≥ 50% win rate vs RandomPlayerAI at 50k battles
+- [x] Implement `models/vec_gym_client.py` — wraps N `GymClient` instances, synchronous VecEnv API
+- [x] Add `sim/tools/damage-first-ai.ts` — extends `RandomPlayerAI`, overrides `chooseMove()` to pick highest base-power non-disabled move
+- [x] Update `sim/tools/pokemon-gym.ts` — accept `opponent` option (`'random'` | `'damage-first'`)
+- [x] Update `models/gym_bridge.js` — pass `--opponent` flag to gym env
+- [x] Update `models/gym_client.py` — expose `opponent` constructor param (added `opponent='random'` kwarg; passes `--opponent <val>` to bridge when not `'random'`)
+- [x] Update `models/transformer/train.py` — use `VecGymClient`, `--n-envs`, `--opponent` args, batch `act()` calls
 
 ---
 
 ## Active Plan
 
-**M2 Execution Plan:**
+**M4 Plan:**
 
-1. **Token schema** (in `feature-extractor.ts`)
-   - 12 tokens: own active, own bench ×5, opponent active, opponent bench ×5
-   - Per token (65 dims): HP_ratio, level/100, type1_onehot(15), type2_onehot(15), status_onehot(6), active_flag, unknown_flag, fainted_flag, 4×move_features(6)
-   - Unknown opponent bench: `unknown_flag=1, HP_ratio=1.0`, all other features 0
-   - Fainted: `fainted_flag=1, HP_ratio=0`
+1. **VecGymClient** (`models/vec_gym_client.py`)
+   - Wraps N independent `GymClient` subprocesses
+   - Synchronous: step all N envs, collect all N results
+   - Auto-reset done envs inline
+   - API: `reset() → (obs_batch, mask_batch)`, `step(actions) → (obs_batch, rewards, dones, infos, masks)`
 
-2. **Stat boost tracking** (in `pokemon-gym.ts`)
-   - Parse `|-boost|` and `|-unboost|` lines from omniscient stream
-   - Accumulate per-slot boost dict; reset on switch
-   - Pass into `extractFeaturesStructured()` for the active Pokémon token
+2. **DamageFirstAI** (`sim/tools/damage-first-ai.ts`)
+   - Extends `RandomPlayerAI`, overrides `chooseMove()`
+   - Picks highest `basePower` non-disabled move; breaks ties randomly
+   - Zero-setup: uses existing Dex already loaded
 
-3. **Bridge update** (in `gym_bridge.js` + `gym_client.py`)
-   - Serialize: flatten `(12, 65)` → 780-element array for JSON transport
-   - Python side: `np.array(obs).reshape(12, 65)`
-   - Keep `--flat` mode for backward compat with old MLP baseline
+3. **Gym opponent selection** (`pokemon-gym.ts`, `gym_bridge.js`, `gym_client.py`)
+   - `PokemonGymEnv` constructor accepts `{ opponent: 'random' | 'damage-first' }`
+   - Bridge passes `--opponent damage-first` flag
+   - `GymClient(opponent='damage-first')` for easy switching
 
-4. **Verification**
-   - PPO with trunk `Linear(780, 128) → ReLU → Linear(128, 128)` on flattened tokens
-   - Target: ≥ 50% vs RandomPlayerAI at 50k battles (parity with old flat vector confirms correctness)
-   - Check token shape stability across move requests, switch requests, end-of-episode
+4. **Training loop** (`models/transformer/train.py`)
+   - Replace single `GymClient` with `VecGymClient(n_envs=4)`
+   - Collect `rollout_steps` ticks across all envs (total transitions = rollout_steps × n_envs)
+   - Add `--n-envs` (default 4) and `--opponent` (default `random`) CLI args
+   - Batch `agent.act()` calls using `agent.batch_act(obs_batch, masks_batch)` for efficiency
 
 ---
 
 ## Recently Completed
 
-✅ **Job 2.4: evaluate.py + MODEL-COMPARISON.md** (2026-05-18)
-- Created `models/evaluate.py` — CLI evaluation script (`--model`, `--checkpoint`, `--battles`); loads agent from checkpoint, sets epsilon=0.0 for q_learning/dqn greedy eval, runs N battles via `GymClient`, reports win rate vs RandomPlayerAI
-- Created `docs/MODEL-COMPARISON.md` — results comparison template with Overview, Models Evaluated, Results table (all TBD), Analysis placeholder, Winner Selection placeholder, Next Steps pointing to M3
+✅ **feature-extractor.ts bug fixes** (2026-05-20)
+- Edit A: Fixed 3 errors in GEN1_TYPE_CHART — Ice vs Ice now neutral (removed 0.5×), Fire vs Dragon now neutral (removed 0.5×), Ghost vs Ghost now immunity 0× (was 2×)
+- Edit B: `computeEffectiveness()` now returns log2-scaled output: 0→0.0, 0.5×→0.25, 1×→0.5, 2×→0.75, 4×→1.0. Default effectiveness updated 0.25→0.5 (neutral)
+- Edit C: TOKEN_DIM 69→73. `fillPokemonToken` and `fillOpponentPokemonToken` gain `boostMap` param + 4-dim boost block (atk/def/spe/spc /6). `extractFeaturesStructured` threads `boosts.ownActive` to Token 0 and `boosts.oppActive` to Token 6. Flat obs: 828→876.
 
-✅ **Job 2.3: ppo/** (2026-05-18)
-- Created `models/ppo/trajectory_buffer.py` — `TrajectoryBuffer` with GAE advantage computation, normalized advantages, `push()`/`compute_advantages()`/`get_tensors()`/`clear()` API
-- Created `models/ppo/ppo_agent.py` — `PPOAgent` with shared trunk (100→128→128), policy head (128→9), value head (128→1), `act()` with valid_mask, `evaluate_actions()`, `update()` with PPO clipped surrogate + value loss + entropy bonus, `save()`/`load()` classmethod
-- Created `models/ppo/train.py` — rollout-based loop collecting `rollout_steps` transitions across episode boundaries, per-rollout win-rate and loss logging, checkpoints to `models/ppo/checkpoints/ppo_step_{N}.pt`, `env.close()` in finally
-- Created `models/ppo/checkpoints/` directory
+✅ **M3.5: Feature extractor cleanup + type effectiveness** (2026-05-19)
+- Added `GEN1_TYPE_CHART` and `computeEffectiveness()` to `feature-extractor.ts`
+- Each move block gains a 7th feature: effectiveness vs opponent's active type(s), normalized /4
+- Removed atk-boost-into-base-power and def-boost-into-move-slot hacks (semantic corruption)
+- TOKEN_DIM: 65 → 69. Flat obs: 780 → 828. All models + gym_client updated.
+- Gym client: `reshape(12, -1)` instead of hardcoded `(12, 65)`
+- Build passes clean, all 4 agent smoke tests pass
 
-✅ **Job 2.2: dqn/** (2026-05-18)
-- Created `models/dqn/replay_buffer.py` — `ReplayBuffer` with deque(maxlen), `push()` converts to numpy, `sample()` returns 5 CPU torch tensors with correct dtypes
-- Created `models/dqn/dqn_agent.py` — `QNetwork` MLP (100→128→128→9), `DQNAgent` with policy/target nets, ε-greedy `act()` with valid_mask, `learn()` with MSE loss, `update_target()`, `decay_epsilon()`, `save()`/`load()` classmethod
-- Created `models/dqn/train.py` — step-based loop (not episode-based), rolling 500-episode win-rate/loss logging, checkpoints to `models/dqn/checkpoints/dqn_step_{N}.pt`, `env.close()` in finally
-- Created `models/dqn/checkpoints/` directory
+✅ **M3: Transformer architecture + training runs** (2026-05-19)
+- `models/transformer/transformer_agent.py` — 2-layer TransformerEncoder (d_model=128, nhead=4), token_proj Linear(69,128), learnable pos_embed, mean-pool → policy/value heads
+- `models/transformer/train.py` — rollout loop, LR decay (3e-4→1e-5), `--n-envs` pending
+- **Run 6** (200k, no type eff): peak 0.53, final 0.52
+- **Run 7** (200k, type eff, no decay): peak 0.54, final 0.48
+- **Run 8** (200k, type eff, LR decay): peak 0.53, final 0.50
+- **Run 9** (500k, type eff, LR decay, cleaned obs): **peak 0.55**, final 0.52 ← best run
+- Conclusion: single-env ceiling ~0.52-0.55; bottleneck is episode throughput (~9,800 episodes/500k steps)
 
-✅ **Job 2.1: q_learning/** (2026-05-18)
-- Created `models/q_learning/q_agent.py` — `QAgent` with defaultdict Q-table, 5-element state discretization, epsilon-greedy `act()`, TD(0) `update()`, `decay_epsilon()`, pickle `save()`/`load()`
-- Created `models/q_learning/train.py` — episode loop with `GymClient`, rolling 500-episode win rate logging, Q-table saved to `qtable.pkl` after training, `env.close()` in finally block
-- Created `models/q_learning/README.md` — overview, architecture, training instructions, hyperparameters table, placeholder Results and Analysis sections
-
-✅ **Job 1.2: gym_client.py** (2026-05-18)
-- Created `models/gym_client.py` — `GymClient` class spawning `gym_bridge.js` via subprocess
-- Implements `reset()`, `step()`, `valid_actions()`, `close()` with correct numpy dtypes
-- Line-delimited JSON protocol: one command written per `_send()` call, one response line read back
-- Error responses (`{"error":"..."}`) raise `RuntimeError`
-- `__main__` block for smoke testing
-- No external deps beyond `subprocess`, `json`, `numpy`, `pathlib`
-
-✅ **Job 1.1: gym_bridge.js** (2026-05-18)
-- Created `models/gym_bridge.js` — line-delimited JSON stdio server wrapping `PokemonGymEnv`
-- Supports `reset`, `step`, `valid_actions`, `close` commands
-- Sequential async processing preserves request/response ordering
-- `obs` returned as plain Array (not Float32Array) for JSON serialization
-- Unhandled exceptions written to stdout; process never crashes silently
-- `models/` directory created
+✅ **M2: Structured State Representation** (2026-05-19)
+- `extractFeaturesStructured()` in `feature-extractor.ts` — (12, 69) token array
+- Bug fixed: voluntary switches removed from move-turn valid mask (4% → 47% random baseline)
+- Bug fixed: obs_size defaults updated 100 → 780 → 828 across all models
+- Verified ≥ 50% rolling win rate vs RandomPlayerAI
 
 ✅ **M1: Environment & Baseline Agent** (2026-05-10)
-- **Job 3.1:** Created `sim/tools/pokemon-gym.ts` — `PokemonGymEnv` class with `reset()`, `step(action)`, `validActions()`, `destroy()`. Background omniscient reader, reward parsing, valid-action masking.
-- **Job 3.2a:** Created `sim/tools/feature-extractor.ts` — 100-feature fixed-size extraction (own active, moves, switch mask, opponent, padding).
-- **Job 3.2b:** Created `sim/tools/evaluator.ts` — Parallel battle runner with `evaluate()`, `evaluateVsRandom()`, up to 50 concurrent battles.
-- **Job 3.1 (revised):** Added unit tests in `test/tools/gym.test.js` — reset/step validation, legal move masking, reward bounds, observation consistency, determinism check. Written as plain JS (matches project test convention) in `test/tools/` so mocharc picks it up automatically.
-- **Job 3.4:** Updated `docs/AI-PLAYERS.md` — new "Gym Wrapper (PokemonGymEnv)" section covering what the gym is, quick start, observation/action space, reward function, evaluator usage, seeding.
-- All code compiles under strict TypeScript with zero errors. Gym tested for 100 battles without crashes.
+- `sim/tools/pokemon-gym.ts` — `PokemonGymEnv` with reset/step/validActions/destroy
+- `sim/tools/feature-extractor.ts` — structured token extraction
+- `models/gym_bridge.js` + `models/gym_client.py` — Python↔Node.js bridge
+- `models/ppo/`, `models/dqn/`, `models/q_learning/` — all three model types
 
-✅ **Job 2.2: pokemon-gym.ts** (2026-05-10)
-- Created `sim/tools/pokemon-gym.ts`
-- Exports `PokemonGymEnv` with `reset()`, `step(action)`, `validActions()`, `destroy()`
-- Exports `GymStepResult` interface
-- GymPlayer extends BattlePlayer with Promise-based request handoff
-- Background omniscient reader buffers all battle lines for reward parsing
-- Reward: +0.01 per opponent KO, -0.01 per own KO, +0.0001 status, ±1.0 win/loss, stalling penalty
-- Compiles clean under strict TypeScript (zero errors)
+✅ **M0: Foundation** (2026-05-10)
+- Build system, documentation suite, `RandomPlayerAI` base class verified
 
-✅ **Job 2.1: feature-extractor.ts** (2026-05-10)
-- Created `sim/tools/feature-extractor.ts`
-- Exports `extractFeatures(request, opponentRequest): Float32Array` and `OBS_SIZE = 100`
-- 100-feature layout: own active (0–14), moves (15–54), switch mask (55–59), opponent (60–74), padding (75–99)
-- Compiles under strict TypeScript with no errors
+---
 
-✅ **M0: Foundation**
-- Build system (`./build`) working, `dist/` populated
-- Documentation suite created (8 reference docs in `docs/`)
-- Verified: `RandomPlayerAI` base class at `sim/tools/random-player-ai.ts`
-- Verified: `BattleStream` API works for programmatic parallel battles
+## Test Results (2026-05-20 — TOKEN_DIM=73 / boost dims verification)
 
-> **Note:** `simulate.js` in the repo root is an unrelated script (gym leader battles for a separate project). It is a useful code reference but is not a deliverable of this ML project. Its output in `output/` is similarly unrelated.
+**Overall verdict: PASS**
+
+| Check | Command | Exit Code | Result |
+|---|---|---|---|
+| 1 — TypeScript build | `./build` | 0 | Pass |
+| 2 — TOKEN_DIM constants | `node -e "... TOKEN_DIM * N_TOKENS"` | 0 | Pass |
+| 3 — gym_bridge syntax | `node --check models/gym_bridge.js` | 0 | Pass |
+| 4 — Python imports (ppo, dqn, transformer) | `python3 -c "importlib.util..."` | 0 | Pass |
+
+**Check 1 output:**
+```
+(no output — clean build)
+```
+
+**Check 2 output:**
+```
+TOKEN_DIM: 73 N_TOKENS: 12 obs_size: 876
+```
+
+**Check 3 output:**
+```
+(no output — syntax clean)
+```
+
+**Check 4 output:**
+```
+ppo_agent: import OK
+dqn_agent: import OK
+transformer_agent: import OK
+All Python imports: OK
+```
+
+---
+
+## Previous Test Results (2026-05-19 — M4 post-build checks)
+
+**Overall verdict: PASS**
+
+| Check | Command | Exit Code | Result |
+|---|---|---|---|
+| 1 — TypeScript build | `./build` | 0 | Pass |
+| 2 — TOKEN_DIM constants | `node -e "... TOKEN_DIM * N_TOKENS"` | 0 | Pass |
+| 3 — VecGymClient smoke test | `python models/vec_gym_client.py` | 0 | Pass |
+| 4 — gym_bridge syntax | `node --check models/gym_bridge.js` | 0 | Pass |
+| 5 — Python imports + DamageFirstAI | combined node + python -c | 0 | Pass |
+
+**Check 2 output:**
+```
+TOKEN_DIM: 69 N_TOKENS: 12 obs_size: 828
+```
+
+**Check 3 output:**
+```
+reset obs_batch.shape: (2, 12, 69)
+reset len(masks_batch): 2
+step obs_batch.shape: (2, 12, 69)
+step rewards: [0.0, 0.0]
+step dones: [False, False]
+step len(masks_batch): 2
+VecGymClient smoke test: OK
+```
+
+**Check 5 output:**
+```
+imports OK
+DamageFirstAI compiled OK: function
+```
 
 ---
 
 ## Blockers
 
-None. All components verified and working.
-
-### Assumptions Made
-- Python bridge for training models: new code (not integrating existing ML code)
-- PyTorch preferred for neural networks (fast iteration)
-- Gen1 format chosen for training (smallest state space, fastest convergence)
+None.
 
 ---
 
 ## Next Steps
 
-### Immediate (M2 — Structured State)
-1. **Build `extractFeaturesStructured()`** in `sim/tools/feature-extractor.ts`
-   - 12 tokens × 65 features, schema above
-   - Unknown-flag and fainted-flag semantics correct
+### Immediate (M4)
+1. Implement `VecGymClient` — 4 parallel envs, 4× episode throughput
+2. Add `DamageFirstAI` opponent — better learning signal than pure random
+3. Train with mixed opponents (80% Random + 20% DamageFirst initially)
+4. Target: consistent WR(rolling-500) ≥ 0.57 vs RandomPlayerAI
 
-2. **Add boost tracker** to `sim/tools/pokemon-gym.ts`
-   - Parse `|-boost|` / `|-unboost|` from omniscient lines
-   - Thread into token features for own/opponent active
-
-3. **Update bridge serialization** in `gym_bridge.js` + `gym_client.py`
-   - 780-element flat array over JSON; reshape to `(12, 65)` on Python side
-
-4. **Verification run** — MLP PPO on flattened structured obs, 50k battles vs Random
-
-### Follow-Up (M3 — Transformer)
-After M2 verified:
-- Build `models/transformer/transformer_agent.py` (2-layer encoder, d=128)
-- Train with PPO, 200k–500k battles
-- Compare vs MLP PPO baseline at same battle count
-
-### Stretch
-- Attention weight visualization to confirm non-uniform attention
-- Start scoping MCTS determinizer (opponent team sampling from gen1 usage data)
+### Follow-up
+- Self-play: only after consistently beating DamageFirstAI (WR ≥ 0.65)
+- Re-enable voluntary switches once opponent modeling is better
+- MCTS / opponent team sampling for M5
 
 ---
 
-## Key Metrics to Track
+## Key Architecture State
 
-**M1 Success Indicators:**
-- Gym env runs 100 battles without crashes
-- Observation shape: consistent (same size every turn)
-- Reward bounds: all rewards in [−1, +1]
-- Baseline win rates:
-  - RandomPlayerAI: ~50% (sanity check, should beat coin flip)
-  - DamageFirstAI: ~60% (heuristic baseline)
-- Evaluation runtime: < 5 min for 1500 battles
-
-**M2 Success Indicators (later):**
-- Model A (Tabular Q): ≥ 50% vs Random, < 70% vs DamageFirst (confirms limitation)
-- Model B (DQN): ≥ 80% vs Random, ≥ 60% vs DamageFirst (primary hypothesis)
-- Model C (PPO): ≥ 85% vs Random, ≥ 65% vs DamageFirst (stability)
-
----
-
-## Dependencies & Ordering
-
-**Hard blocking:** M1 must complete before M2 (gym needed by all models)
-
-**Can overlap:**
-- M2 & M3: If M2 winner is clear at 100k battles, can extrapolate training while exploring other models
-- M3 & M4: Checkpoints from M3 can be loaded into M4 inference during training
-- M4 & M5: Start human playtest while model still training (use stable checkpoints)
+| Component | Current state |
+|---|---|
+| Observation | (12, 73) tokens — HP, level, types, status, flags, 4×moves(7 dims incl. effectiveness), 4×boosts |
+| Action space | 9 actions — moves 0-3, force-switch slots 4-8 (voluntary switches disabled) |
+| Token dim | 73 — flat obs 876 |
+| Primary model | `TransformerAgent` (2-layer encoder, d=128) |
+| Best checkpoint | `transformer_step_500000_final.pt` — 0.52 WR, peak 0.55 |
+| Opponent | `RandomPlayerAI` (move=1.0, never switches) |
+| Reward | Full: ±KO, ±status, ±1 win/loss, stalling penalty |
+| Training | rollout=2048, entropy=0.05, ppo_epochs=2, lr 3e-4→1e-5 |
 
 ---
 
 ## Files & Directories
 
-### Core Simulation (M0, already done)
-- `sim/tools/random-player-ai.ts` — base AI class (extend for custom policies)
-- `dist/sim/index.js` — compiled simulator API (`BattleStream`, `Dex`, `PRNG`)
-- **Reference only (unrelated project):** `simulate.js`, `output/raw_battles.csv`
-
-### M1 (Gym & Baseline)
-- **New:** `sim/tools/pokemon-gym.ts` (gym wrapper)
-- **New:** `sim/tools/feature-extractor.ts` (observation building)
-- **New:** `sim/tools/evaluator.ts` (eval harness)
-- **New:** `test/tools/gym.test.js` (unit tests)
-- **Modify:** `docs/AI-PLAYERS.md` (gym usage section)
-
-### M2 (Model Exploration)
-- **New:** `models/` directory (root)
-- **New:** `models/q_learning/` (tabular Q)
-- **New:** `models/dqn/` (DQN)
-- **New:** `models/ppo/` (PPO)
-- **New:** `models/` base: `train_env.py`, `evaluate.py`
-- **New:** `docs/MODEL-COMPARISON.md` (results & winner selection)
-
-### M3 (Scale Training)
-- **Modify:** `models/{dqn|ppo}/train.py` (checkpointing, self-play)
-- **New:** `models/{dqn|ppo}/TRAINING-RESULTS.md` (logs & analysis)
-
-### M4 (Showdown Integration)
-- **New:** `server/bot-client.ts` (WebSocket)
-- **New:** `server/battle-handler.ts` (inference)
-- **New:** `docs/DEPLOYMENT.md` (setup guide)
-
-### M5 (Evaluation)
-- **New:** `server/elo-ladder.ts` (rating tracking)
-- **New:** `docs/FUTURE-WORK.md` (research directions)
-
----
-
-## Checklist for Session Start
-
-When starting a new session:
-
-- [ ] Review this file for current work status
-- [ ] Check MILESTONES.md for milestone definitions
-- [ ] If blocked, resolve blockers (see Blockers section)
-- [ ] If continuing M1: check last day's progress
-- [ ] Update "Recently Completed" when tasks finish
-- [ ] Update "Active Tasks" when starting new work
-- [ ] Commit this file after major progress
-
----
-
-## Session Log
-
-### Session 3 (2026-05-18)
-- **Action:** Verified Job 3.1 — gym_bridge.js and gym_client.py integration tests
-- **Status:** All three checks PASS
-  - Check 1 (syntax): `node --check gym_bridge.js` → exit 0 ✓
-  - Check 2 (bridge reset): reset returns valid JSON with obs array of length 100 ✓
-  - Check 3 (Python client): gym_client.py smoke test runs without errors, obs shape (100,), valid_actions works, step returns correct tuple ✓
-- **Notes:** numpy was not installed initially; installed via pip, then all tests passed
-- **Next:** Ready to begin M2 phase training (Model A/B/C) or continue verification tasks
-
-### Session 2 (2026-05-10)
-- **Action:** Completed M1 gym wrapper, feature extractor, evaluator, unit tests, docs update
-- **Status:** M1 complete. All code compiles under strict TypeScript. Gym tested 100+ battles without crashes.
-- **Deliverables:** `pokemon-gym.ts`, `feature-extractor.ts`, `evaluator.ts`, `test/tools/gym.test.js`, `docs/AI-PLAYERS.md` (new Gym Wrapper section)
-- **Next:** M2 model exploration — Python bridge, Model A (Tabular Q), Models B & C (DQN/PPO) in parallel
-
-### Session 1 (2026-05-10)
-- **Action:** Created docs suite (8 reference docs), MILESTONES.md, IN-PROGRESS.md
-- **Status:** Project director defined 6 milestones (M0–M5), M0 complete, M1–M5 scoped
-- **Clarified:** `simulate.js` is an unrelated script (not an ML project artifact)
-- **Next:** Begin M1 gym wrapper implementation
-
+| Path | Purpose |
+|---|---|
+| `sim/tools/feature-extractor.ts` | Token extraction — TOKEN_DIM=73, GEN1_TYPE_CHART, boost dims [69–72] |
+| `sim/tools/pokemon-gym.ts` | Battle gym env — validActions, reward, boost tracking |
+| `sim/tools/random-player-ai.ts` | Base opponent AI |
+| `models/gym_bridge.js` | Node.js stdio bridge |
+| `models/gym_client.py` | Python GymClient |
+| `models/vec_gym_client.py` | **[TODO]** Parallel env wrapper |
+| `models/transformer/transformer_agent.py` | TransformerAgent — PPO Actor-Critic |
+| `models/transformer/train.py` | Training loop |
+| `models/transformer/checkpoints/` | Saved checkpoints |
+| `docs/TRAINING-LOG.md` | Living lab notebook — all runs, bugs, decisions |

@@ -2,7 +2,7 @@
 dqn_agent.py — Deep Q-Network agent for Pokemon Showdown Gen 1 battles.
 
 Architecture:
-  - Two-hidden-layer MLP (100 → 128 → 128 → 9)
+  - Two-hidden-layer MLP (876 → 128 → 128 → 9)
   - Policy network updated every step; target network updated every
     target_update_freq steps via hard copy
   - ε-greedy action selection; always respects valid_mask
@@ -30,7 +30,7 @@ def _pick_device() -> torch.device:
 class QNetwork(nn.Module):
     """Fully-connected Q-value network: obs_size → 128 → 128 → n_actions."""
 
-    def __init__(self, obs_size: int = 100, n_actions: int = 9):
+    def __init__(self, obs_size: int = 876, n_actions: int = 9):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(obs_size, 128),
@@ -48,7 +48,7 @@ class DQNAgent:
     """DQN agent with experience replay and a periodically-synced target network.
 
     Args:
-        obs_size:           Dimension of the observation vector (default 100).
+        obs_size:           Dimension of the observation vector (default 828).
         n_actions:          Number of discrete actions (default 9).
         lr:                 Adam learning rate (default 1e-3).
         gamma:              Discount factor (default 0.99).
@@ -61,7 +61,7 @@ class DQNAgent:
 
     def __init__(
         self,
-        obs_size: int = 100,
+        obs_size: int = 828,
         n_actions: int = 9,
         lr: float = 1e-3,
         gamma: float = 0.99,
@@ -100,7 +100,7 @@ class DQNAgent:
         """Select an action using ε-greedy policy, respecting valid_mask.
 
         Args:
-            obs:        Observation array, shape (100,), float32.
+            obs:        Observation array, shape (828,), float32.
             valid_mask: List of bool, length 9; True = legal action.
 
         Returns:
