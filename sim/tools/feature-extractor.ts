@@ -48,7 +48,7 @@ function isSwitchRequest(r: ChoiceRequest): r is SwitchRequest {
  * or the fainted shorthand "0 fnt".
  * Returns the ratio current/max clamped to [0,1].
  */
-function parseHpRatio(condition: string): number {
+export function parseHpRatio(condition: string): number {
 	if (!condition || condition === '0 fnt') return 0;
 
 	// "NNN/MMM" or "NNN/MMM STS"
@@ -73,7 +73,7 @@ function parseHpRatio(condition: string): number {
  * Parse a status string out of a condition like "200/300 brn".
  * Returns the status token in lowercase, or '' if none.
  */
-function parseStatus(condition: string): string {
+export function parseStatus(condition: string): string {
 	if (!condition) return '';
 	const slashIdx = condition.indexOf('/');
 	if (slashIdx === -1) {
@@ -91,7 +91,7 @@ function parseStatus(condition: string): string {
  * Order: burn, freeze, paralysis, poison, sleep, toxic (each 0.0 or 1.0).
  * Reads the status token from the condition string.
  */
-function fillStatusBitmask(obs: Float32Array, offset: number, condition: string): void {
+export function fillStatusBitmask(obs: Float32Array, offset: number, condition: string): void {
 	const status = parseStatus(condition);
 	obs[offset + 0] = status === 'brn' ? 1.0 : 0.0;  // burn
 	obs[offset + 1] = status === 'frz' ? 1.0 : 0.0;  // freeze
@@ -103,21 +103,24 @@ function fillStatusBitmask(obs: Float32Array, offset: number, condition: string)
 
 /**
  * Parse the level from a details string like "Pikachu, L50, M".
- * Defaults to 50 if not found.
+ * Showdown omits the level tag entirely when it's 100 (`Pokemon#details`),
+ * so the default here must be 100, not 50 — gen1ou/gen1randombattle mons
+ * are level 100 by convention, and Metamon's adapter assumes the same
+ * default for parity with the BC-pretrained checkpoint.
  */
-function parseLevelFromDetails(details: string): number {
+export function parseLevelFromDetails(details: string): number {
 	const match = details.match(/L(\d+)/);
 	if (match) {
 		const lvl = parseInt(match[1], 10);
 		if (!isNaN(lvl)) return lvl;
 	}
-	return 50;
+	return 100;
 }
 
 /**
  * Map a type name string to its numeric index (0–14).
  */
-function typeToIndex(typeName: string): number {
+export function typeToIndex(typeName: string): number {
 	return TYPE_INDEX[typeName.toLowerCase()] ?? 0;
 }
 
@@ -125,7 +128,7 @@ function typeToIndex(typeName: string): number {
  * Map a move category to a numeric index.
  *   Physical -> 0, Special -> 1, Status -> 2
  */
-function categoryToIndex(category: string): number {
+export function categoryToIndex(category: string): number {
 	if (category === 'Physical') return 0;
 	if (category === 'Special') return 1;
 	return 2; // Status (or unknown)
@@ -358,6 +361,216 @@ export function extractFeatures(
 	fillOpponent(obs, opponentRequest);
 
 	// Indices 75–99 remain 0 (padding)
+
+	return obs;
+}
+
+// ---- Structured per-Pokémon token extraction (M2) --------------------------
+//
+// Token layout mirrors models/metamon_adapter.py exactly (offsets, one-hot
+// order, unknown/fainted conventions) so the M2.5 BC-pretrained checkpoint's
+// 65-dim input projection stays valid against live-gym observations.
+
+export const TOKEN_DIM = 65;
+export const N_TOKENS = 12;
+
+const T_HP = 0;
+const T_LEVEL = 1;
+const T_TYPE1 = 2;
+const T_TYPE2 = 17;
+const T_STATUS = 32;
+const T_ACTIVE_FLAG = 38;
+const T_UNKNOWN_FLAG = 39;
+const T_FAINTED_FLAG = 40;
+const T_MOVES = 41;
+const T_MOVE_DIM = 6;
+
+/**
+ * One move slot's input for token building. `pp`/`maxpp` are omitted for
+ * Pokémon whose current PP isn't observable (bench, opponent) — PP ratio
+ * then defaults to 1.0, matching metamon_adapter.py's assumption.
+ */
+interface TokenMoveInput {
+	id: string;
+	pp?: number;
+	maxpp?: number;
+	disabled?: boolean;
+}
+
+/**
+ * One revealed opponent Pokémon, reconstructed from the battle log by the
+ * gym's opponent tracker (see pokemon-gym.ts). Contains only information a
+ * real player could have observed — no hidden state.
+ */
+export interface OpponentPokemonInfo {
+	details: string;
+	condition: string;
+	active: boolean;
+	/** Revealed move ids, in the order first observed (max 4 kept). */
+	moves: string[];
+}
+
+function fillUnknownToken(obs: Float32Array, offset: number): void {
+	// Unrevealed opponent bench: assumed full HP, everything else zero.
+	// Do NOT use an all-zero vector — that would be indistinguishable from
+	// a fainted Pokémon (HP=0, fainted_flag=1).
+	obs[offset + T_HP] = 1.0;
+	obs[offset + T_UNKNOWN_FLAG] = 1.0;
+}
+
+function fillFaintedToken(obs: Float32Array, offset: number): void {
+	obs[offset + T_FAINTED_FLAG] = 1.0;
+}
+
+function fillPokemonToken(
+	obs: Float32Array,
+	offset: number,
+	details: string,
+	condition: string,
+	active: boolean,
+	moves: TokenMoveInput[],
+): void {
+	if (parseHpRatio(condition) <= 0) {
+		fillFaintedToken(obs, offset);
+		return;
+	}
+
+	const dex = Dex.mod('gen1');
+
+	obs[offset + T_HP] = parseHpRatio(condition);
+	obs[offset + T_LEVEL] = parseLevelFromDetails(details) / 100;
+
+	const speciesName = details.split(',')[0].trim();
+	try {
+		const speciesInfo = dex.species.get(speciesName);
+		if (speciesInfo.exists && speciesInfo.types.length > 0) {
+			const type1Idx = typeToIndex(speciesInfo.types[0]);
+			const type2Idx = speciesInfo.types.length > 1 ? typeToIndex(speciesInfo.types[1]) : type1Idx;
+			obs[offset + T_TYPE1 + type1Idx] = 1.0;
+			obs[offset + T_TYPE2 + type2Idx] = 1.0;
+		}
+	} catch {
+		// Leave type one-hots zero
+	}
+
+	fillStatusBitmask(obs, offset + T_STATUS, condition);
+	obs[offset + T_ACTIVE_FLAG] = active ? 1.0 : 0.0;
+
+	for (let i = 0; i < Math.min(4, moves.length); i++) {
+		const move = moves[i];
+		const base = offset + T_MOVES + i * T_MOVE_DIM;
+
+		let basePower = 0;
+		let accuracy = 1.0;
+		let typeIdx = 0;
+		let catIdx = 0;
+		try {
+			const moveInfo = dex.moves.get(move.id);
+			if (moveInfo.exists) {
+				basePower = Math.min(1, Math.max(0, moveInfo.basePower / 250));
+				const rawAccuracy = moveInfo.accuracy;
+				accuracy = (rawAccuracy === true || rawAccuracy === undefined) ? 1.0 : (rawAccuracy as number) / 100;
+				typeIdx = typeToIndex(moveInfo.type);
+				catIdx = categoryToIndex(moveInfo.category);
+			}
+		} catch {
+			// Safe defaults already set
+		}
+
+		obs[base + 0] = basePower;
+		obs[base + 1] = accuracy;
+		obs[base + 2] = (move.pp !== undefined && move.maxpp !== undefined && move.maxpp > 0) ?
+			move.pp / move.maxpp : 1.0;
+		obs[base + 3] = typeIdx / 20;
+		obs[base + 4] = catIdx / 2;
+		obs[base + 5] = move.disabled ? 1.0 : 0.0;
+	}
+}
+
+function fillOwnBenchToken(obs: Float32Array, offset: number, poke: PokemonSwitchRequestData): void {
+	// Bench Pokémon only expose choosable move ids (no live PP/disabled info).
+	const moves: TokenMoveInput[] = (poke.moves || []).slice(0, 4).map(id => ({ id }));
+	fillPokemonToken(obs, offset, poke.details, poke.condition, false, moves);
+}
+
+function fillOpponentToken(obs: Float32Array, offset: number, info: OpponentPokemonInfo): void {
+	const moves: TokenMoveInput[] = info.moves.slice(0, 4).map(id => ({ id }));
+	fillPokemonToken(obs, offset, info.details, info.condition, info.active, moves);
+}
+
+function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[]): void {
+	const activeOffset = 6 * TOKEN_DIM;
+	const active = opponent.find(p => p.active);
+	if (active) {
+		fillOpponentToken(obs, activeOffset, active);
+	} else {
+		// Between switch resolution and the next reveal there's a brief window
+		// with no known active opponent — fall back to unknown rather than crash.
+		fillUnknownToken(obs, activeOffset);
+	}
+
+	const bench = opponent.filter(p => !p.active);
+	for (let j = 0; j < 5; j++) {
+		const offset = (7 + j) * TOKEN_DIM;
+		if (j < bench.length) {
+			fillOpponentToken(obs, offset, bench[j]);
+		} else {
+			fillUnknownToken(obs, offset);
+		}
+	}
+}
+
+/**
+ * Extract a (12, 65) structured per-Pokémon token observation, flattened to
+ * a single Float32Array of length N_TOKENS * TOKEN_DIM = 780.
+ *
+ * Token order: [0] own active, [1–5] own bench (side.pokemon[1..5] order —
+ * action k grounds to bench token k-4, matching PokemonGymEnv's fixed-slot
+ * action space), [6] opponent active, [7–11] opponent bench (revealed
+ * non-active first, then unknown, then fainted).
+ *
+ * `opponent` must be built from what a real player could observe (see the
+ * opponent tracker in pokemon-gym.ts) — never from omniscient/hidden state.
+ */
+export function extractFeaturesStructured(
+	request: ChoiceRequest,
+	opponent: OpponentPokemonInfo[],
+): Float32Array {
+	const obs = new Float32Array(N_TOKENS * TOKEN_DIM);
+
+	if (request.wait || request.teamPreview) {
+		fillOpponentTokens(obs, opponent);
+		return obs;
+	}
+
+	const pokemon = request.side.pokemon;
+	const ownActive = pokemon[0];
+
+	if (ownActive) {
+		if (isSwitchRequest(request)) {
+			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, []);
+		} else if (isMoveRequest(request)) {
+			const activeMoveData = request.active[0];
+			const moves: TokenMoveInput[] = activeMoveData ?
+				activeMoveData.moves.slice(0, 4).map(m => (
+					{ id: m.id, pp: m.pp, maxpp: m.maxpp, disabled: !!m.disabled }
+				)) :
+				[];
+			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, moves);
+		}
+	}
+
+	for (let slot = 1; slot <= 5; slot++) {
+		const offset = slot * TOKEN_DIM;
+		const poke = pokemon[slot];
+		if (!poke) {
+			fillFaintedToken(obs, offset);
+			continue;
+		}
+		fillOwnBenchToken(obs, offset, poke);
+	}
+
+	fillOpponentTokens(obs, opponent);
 
 	return obs;
 }

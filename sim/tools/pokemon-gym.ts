@@ -11,19 +11,37 @@
 import { BattleStream, getPlayerStreams, BattlePlayer } from '../battle-stream';
 import { PRNG } from '../prng';
 import type { PRNGSeed } from '../prng';
+import { toID } from '../dex-data';
 import { RandomPlayerAI } from './random-player-ai';
-import { extractFeatures } from './feature-extractor';
+import { extractFeatures, extractFeaturesStructured } from './feature-extractor';
+import type { OpponentPokemonInfo } from './feature-extractor';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
 
+/**
+ * 'structured' (default) returns the (12, 65) per-Pokémon token observation
+ * from extractFeaturesStructured(), flattened to 780 floats. 'flat' returns
+ * the legacy 100-dim extractFeatures() vector for MLP-baseline regression
+ * checks against the M1 result.
+ */
+export type ObsMode = 'flat' | 'structured';
+
 export interface GymStepResult {
 	obs: Float32Array;
 	reward: number;
 	done: boolean;
 	info: { winner?: string; turns?: number; illegalMove?: boolean };
+}
+
+/** Internal opponent-tracker record — reconstructed from the battle log. */
+interface OpponentRecord {
+	details: string;
+	condition: string;
+	active: boolean;
+	moves: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +108,7 @@ class GymPlayer extends BattlePlayer {
 export class PokemonGymEnv {
 	private readonly _format: string;
 	private readonly _seed: PRNGSeed | undefined;
+	private readonly _obsMode: ObsMode;
 
 	private _battleStream!: BattleStream;
 	private _streams!: ReturnType<typeof getPlayerStreams>;
@@ -111,9 +130,15 @@ export class PokemonGymEnv {
 	private _winResolve: ((winner: string) => void) | null = null;
 	private _winPromise: Promise<string> | null = null;
 
-	constructor(options: { seed?: PRNGSeed; format?: string } = {}) {
+	// Opponent-reveal tracker (structured obs mode) — reconstructed purely
+	// from battle-log lines a real player could see, never omniscient state.
+	private _opponentOrder: string[] = [];
+	private _opponentRecords: Map<string, OpponentRecord> = new Map();
+
+	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode } = {}) {
 		this._format = options.format ?? 'gen1randombattle';
 		this._seed = options.seed;
+		this._obsMode = options.obsMode ?? 'structured';
 	}
 
 	// -------------------------------------------------------------------------
@@ -138,6 +163,10 @@ export class PokemonGymEnv {
 		this._winResult = null;
 		this._winResolve = null;
 		this._winPromise = null;
+
+		// Reset opponent-reveal tracker
+		this._opponentOrder = [];
+		this._opponentRecords = new Map();
 
 		// Start players (they loop reading their streams)
 		void this._gymPlayer.start();
@@ -167,7 +196,7 @@ export class PokemonGymEnv {
 		this._turnCount = 0;
 		this._done = false;
 
-		return extractFeatures(this._currentRequest, null);
+		return this._extractObs();
 	}
 
 	// -------------------------------------------------------------------------
@@ -182,7 +211,7 @@ export class PokemonGymEnv {
 		// Validate action range
 		if (action < 0 || action > 8) {
 			return {
-				obs: extractFeatures(this._currentRequest!, null),
+				obs: this._extractObs(),
 				reward: -0.01,
 				done: false,
 				info: { illegalMove: true },
@@ -193,7 +222,7 @@ export class PokemonGymEnv {
 		const mask = this.validActions();
 		if (!mask[action]) {
 			return {
-				obs: extractFeatures(this._currentRequest!, null),
+				obs: this._extractObs(),
 				reward: -0.01,
 				done: false,
 				info: { illegalMove: true },
@@ -291,7 +320,7 @@ export class PokemonGymEnv {
 			this._currentRequest = result.request;
 		}
 
-		const obs = extractFeatures(this._currentRequest!, null);
+		const obs = this._extractObs();
 
 		return {
 			obs,
@@ -393,12 +422,85 @@ export class PokemonGymEnv {
 	// Internal helpers
 	// -------------------------------------------------------------------------
 
+	private _extractObs(): Float32Array {
+		if (this._obsMode === 'flat') {
+			return extractFeatures(this._currentRequest!, null);
+		}
+		return extractFeaturesStructured(this._currentRequest!, this._getOpponentInfo());
+	}
+
+	private _getOpponentInfo(): OpponentPokemonInfo[] {
+		return this._opponentOrder.map(nickname => {
+			const record = this._opponentRecords.get(nickname)!;
+			return {
+				details: record.details,
+				condition: record.condition,
+				active: record.active,
+				moves: record.moves,
+			};
+		});
+	}
+
+	/**
+	 * Update the opponent-reveal tracker from one battle-log line. Only p2
+	 * events are consumed — this reconstructs exactly what a real player
+	 * would learn from watching the battle, not omniscient state.
+	 */
+	private _processOpponentLine(line: string): void {
+		const parts = line.split('|');
+		const type = parts[1];
+		const ident = parts[2] ?? '';
+		if (!ident.startsWith('p2')) return;
+		const nickname = extractNickname(ident);
+
+		if (type === 'switch' || type === 'drag') {
+			for (const record of this._opponentRecords.values()) record.active = false;
+
+			const details = parts[3] ?? '';
+			const condition = parts[4] ?? '';
+			const existing = this._opponentRecords.get(nickname);
+			if (existing) {
+				existing.details = details;
+				existing.condition = condition;
+				existing.active = true;
+			} else {
+				this._opponentRecords.set(nickname, { details, condition, active: true, moves: [] });
+				this._opponentOrder.push(nickname);
+			}
+		} else if (type === '-damage' || type === '-heal') {
+			const record = this._opponentRecords.get(nickname);
+			if (record) record.condition = parts[3] ?? record.condition;
+		} else if (type === '-status') {
+			const record = this._opponentRecords.get(nickname);
+			if (record) {
+				const statusToken = parts[3] ?? '';
+				record.condition = `${hpFraction(record.condition)} ${statusToken}`.trim();
+			}
+		} else if (type === '-curestatus') {
+			const record = this._opponentRecords.get(nickname);
+			if (record) record.condition = hpFraction(record.condition);
+		} else if (type === 'faint') {
+			const record = this._opponentRecords.get(nickname);
+			if (record) {
+				record.condition = '0 fnt';
+				record.active = false;
+			}
+		} else if (type === 'move') {
+			const record = this._opponentRecords.get(nickname);
+			if (record && record.moves.length < 4) {
+				const moveId = toID(parts[3] ?? '');
+				if (moveId && !record.moves.includes(moveId)) record.moves.push(moveId);
+			}
+		}
+	}
+
 	private async _runOmniscientReader(): Promise<void> {
 		try {
 			for await (const chunk of this._streams.omniscient) {
 				for (const line of chunk.split('\n')) {
 					if (!line) continue;
 					this._omniscientLines.push(line);
+					this._processOpponentLine(line);
 
 					// Notify any pending waiters that new data arrived
 					if (this._omniscientNotify) {
@@ -468,6 +570,18 @@ function isMoveRequest(r: ChoiceRequest): r is MoveRequest {
 
 function isSwitchRequest(r: ChoiceRequest): r is SwitchRequest {
 	return 'forceSwitch' in r;
+}
+
+/** "p2a: Gengar" -> "Gengar". Falls back to the raw ident if unparseable. */
+function extractNickname(ident: string): string {
+	const colonIdx = ident.indexOf(': ');
+	return colonIdx === -1 ? ident : ident.slice(colonIdx + 2);
+}
+
+/** "97/100 brn" -> "97/100"; "0 fnt" -> "0". Strips any status/fnt suffix. */
+function hpFraction(condition: string): string {
+	const spaceIdx = condition.indexOf(' ');
+	return spaceIdx === -1 ? condition : condition.slice(0, spaceIdx);
 }
 
 /**

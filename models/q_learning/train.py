@@ -39,7 +39,9 @@ def main() -> None:
     n_episodes = args.episodes
     log_every = min(500, max(1, n_episodes // 10))
 
-    env = GymClient()
+    # This tabular baseline discretizes the legacy flat 100-dim vector, not
+    # M2's (12, 65) structured tokens.
+    env = GymClient(structured=False)
     agent = QAgent()
 
     print(f"Starting Q-Learning training: {n_episodes} episodes (logging every {log_every})")

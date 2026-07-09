@@ -78,3 +78,7 @@ models/**/checkpoints/*.pt
 models/**/checkpoints/*.pkl
 models/q_learning/qtable.pkl
 output/
+
+# Metamon (M2.5 BC pretraining) — vendored install + downloaded dataset
+vendor/
+data/metamon_cache/

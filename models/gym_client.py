@@ -7,6 +7,11 @@ Protocol (one JSON object per line):
   step         → {"cmd":"step","action":<int>}
   valid_actions→ {"cmd":"valid_actions"}
   close        → {"cmd":"close"}
+
+By default the bridge returns the M2 structured (12, 65) token observation
+as a flat 780-element array; GymClient reshapes it back to (12, 65). Pass
+structured=False to run the bridge with --flat and get the legacy 100-dim
+vector instead (M1 MLP baseline regression checks).
 """
 
 import json
@@ -17,6 +22,9 @@ from pathlib import Path
 
 import numpy as np
 
+N_TOKENS = 12
+TOKEN_DIM = 65
+
 # Set to True to print every send/receive for hang debugging
 DEBUG = False
 
@@ -24,12 +32,16 @@ DEBUG = False
 class GymClient:
     """Spawns gym_bridge.js and exposes a Gym-like interface over stdio JSON."""
 
-    def __init__(self, bridge_path: str = None):
+    def __init__(self, bridge_path: str = None, structured: bool = True):
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
         self._bridge_path = bridge_path
+        self._structured = structured
+        args = ["node", bridge_path]
+        if not structured:
+            args.append("--flat")
         self._proc = subprocess.Popen(
-            ["node", bridge_path],
+            args,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -39,6 +51,9 @@ class GymClient:
             target=self._drain_stderr, daemon=True
         )
         self._stderr_thread.start()
+
+    def _reshape(self, obs: np.ndarray) -> np.ndarray:
+        return obs.reshape(N_TOKENS, TOKEN_DIM) if self._structured else obs
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -83,11 +98,12 @@ class GymClient:
         """Reset the environment and return (obs, valid_mask).
 
         Returns:
-            obs:        np.ndarray shape (100,), dtype float32
+            obs:        np.ndarray shape (12, 65) structured, or (100,) if
+                        constructed with structured=False. dtype float32
             valid_mask: list of bool, length 9
         """
         response = self._send({"cmd": "reset"})
-        obs = np.array(response["obs"], dtype=np.float32)
+        obs = self._reshape(np.array(response["obs"], dtype=np.float32))
         mask = list(response["mask"])
         return obs, mask
 
@@ -99,14 +115,15 @@ class GymClient:
 
         Returns:
             (obs, reward, done, info, valid_mask)
-              obs        — np.ndarray shape (100,) float32
+              obs        — np.ndarray shape (12, 65) structured, or (100,)
+                           if constructed with structured=False. float32
               reward     — float
               done       — bool
               info       — dict
               valid_mask — list of bool, length 9
         """
         response = self._send({"cmd": "step", "action": action})
-        obs = np.array(response["obs"], dtype=np.float32)
+        obs = self._reshape(np.array(response["obs"], dtype=np.float32))
         reward = float(response["reward"])
         done = bool(response["done"])
         info = response["info"]
@@ -152,3 +169,9 @@ if __name__ == "__main__":
 
     client.close()
     print("close: OK")
+
+    flat_client = GymClient(structured=False)
+    obs, mask = flat_client.reset()
+    print(f"[--flat] reset obs shape: {obs.shape}")
+    flat_client.close()
+    print("[--flat] close: OK")

@@ -54,7 +54,8 @@ def main() -> None:
 
     agent = DQNAgent()
     buffer = ReplayBuffer(capacity=10000)
-    env = GymClient()
+    # DQN's QNetwork trunk is hardcoded to the legacy flat 100-dim vector.
+    env = GymClient(structured=False)
 
     print(f"Starting DQN training: {total_budget} steps (logging every {log_every} episodes)", flush=True)
 

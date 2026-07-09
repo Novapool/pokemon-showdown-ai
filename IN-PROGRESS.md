@@ -1,51 +1,74 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-05-19
+Last updated: 2026-07-09
 
 ---
 
 ## Current Work
 
-**Milestone:** M2 (Structured State Representation) — Architecture direction locked, ready to build  
+**Milestone:** M2 (Structured State Representation) — code complete, verification run remaining  
 **Phase:** Replace flat 100-dim feature vector with per-Pokémon token representation
 
 ### Active Tasks
-- [ ] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array
-- [ ] Add boost tracker to `sim/tools/pokemon-gym.ts` — thread stat boosts into token features
-- [ ] Update `models/gym_bridge.js` — serialize structured obs as 780-element flat array
-- [ ] Update `models/gym_client.py` — reshape `(780,)` → `(12, 65)` numpy array
-- [ ] Verify: run MLP PPO on flattened structured obs, confirm ≥ 50% win rate vs RandomPlayerAI at 50k battles
+- [x] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array, exact layout match with `models/metamon_adapter.py`
+- [x] Add opponent-reveal tracker to `sim/tools/pokemon-gym.ts` — reconstructs revealed opponent state (species/HP/status/fainted/used moves) from `|switch|/|drag|/|-damage|/|-heal|/|-status|/|-curestatus|/|faint|/|move|` lines on the battle log, never from omniscient state
+- [x] Wire `obsMode: 'flat' | 'structured'` into `PokemonGymEnv` (default `'structured'`)
+- [x] Update `models/gym_bridge.js` — serializes structured obs as 780-element flat array by default; `--flat` CLI flag restores the legacy 100-dim path
+- [x] Update `models/gym_client.py` — reshapes `(780,)` → `(12, 65)`; `GymClient(structured=False)` mirrors `--flat`
+- [x] Fixed `models/{q_learning,dqn,ppo}/train.py` + `evaluate.py` to pass `structured=False` — their networks are hardcoded to the flat 100-dim vector and would otherwise silently break now that structured is the default
+- [x] Tests: shape/unknown-flag/fainted-flag/bench-ordering coverage in `test/tools/gym.test.js`; full build + battle-loop smoke tests pass
+- [ ] **Verify:** run MLP PPO on flattened structured obs, confirm ≥ 50% win rate vs RandomPlayerAI at 50k battles (parity check against the M1 flat baseline) — not yet run, needs a background training session
+- [x] **M2.5:** Run `bash scripts/download_metamon.sh` — done 2026-07-02, **119,536 gen1ou trajectories** in `data/metamon_cache/`
+- [x] **M2.5:** Smoke-test BC on real data — done 2026-07-02, `--max_files 200`: 33,270 samples, loss 2.04→1.72, acc 19.8%→34.1% (chance ≈ 11%), no adapter warnings; action histogram over real battles ≈ 71% moves / 29% switches (plausible for human gen1ou)
+- [x] **M2.5:** Full BC run — done 2026-07-02: 4.96M samples/epoch × 5 epochs (24.8M total) in 2414s on MPS; **final loss 1.339, top-1 acc 50.5%** (chance ≈ 11%); checkpoint at `models/checkpoints/bc_pretrain_gen1ou.pt`, verified loading 30/30 tensors into `TransformerPolicy`. M2.5 complete — remaining criterion (warm-start vs from-scratch PPO comparison) blocked on M3.
+
+### Deviation from the original M2 plan: stat boosts dropped
+
+The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feeding into the active-Pokémon token. That was written before M2.5 locked the token schema to exactly match `models/metamon_adapter.py` (65 dims, no boost slots) so the BC-pretrained checkpoint's input projection stays valid. Metamon's replay dataset doesn't encode stat boosts either, so there's no way to add a boost feature without breaking BC-checkpoint compatibility or retraining it. Boosts are dropped from M2's scope; revisit only as a deliberate schema-version bump (would require a new BC pretraining run).
+
+### Bug fixed in passing: level default
+
+`parseLevelFromDetails()` defaulted to level 50 when a details string had no explicit `L##` tag. Showdown omits the level tag entirely when it's 100 (the common case for gen1ou/gen1randombattle), so this was silently encoding real level-100 Pokémon as level 50 in both the flat and structured extractors. Default is now 100, matching Showdown's actual convention and Metamon's adapter assumption.
 
 ---
 
 ## Active Plan
 
-**M2 Execution Plan:**
+**M2 Execution Plan — status:**
 
-1. **Token schema** (in `feature-extractor.ts`)
-   - 12 tokens: own active, own bench ×5, opponent active, opponent bench ×5
-   - Per token (65 dims): HP_ratio, level/100, type1_onehot(15), type2_onehot(15), status_onehot(6), active_flag, unknown_flag, fainted_flag, 4×move_features(6)
-   - Unknown opponent bench: `unknown_flag=1, HP_ratio=1.0`, all other features 0
-   - Fainted: `fainted_flag=1, HP_ratio=0`
-
-2. **Stat boost tracking** (in `pokemon-gym.ts`)
-   - Parse `|-boost|` and `|-unboost|` lines from omniscient stream
-   - Accumulate per-slot boost dict; reset on switch
-   - Pass into `extractFeaturesStructured()` for the active Pokémon token
-
-3. **Bridge update** (in `gym_bridge.js` + `gym_client.py`)
-   - Serialize: flatten `(12, 65)` → 780-element array for JSON transport
-   - Python side: `np.array(obs).reshape(12, 65)`
-   - Keep `--flat` mode for backward compat with old MLP baseline
-
-4. **Verification**
+1. ~~**Token schema** (in `feature-extractor.ts`)~~ ✅ Done — 12 tokens, 65 dims each, matches `metamon_adapter.py` exactly
+2. ~~**Stat boost tracking**~~ ❌ Dropped — see "Deviation from the original M2 plan" above
+3. ~~**Bridge update** (in `gym_bridge.js` + `gym_client.py`)~~ ✅ Done — 780-float flat array, `--flat`/`structured=False` for backward compat
+4. **Verification** — remaining
    - PPO with trunk `Linear(780, 128) → ReLU → Linear(128, 128)` on flattened tokens
    - Target: ≥ 50% vs RandomPlayerAI at 50k battles (parity with old flat vector confirms correctness)
-   - Check token shape stability across move requests, switch requests, end-of-episode
+   - Token shape stability across move requests, switch requests, and end-of-episode is already covered by `test/tools/gym.test.js` (300-step full-battle smoke test)
 
 ---
 
 ## Recently Completed
+
+✅ **M2 code: Structured State Representation** (2026-07-09)
+- Added `extractFeaturesStructured()` + `TOKEN_DIM=65`/`N_TOKENS=12` to `sim/tools/feature-extractor.ts`; byte-for-byte layout match with `models/metamon_adapter.py` so the M2.5 BC checkpoint stays loadable
+- Exported `parseHpRatio`/`parseStatus`/`fillStatusBitmask`/`parseLevelFromDetails`/`typeToIndex`/`categoryToIndex` from `feature-extractor.ts` for reuse
+- Added an opponent-reveal tracker to `sim/tools/pokemon-gym.ts` — reconstructs revealed opponent Pokémon (species, HP, status, fainted, revealed moves) purely from `p2`-side battle-log lines, since a real player's request never contains opponent team info
+- Added `obsMode: 'flat' | 'structured'` to `PokemonGymEnv` (default `'structured'`)
+- `models/gym_bridge.js`: 780-float serialization by default, `--flat` restores the legacy 100-dim path
+- `models/gym_client.py`: reshapes to `(12, 65)` by default, `structured=False` restores flat
+- Fixed `models/{q_learning,dqn,ppo}/train.py` + `evaluate.py` to pass `structured=False` (their networks are hardcoded to 100-dim input — would have silently broken under the new default)
+- Fixed a pre-existing bug: `parseLevelFromDetails()` defaulted to level 50 instead of 100 for Pokémon without an explicit `L##` tag (Showdown omits the tag at level 100, the gen1ou/gen1randombattle norm)
+- Fixed a pre-existing build bug: `tools/build-utils.js`'s `copyOverDataJSON` didn't create destination directories before copying, which broke `./build` once `data/metamon_cache/` (2.1GB, gitignored) existed under `data/`
+- Extended `test/tools/gym.test.js`: structured-obs shape/NaN checks, unknown-vs-fainted flag distinction, own-bench request-slot ordering, 300-step full-battle shape-stability smoke test — all passing; smoke-tested `gym_bridge.js`/`gym_client.py` end-to-end in both obsMode
+- **Decided against** adding stat-boost features (see "Deviation" note above) — schema is locked to BC-checkpoint compatibility
+- **Remaining for M2:** the 50k-battle MLP PPO verification run hasn't been executed yet (needs a background training session)
+
+✅ **M2.5 code: Behavior Cloning Pretraining pipeline** (2026-07-02)
+- Created `scripts/download_metamon.sh` — installs Metamon (UT-Austin-RPL), sets `METAMON_CACHE_DIR=./data/metamon_cache`, downloads parsed-replays for gen1ou, prints verification count
+- Created `models/metamon_adapter.py` — `MetamonDataAdapter` streaming `(obs (12,65), action, done)` from Metamon replay JSONs; M2 token conventions; Metamon's alphabetical move/switch ordering preserved so `MinimalActionSpace` indices ground identically to our gym actions; skips `-1` actions; `FileNotFoundError` points to download script
+- Created `models/transformer/transformer_policy.py` — shared `TransformerPolicy` (M3 architecture: 65→128 embed, 2-layer encoder, unknown-token attention masking) + `load_pretrain_checkpoint()` (skips name/shape-mismatched tensors with warnings)
+- Created `models/bc_pretrain.py` — CE on policy head only, Adam lr=1e-3, batch 256, 5 epochs default, streamed 50k-sample shuffle buffer; flags `--epochs`, `--format`, `--checkpoint_dir`, `--max_files`
+- Verified end-to-end on synthetic fixture battles: all adapter spec checks pass, BC loss decreases on MPS, checkpoint round-trips 30/30 tensors, deliberate shape mismatch skips with warning
+- MILESTONES.md: added M2.5 entry; M3 `train.py` now specifies the `--pretrain_checkpoint` wiring requirement
 
 ✅ **Job 2.4: evaluate.py + MODEL-COMPARISON.md** (2026-05-18)
 - Created `models/evaluate.py` — CLI evaluation script (`--model`, `--checkpoint`, `--battles`); loads agent from checkpoint, sets epsilon=0.0 for q_learning/dqn greedy eval, runs N battles via `GymClient`, reports win rate vs RandomPlayerAI
@@ -131,18 +154,8 @@ None. All components verified and working.
 ## Next Steps
 
 ### Immediate (M2 — Structured State)
-1. **Build `extractFeaturesStructured()`** in `sim/tools/feature-extractor.ts`
-   - 12 tokens × 65 features, schema above
-   - Unknown-flag and fainted-flag semantics correct
-
-2. **Add boost tracker** to `sim/tools/pokemon-gym.ts`
-   - Parse `|-boost|` / `|-unboost|` from omniscient lines
-   - Thread into token features for own/opponent active
-
-3. **Update bridge serialization** in `gym_bridge.js` + `gym_client.py`
-   - 780-element flat array over JSON; reshape to `(12, 65)` on Python side
-
-4. **Verification run** — MLP PPO on flattened structured obs, 50k battles vs Random
+All code is done (see Recently Completed). Only remaining:
+1. **Verification run** — MLP PPO with trunk `Linear(780,128)→ReLU→Linear(128,128)` on flattened structured obs, 50k battles vs RandomPlayerAI, target ≥ 50% win rate (parity with the M1 flat-vector baseline). This is a background training session, not yet executed.
 
 ### Follow-Up (M3 — Transformer)
 After M2 verified:

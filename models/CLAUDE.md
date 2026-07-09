@@ -10,10 +10,16 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `q_learning/` | Tabular Q-learning agent (`q_agent.py`, `train.py`) |
 | `dqn/` | Deep Q-Network agent (`dqn_agent.py`, `replay_buffer.py`, `train.py`, `checkpoints/`) |
 | `ppo/` | PPO agent (`ppo_agent.py`, `trajectory_buffer.py`, `train.py`, `checkpoints/`) |
+| `metamon_adapter.py` | Streams Metamon human-replay trajectories as `(obs (12,65), action, done)`; M2.5 |
+| `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays; saves to `checkpoints/bc_pretrain_gen1ou.pt` |
+| `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; M3 agent/train land here |
+| `checkpoints/` | BC pretraining checkpoints |
 
 ## Bridge Architecture
 
 Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs as a child process spawned by `gym_client.py` via `subprocess.Popen`. All communication between Python and the bridge is line-delimited JSON over stdin/stdout — one command object per line in, one response object per line out. The bridge wraps `PokemonGymEnv` from `dist/sim/tools/pokemon-gym.js`, so the TypeScript simulator must be compiled before the bridge can run. Build it once with `./build` (or `npm run build`) at the repo root before starting any training script.
+
+**Observation modes (M2):** `GymClient()` defaults to the structured `(12, 65)` per-Pokémon token observation. Pass `GymClient(structured=False)` (bridge: `--flat`) for the legacy 100-dim flat vector — required for `q_learning/`, `dqn/`, and `ppo/`, whose networks are hardcoded to that shape. `evaluate.py` also uses `structured=False` for the same reason.
 
 ## Quick-Start Training
 
@@ -32,6 +38,10 @@ python models/dqn/train.py --battles 500000 --checkpoint-every 50000
 # PPO
 python models/ppo/train.py
 python models/ppo/train.py --battles 500000 --rollout-steps 512 --checkpoint-every 50000
+
+# BC pretraining (M2.5) — download dataset once, then train
+bash scripts/download_metamon.sh
+python models/bc_pretrain.py --epochs 5 --format gen1ou --checkpoint_dir models/checkpoints
 
 # Evaluate a checkpoint
 python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200

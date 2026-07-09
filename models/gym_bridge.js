@@ -8,14 +8,20 @@
  * sequentially (one at a time) to preserve request/response ordering.
  *
  * Supported commands:
- *   {"cmd":"reset"}                   → {"obs":[...100 floats...]}
+ *   {"cmd":"reset"}                   → {"obs":[...780 floats...]}  (or 100 with --flat)
  *   {"cmd":"step","action":3}         → {"obs":[...],"reward":0.01,"done":false,"info":{}}
  *   {"cmd":"valid_actions"}           → {"mask":[true,true,...]}  (length 9)
  *   {"cmd":"close"}                   → {"ok":true}  then process.exit(0)
+ *
+ * By default obs is the M2 structured (12, 65) token observation flattened
+ * to 780 floats. Pass --flat on the command line to fall back to the legacy
+ * 100-dim extractFeatures() vector (M1 MLP baseline regression checks).
  */
 
 const readline = require('readline');
 const { PokemonGymEnv } = require('../dist/sim/tools/pokemon-gym');
+
+const obsMode = process.argv.includes('--flat') ? 'flat' : 'structured';
 
 // Env is recreated on every reset() to avoid stream/worker accumulation.
 let env = null;
@@ -40,7 +46,7 @@ async function processCommand(command) {
 
 	if (cmd === 'reset') {
 		if (env) env.destroy();
-		env = new PokemonGymEnv();
+		env = new PokemonGymEnv({ obsMode });
 		const obsFloat32 = await env.reset();
 		initialized = true;
 		respond({ obs: Array.from(obsFloat32), mask: env.validActions() });

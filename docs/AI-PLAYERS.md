@@ -201,7 +201,7 @@ The `PokemonGymEnv` is a step-based reinforcement learning environment that wrap
 
 `PokemonGymEnv` abstracts away battle protocol details and exposes a simple interface:
 
-- **reset()** — returns an observation (100-feature Float32Array)
+- **reset()** — returns an observation (780-float structured token array by default, or 100-feature Float32Array with `obsMode: 'flat'`)
 - **step(action)** — takes a discrete action (0–8) and returns (obs, reward, done, info)
 - **validActions()** — returns a boolean mask of legal actions
 - **destroy()** — cleans up streams and resources
@@ -238,7 +238,31 @@ env.destroy();
 
 ### Observation Space
 
-The gym extracts observations as a **100-feature Float32Array** using `extractFeatures()` from `feature-extractor.ts`. The layout is:
+`PokemonGymEnv` supports two observation modes via the `obsMode` constructor option:
+
+- **`'structured'` (default, M2)** — a per-Pokémon token observation from `extractFeaturesStructured()`, shape `(12, 65)` flattened to **780 floats**.
+- **`'flat'` (legacy, M1)** — the original **100-feature Float32Array** from `extractFeatures()`, kept for MLP-baseline regression checks (`gym_bridge.js --flat`).
+
+#### Structured tokens (12 × 65)
+
+12 tokens, one per Pokémon:
+
+| Token | Contents |
+|-------|----------|
+| `[0]` | Own active Pokémon |
+| `[1–5]` | Own bench, in `side.pokemon[1..5]` **request-slot order** — action `4+j` grounds to bench token `1+j` |
+| `[6]` | Opponent active Pokémon (from the reveal tracker, see below) |
+| `[7–11]` | Opponent bench — revealed non-active Pokémon first (reveal order), then unrevealed slots |
+
+Each 65-dim token: HP ratio (1), level/100 (1), type 1 one-hot (15), type 2 one-hot (15, duplicates type 1 if monotype), status one-hot (6: brn/frz/par/psn/slp/tox), active flag (1), unknown flag (1), fainted flag (1), 4 × move features (6 each: base_power/250, accuracy, PP ratio, type_idx/20, category/2, disabled).
+
+Unrevealed opponent bench slots get `unknown_flag=1, HP_ratio=1.0` (never an all-zero vector — that would be indistinguishable from fainted). Fainted Pokémon get `fainted_flag=1, HP_ratio=0`, all other dims zero.
+
+This layout intentionally matches `models/metamon_adapter.py` exactly so the M2.5 BC-pretrained checkpoint (`models/checkpoints/bc_pretrain_gen1ou.pt`) loads against live-gym observations without remapping. It has **no stat-boost dimensions** — boosts were dropped from the plan when the schema was locked to the BC-compatible layout (Metamon's replay dataset doesn't encode them either).
+
+**Opponent reveal tracker:** since a real player's request never contains the opponent's team, `PokemonGymEnv` reconstructs opponent state purely from battle-log lines (`|switch|`, `|drag|`, `|-damage|`, `|-heal|`, `|-status|`, `|-curestatus|`, `|faint|`, `|move|` for `p2`) — never from omniscient state. Opponent moves populate only as they're used in battle; unused move slots stay zero.
+
+#### Flat vector (legacy, `obsMode: 'flat'`)
 
 | Indices | Feature | Description |
 |---------|---------|-------------|

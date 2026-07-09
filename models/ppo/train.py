@@ -61,7 +61,10 @@ def main() -> None:
 
     agent = PPOAgent()
     buffer = TrajectoryBuffer()
-    env = GymClient()
+    # This PPO trunk is hardcoded to the legacy flat 100-dim vector. The M2
+    # verification run (MLP PPO on flattened structured obs) is a separate
+    # trunk, not this baseline — see MILESTONES.md M2 success criteria.
+    env = GymClient(structured=False)
 
     print(
         f"Starting PPO training: {total_budget} steps | "

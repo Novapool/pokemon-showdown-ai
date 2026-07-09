@@ -67,9 +67,9 @@ baseline agent implementations (tabular Q, DQN, PPO)
 
 ---
 
-## M2: Structured State Representation 🔜 UP NEXT
+## M2: Structured State Representation 🔄 CODE COMPLETE — verification run remaining
 
-**Status:** 🔜 Up Next
+**Status:** 🔄 Code complete (2026-07-09); the 50k-battle PPO verification run hasn't been executed yet
 **Goals:** Replace the flat 100-dim vector with a per-Pokémon tokenized
 representation. The gym wrapper is unchanged; only the feature extractor changes.
 Verify that PPO (with the trunk flattening the tokens) learns comparably to the
@@ -119,44 +119,135 @@ represent "assumed full HP"). This distinguishes "not yet revealed" from
 
 Do NOT use a zero vector for unknown — it looks identical to a fainted Pokémon.
 
-**3. Stat boost tracking**
+**3. Stat boost tracking — DROPPED (2026-07-09)**
 
-The gym's omniscient reader already sees all `|-boost|` and `|-unboost|` lines.
-Add a boost accumulator to `PokemonGymEnv` that tracks boosts per slot, then
-pass them into `extractFeaturesStructured()`. Boosts for the active Pokémon
-replace the hardcoded 0.5 placeholder.
+~~The gym's omniscient reader already sees all `|-boost|` and `|-unboost|`
+lines. Add a boost accumulator to `PokemonGymEnv`...~~ This was written before
+M2.5 locked the 65-dim token schema to match `models/metamon_adapter.py`
+exactly (so the BC-pretrained checkpoint's input projection stays valid).
+That schema has no boost slots, and Metamon's replay dataset doesn't encode
+boosts either — there's no way to add a boost feature now without breaking
+BC-checkpoint compatibility or retraining it from scratch. Boosts are out of
+scope for M2; revisit only as a deliberate schema-version bump.
 
-**4. Bridge protocol update**
+**4. Bridge protocol update — DONE**
 
-`gym_bridge.js` currently serializes the obs as a flat `Array` of 100 floats.
-Change the serialization to pass a `(12 × 65 = 780)`-element flat array.
-`gym_client.py` reshapes it back to `(12, 65)` as a numpy array.
+`gym_bridge.js` serializes obs as a `(12 × 65 = 780)`-element flat array by
+default. `gym_client.py` reshapes it back to `(12, 65)` as a numpy array.
+`--flat` (bridge) / `structured=False` (`GymClient`) restore the legacy
+100-float path — wired into `models/{q_learning,dqn,ppo}/train.py` and
+`evaluate.py` since their networks are hardcoded to that shape.
 
-Backward-compat: add a `--flat` flag to `gym_bridge.js` for running the old
-MLP PPO baseline against random as a regression check.
-
-**5. Existing helpers to keep**
+**5. Existing helpers — reused and exported**
 
 `parseHpRatio()`, `parseStatus()`, `fillStatusBitmask()`, `parseLevelFromDetails()`,
-`typeToIndex()`, `categoryToIndex()` — all reusable as-is from `feature-extractor.ts`.
+`typeToIndex()`, `categoryToIndex()` — now `export`ed from `feature-extractor.ts`
+so `pokemon-gym.ts`'s opponent-reveal tracker can reuse them directly.
+`parseLevelFromDetails()`'s no-match default was also fixed from 50 to 100
+(Showdown omits the level tag entirely at level 100 — the gen1ou/gen1randombattle
+norm — so the old default silently mis-encoded every level-100 Pokémon).
 
-### Files to Create / Modify
+**6. Opponent-reveal tracker (added, not in the original plan)**
+
+A real player's request never contains the opponent's team. `PokemonGymEnv`
+now reconstructs opponent state purely from `p2`-side battle-log lines
+(`|switch|`, `|drag|`, `|-damage|`, `|-heal|`, `|-status|`, `|-curestatus|`,
+`|faint|`, `|move|`) — species, HP, status, fainted, and revealed moves only.
+Unrevealed opponent Pokémon get the unknown-token treatment; this is what
+actually populates the opponent tokens described above.
+
+### Files Created / Modified
 | File | Action |
 |------|--------|
-| `sim/tools/feature-extractor.ts` | Add `extractFeaturesStructured()`, export `TOKEN_DIM=65`, `N_TOKENS=12` |
-| `sim/tools/pokemon-gym.ts` | Add boost tracker; thread boosts into `extractFeaturesStructured()` |
-| `models/gym_bridge.js` | Change obs serialization to 780-element flat array; add `--flat` flag |
-| `models/gym_client.py` | Reshape `(780,)` → `(12, 65)` numpy array |
+| `sim/tools/feature-extractor.ts` | Added `extractFeaturesStructured()`, `TOKEN_DIM=65`, `N_TOKENS=12`; exported existing helpers |
+| `sim/tools/pokemon-gym.ts` | Added opponent-reveal tracker; added `obsMode` option (default `'structured'`) |
+| `models/gym_bridge.js` | 780-element flat array by default; `--flat` flag |
+| `models/gym_client.py` | Reshapes to `(12, 65)`; `structured=False` flag |
+| `models/{q_learning,dqn,ppo}/train.py`, `models/evaluate.py` | Pass `structured=False` (flat-vector networks) |
+| `tools/build-utils.js` | Fixed `copyOverDataJSON` to create destination dirs before copying (unblocked `./build` once `data/metamon_cache/` existed) |
+| `test/tools/gym.test.js` | Structured-obs shape/unknown/fainted/bench-order tests; full-battle shape-stability smoke test |
 
 ### Success Criteria
-- `extractFeaturesStructured()` returns `Float32Array` of length `12 × 65 = 780`, shape-stable across move requests, switch requests, and end-of-episode
-- Unknown opponent bench tokens have `unknown_flag=1` and `HP_ratio=1.0`
-- Fainted tokens have `fainted_flag=1` and `HP_ratio=0`
-- PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles (parity with old flat-vector baseline confirms representation isn't broken)
-- Stat boosts for active Pokémon are non-constant (tracked from battle log)
+- ✅ `extractFeaturesStructured()` returns `Float32Array` of length `12 × 65 = 780`, shape-stable across move requests, switch requests, and end-of-episode
+- ✅ Unknown opponent bench tokens have `unknown_flag=1` and `HP_ratio=1.0`
+- ✅ Fainted tokens have `fainted_flag=1` and `HP_ratio=0`
+- ⏳ PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles — **not yet run**
+- ❌ ~~Stat boosts for active Pokémon are non-constant~~ — dropped, see above
 
 ### Unblocks
-M3 (transformer encoder needs per-Pokémon tokens as input)
+M3 (transformer encoder needs per-Pokémon tokens as input) — code-wise unblocked now; the 50k-battle verification run is a confidence check, not a hard blocker, but should run before investing in M3 training time.
+
+---
+
+## M2.5: Behavior Cloning Pretraining 🔄 IN PROGRESS
+
+**Status:** ✅ Complete (pending only the M3 warm-start comparison, which needs M3)
+**Goals:** Warm-start the transformer policy on human gameplay before PPO ever
+runs, using Metamon's parsed human replay dataset
+(https://huggingface.co/datasets/jakegrigsby/metamon-parsed-replays). PPO then
+fine-tunes from human-level play instead of random initialization.
+
+### Why This Matters
+PPO from scratch spends its first ~100k battles discovering basics (attack the
+opponent, don't switch randomly). Tens of thousands of real gen1ou games encode
+that for free. BC pretraining also de-risks M3: if the pretrained policy alone
+beats RandomPlayerAI, the (12, 65) representation and transformer are known-good
+before any RL debugging starts.
+
+### Action Space Alignment (the load-bearing detail)
+
+Metamon's `MinimalActionSpace` and our gym are both `Discrete(9)`, but index
+*grounding* differs: Metamon's 0–3 are the active Pokémon's moves in
+alphabetical order and 4–8 are available switches in alphabetical order, while
+our gym uses request slot order and fixed bench slots. The adapter therefore
+writes move features and bench tokens in Metamon's ordering, preserving the
+invariant both systems share: **action k = the move in move-slot k of the own
+active token; action 4+j = the Pokémon in bench token j+1.** The policy learns
+that invariant, so BC weights transfer to the gym unchanged.
+
+Consequence for M2: `extractFeaturesStructured()` must keep move slots in
+request order and bench tokens in `side.pokemon[1..5]` order (already the plan).
+
+### What Was Built
+| File | Contents |
+|------|----------|
+| `scripts/download_metamon.sh` | Installs metamon (clone into `vendor/`, editable pip install), sets `METAMON_CACHE_DIR=./data/metamon_cache`, downloads parsed-replays for gen1ou, prints trajectory count |
+| `models/metamon_adapter.py` | `MetamonDataAdapter` — streams `(obs (12,65), action, done)` from raw replay JSONs; M2 token conventions (unknown/fainted flags, monotype type duplication, status/type one-hot order); skips unreconstructable actions (−1); clear error pointing to the download script if data is missing |
+| `models/transformer/transformer_policy.py` | `TransformerPolicy` — the M3 architecture (Linear 65→128, 2-layer encoder, nhead=4, d_ff=256, unknown-token attention masking, policy/value heads); `load_pretrain_checkpoint()` — tolerant loader that skips any name/shape-mismatched tensor with a warning |
+| `models/bc_pretrain.py` | BC training: cross-entropy on policy head only, Adam lr=1e-3, batch 256, 5 epochs (streamed with a 50k shuffle buffer); flags `--epochs`, `--format`, `--checkpoint_dir`, `--max_files`; saves `models/checkpoints/bc_pretrain_gen1ou.pt` |
+
+### Known Approximations
+- Fainted teammates are absent from Metamon's `available_switches`, so their
+  identity is lost (padded as generic fainted tokens). A live-but-trapped
+  teammate (gen1 Wrap turns) also reads as fainted for those turns.
+- Opponent bench uses `opponents_remaining` to split unknown-alive vs fainted
+  tokens; the live extractor should mirror this from the omniscient stream.
+- Move `disabled` bit is always 0 (not reconstructable from replays).
+
+### M3 Wiring Requirement
+`models/transformer/train.py` (built in M3) must accept
+`--pretrain_checkpoint <path>` and call
+`load_pretrain_checkpoint(model, path)` before PPO starts. Shape-mismatched
+layers are skipped with a warning, not an error, so architecture experiments
+never hard-fail on old BC checkpoints. M3's agent must build on
+`TransformerPolicy` (same module) so checkpoint keys match without remapping.
+
+### Success Criteria
+- `download_metamon.sh` completes and reports > 0 gen1ou trajectories
+  ✅ 119,536 trajectories (2026-07-02)
+- Adapter output verified against M2 spec (token order, one-hot layouts,
+  unknown/fainted conventions, action skipping) ✅ (synthetic-fixture tests;
+  real-data streaming clean across full dataset, ≈71% moves / 29% switches)
+- BC checkpoint loads into `TransformerPolicy` 30/30 tensors; deliberate
+  mismatch skips cleanly with warnings ✅ (re-verified on final checkpoint)
+- BC top-1 accuracy on gen1ou meaningfully above chance (~11% uniform)
+  ✅ **50.5%** — loss 1.339, 4.96M samples/epoch × 5 epochs (24.8M total),
+  2414s on MPS; accuracy plateaued within epoch 5 (converged at this capacity)
+- After M3 exists: PPO with `--pretrain_checkpoint` reaches the M3 win-rate
+  target in fewer battles than from-scratch PPO ⏳
+
+### Unblocks
+M3 (warm-started PPO; pre-validated transformer architecture)
 
 ---
 
@@ -193,8 +284,8 @@ Total parameters: ~500k–1M. Training target: 200k–500k battles.
 ### Files to Create
 | File | Contents |
 |------|----------|
-| `models/transformer/transformer_agent.py` | `TransformerAgent(nn.Module)` with `act()`, `evaluate_actions()`, `update()`, `save()`, `load()` |
-| `models/transformer/train.py` | PPO loop — reuse `TrajectoryBuffer` from `models/ppo/trajectory_buffer.py`; swap agent class only |
+| `models/transformer/transformer_agent.py` | `TransformerAgent(nn.Module)` with `act()`, `evaluate_actions()`, `update()`, `save()`, `load()` — built on `TransformerPolicy` from `transformer_policy.py` (M2.5) so BC checkpoints load without key remapping |
+| `models/transformer/train.py` | PPO loop — reuse `TrajectoryBuffer` from `models/ppo/trajectory_buffer.py`; swap agent class only. Must support `--pretrain_checkpoint` (see M2.5 → M3 Wiring Requirement) |
 
 ### Files to Modify
 | File | Change |
@@ -380,7 +471,8 @@ Best action
 |-----------|--------|-----------------|---------|
 | M0: Foundation | ✅ | Build system, docs | — |
 | M1: Env + Baselines | ✅ | Gym, PPO, DQN, Q-learning | — |
-| M2: Structured State | 🔜 | Per-Pokémon token obs (12×65) | M3 |
+| M2: Structured State | 🔄 | Per-Pokémon token obs (12×65) — code done, verification run pending | M3 |
+| M2.5: BC Pretraining | ✅ | Human-replay warm start (Metamon) | M3 |
 | M3: Transformer + PPO | ⬜ | Transformer encoder baseline | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |

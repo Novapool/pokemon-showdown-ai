@@ -10,7 +10,9 @@ const copyOverDataJSON = (file = 'data') => {
 		if (fs.statSync(`${file}/${f}`).isDirectory()) {
 			copyOverDataJSON(`${file}/${f}`);
 		} else if (f.endsWith('.json')) {
-			fs.copyFileSync(`${file}/${f}`, require('path').resolve('dist', `${file}/${f}`));
+			const dest = require('path').resolve('dist', `${file}/${f}`);
+			fs.mkdirSync(require('path').dirname(dest), { recursive: true });
+			fs.copyFileSync(`${file}/${f}`, dest);
 		}
 	}
 };

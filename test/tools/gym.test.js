@@ -8,7 +8,8 @@
  */
 
 const assert = require('../assert');
-const { extractFeatures, OBS_SIZE } = require('../../dist/sim/tools/feature-extractor');
+const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, N_TOKENS } =
+	require('../../dist/sim/tools/feature-extractor');
 const { PokemonGymEnv } = require('../../dist/sim/tools/pokemon-gym');
 
 // ---------------------------------------------------------------------------
@@ -70,19 +71,86 @@ describe('extractFeatures', () => {
 	});
 });
 
+describe('extractFeaturesStructured', () => {
+	it('should return a Float32Array of length N_TOKENS * TOKEN_DIM with no NaN values', () => {
+		const result = extractFeaturesStructured(makeMoveRequest(), []);
+		assert.equal(TOKEN_DIM, 65);
+		assert.equal(N_TOKENS, 12);
+		assert.equal(result.length, N_TOKENS * TOKEN_DIM);
+		assert([...result].every(v => !isNaN(v)), 'Structured observation must not contain NaN');
+	});
+
+	it('should mark unrevealed opponent bench tokens as unknown with HP ratio 1.0', () => {
+		// No opponent info at all -> opponent active + all 5 bench slots are unknown.
+		const result = extractFeaturesStructured(makeMoveRequest(), []);
+		const activeOffset = 6 * TOKEN_DIM;
+		assert.equal(result[activeOffset + 0], 1.0); // HP ratio
+		assert.equal(result[activeOffset + 39], 1.0); // unknown flag
+		for (let j = 0; j < 5; j++) {
+			const offset = (7 + j) * TOKEN_DIM;
+			assert.equal(result[offset + 0], 1.0);
+			assert.equal(result[offset + 39], 1.0);
+		}
+	});
+
+	it('should mark a fainted opponent Pokemon with fainted_flag=1 and HP=0', () => {
+		const result = extractFeaturesStructured(makeMoveRequest(), [
+			{ details: 'Gengar, L100', condition: '0 fnt', active: true, moves: [] },
+		]);
+		const activeOffset = 6 * TOKEN_DIM;
+		assert.equal(result[activeOffset + 0], 0.0); // HP ratio
+		assert.equal(result[activeOffset + 40], 1.0); // fainted flag
+		assert.equal(result[activeOffset + 39], 0.0); // not unknown
+	});
+
+	it('should distinguish unknown (HP=1, unknown_flag=1) from fainted (HP=0, fainted_flag=1)', () => {
+		const unknown = extractFeaturesStructured(makeMoveRequest(), []);
+		const fainted = extractFeaturesStructured(makeMoveRequest(), [
+			{ details: 'Gengar, L100', condition: '0 fnt', active: true, moves: [] },
+		]);
+		const activeOffset = 6 * TOKEN_DIM;
+		assert.notEqual(unknown[activeOffset + 0], fainted[activeOffset + 0]);
+	});
+
+	it('should place own bench tokens in side.pokemon[1..5] request-slot order', () => {
+		const request = makeMoveRequest();
+		request.side.pokemon.push(
+			{ ident: 'p1: Squirtle', details: 'Squirtle, L50, M', condition: '100/100', active: false, stats: {}, moves: ['tackle'], baseAbility: 'torrent', item: '', pokeball: 'pokeball' },
+			{ ident: 'p1: Charmander', details: 'Charmander, L50, M', condition: '0 fnt', active: false, stats: {}, moves: ['scratch'], baseAbility: 'blaze', item: '', pokeball: 'pokeball' }
+		);
+		const result = extractFeaturesStructured(request, []);
+		const slot1Offset = 1 * TOKEN_DIM;
+		const slot2Offset = 2 * TOKEN_DIM;
+		assert.equal(result[slot1Offset + 0], 1.0); // Squirtle alive, full HP
+		assert.equal(result[slot2Offset + 40], 1.0); // Charmander fainted
+	});
+});
+
 // ---------------------------------------------------------------------------
 // PokemonGymEnv tests
 // ---------------------------------------------------------------------------
 
 describe('PokemonGymEnv', () => {
 	describe('reset', () => {
-		it('should return an observation of the correct shape with no NaN values', async function () {
+		it('should return a flat observation of length OBS_SIZE in flat obsMode', async function () {
 			this.timeout(20000);
-			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4] });
+			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4], obsMode: 'flat' });
 			try {
 				const obs = await env.reset();
 				assert.equal(obs.length, OBS_SIZE);
 				assert([...obs].every(v => !isNaN(v)), 'Observation from reset() must not contain NaN');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('should return a structured observation of length N_TOKENS * TOKEN_DIM by default', async function () {
+			this.timeout(20000);
+			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4] });
+			try {
+				const obs = await env.reset();
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM);
+				assert([...obs].every(v => !isNaN(v)), 'Structured observation from reset() must not contain NaN');
 			} finally {
 				env.destroy();
 			}
@@ -105,7 +173,23 @@ describe('PokemonGymEnv', () => {
 	});
 
 	describe('step', () => {
-		it('should accept a legal move and return an observation of correct shape', async function () {
+		it('should accept a legal move and return a flat observation of correct shape', async function () {
+			this.timeout(20000);
+			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4], obsMode: 'flat' });
+			try {
+				await env.reset();
+				const mask = env.validActions();
+				const legalAction = mask.findIndex(v => v);
+				if (legalAction === -1) return;
+				const result = await env.step(legalAction);
+				assert(!result.info.illegalMove, 'Legal action should not be flagged as illegal');
+				assert.equal(result.obs.length, OBS_SIZE);
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('should accept a legal move and return a structured observation of correct shape', async function () {
 			this.timeout(20000);
 			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4] });
 			try {
@@ -115,7 +199,8 @@ describe('PokemonGymEnv', () => {
 				if (legalAction === -1) return;
 				const result = await env.step(legalAction);
 				assert(!result.info.illegalMove, 'Legal action should not be flagged as illegal');
-				assert.equal(result.obs.length, OBS_SIZE);
+				assert.equal(result.obs.length, N_TOKENS * TOKEN_DIM);
+				assert([...result.obs].every(v => !isNaN(v)), 'Structured observation from step() must not contain NaN');
 			} finally {
 				env.destroy();
 			}
@@ -135,6 +220,30 @@ describe('PokemonGymEnv', () => {
 	});
 
 	describe('full battle', () => {
+		it('should keep structured obs shape stable across move requests, switch requests, and end-of-episode', async function () {
+			this.timeout(60000);
+			const env = new PokemonGymEnv({ seed: [7, 8, 9, 10] });
+			try {
+				let obs = await env.reset();
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM);
+				let done = false;
+				let steps = 0;
+				while (!done && steps < 300) {
+					const mask = env.validActions();
+					const action = mask.findIndex(v => v);
+					const result = await env.step(action >= 0 ? action : 0);
+					assert.equal(result.obs.length, N_TOKENS * TOKEN_DIM, `obs shape changed at step ${steps}`);
+					assert([...result.obs].every(v => !isNaN(v)), `NaN in obs at step ${steps}`);
+					obs = result.obs;
+					done = result.done;
+					steps++;
+				}
+				assert(done, 'Battle must terminate within 300 steps');
+			} finally {
+				env.destroy();
+			}
+		});
+
 		it('should terminate within 200 steps', async function () {
 			this.timeout(60000);
 			const env = new PokemonGymEnv({ seed: [5, 6, 7, 8] });

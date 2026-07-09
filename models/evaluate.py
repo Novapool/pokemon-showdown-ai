@@ -52,7 +52,9 @@ def _load_agent(model: str, checkpoint: str):
 
 def _run_battles(agent, n_battles: int) -> tuple:
     """Run n_battles greedy episodes; return (wins, total)."""
-    env = GymClient()
+    # These M1 baselines (q_learning/dqn/ppo) all expect the legacy flat
+    # 100-dim vector, not M2's (12, 65) structured tokens.
+    env = GymClient(structured=False)
     wins = 0
 
     try:
