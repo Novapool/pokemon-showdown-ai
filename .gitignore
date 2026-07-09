@@ -74,8 +74,8 @@ pip-log.txt
 
 # ML training artifacts
 __pycache__/
-models/**/checkpoints/*.pt
-models/**/checkpoints/*.pkl
+models/**/checkpoints/**/*.pt
+models/**/checkpoints/**/*.pkl
 models/q_learning/qtable.pkl
 output/
 

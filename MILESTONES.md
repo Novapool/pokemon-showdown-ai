@@ -67,9 +67,9 @@ baseline agent implementations (tabular Q, DQN, PPO)
 
 ---
 
-## M2: Structured State Representation 🔄 CODE COMPLETE — verification run remaining
+## M2: Structured State Representation ✅ COMPLETE
 
-**Status:** 🔄 Code complete (2026-07-09); the 50k-battle PPO verification run hasn't been executed yet
+**Status:** ✅ Complete and verified (2026-07-09) — 51% win rate vs RandomPlayerAI (500 battles), parity with the M1 flat baseline confirmed
 **Goals:** Replace the flat 100-dim vector with a per-Pokémon tokenized
 representation. The gym wrapper is unchanged; only the feature extractor changes.
 Verify that PPO (with the trunk flattening the tokens) learns comparably to the
@@ -166,16 +166,19 @@ actually populates the opponent tokens described above.
 | `models/{q_learning,dqn,ppo}/train.py`, `models/evaluate.py` | Pass `structured=False` (flat-vector networks) |
 | `tools/build-utils.js` | Fixed `copyOverDataJSON` to create destination dirs before copying (unblocked `./build` once `data/metamon_cache/` existed) |
 | `test/tools/gym.test.js` | Structured-obs shape/unknown/fainted/bench-order tests; full-battle shape-stability smoke test |
+| `models/dqn/train.py`, `models/ppo/train.py` | Renamed `--battles` → `--steps` (flag counted steps, not battles — collided in meaning with `evaluate.py`'s correct battle-counting `--battles`) |
+| `models/ppo/train.py`, `models/evaluate.py` | Added `--structured` flag for training/evaluating on the M2 obs; checkpoints isolated to `checkpoints/structured/` |
+| `models/evaluate.py` | **Fixed a real bug**: `_run_battles()` treated `PPOAgent.act()`'s return (`(action, log_prob, value)` tuple) as a plain int, same as `QAgent`/`DQNAgent`. Every PPO action got JSON-serialized as an array and silently rejected as illegal by the gym forever — every `evaluate.py --model ppo` run since 2026-05-18 hung on battle 1 with zero error output. Fixed + added running win-rate progress logging. |
 
 ### Success Criteria
 - ✅ `extractFeaturesStructured()` returns `Float32Array` of length `12 × 65 = 780`, shape-stable across move requests, switch requests, and end-of-episode
 - ✅ Unknown opponent bench tokens have `unknown_flag=1` and `HP_ratio=1.0`
 - ✅ Fainted tokens have `fainted_flag=1` and `HP_ratio=0`
-- ⏳ PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles — **not yet run**
+- ✅ PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles — **51% (254/500) on the real evaluation, 2.6M-step training run** (`models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`)
 - ❌ ~~Stat boosts for active Pokémon are non-constant~~ — dropped, see above
 
 ### Unblocks
-M3 (transformer encoder needs per-Pokémon tokens as input) — code-wise unblocked now; the 50k-battle verification run is a confidence check, not a hard blocker, but should run before investing in M3 training time.
+M3 (transformer encoder needs per-Pokémon tokens as input) — fully unblocked. The structured representation is verified at parity with the M1 flat baseline.
 
 ---
 
@@ -471,7 +474,7 @@ Best action
 |-----------|--------|-----------------|---------|
 | M0: Foundation | ✅ | Build system, docs | — |
 | M1: Env + Baselines | ✅ | Gym, PPO, DQN, Q-learning | — |
-| M2: Structured State | 🔄 | Per-Pokémon token obs (12×65) — code done, verification run pending | M3 |
+| M2: Structured State | ✅ | Per-Pokémon token obs (12×65) — verified 51% win rate vs RandomPlayerAI | M3 |
 | M2.5: BC Pretraining | ✅ | Human-replay warm start (Metamon) | M3 |
 | M3: Transformer + PPO | ⬜ | Transformer encoder baseline | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |

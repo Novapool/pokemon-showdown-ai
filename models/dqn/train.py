@@ -3,11 +3,16 @@ train.py — Training loop for the DQN agent.
 
 Usage:
     python models/dqn/train.py
-    python models/dqn/train.py --battles 500000 --checkpoint-every 50000
+    python models/dqn/train.py --steps 500000 --checkpoint-every 50000
 
-The script counts total environment steps (not episodes).  Training continues
-until total_steps >= battles.  Checkpoints are written to
+The script counts total environment steps (not battles/episodes).  Training
+continues until total_steps >= steps.  Checkpoints are written to
 models/dqn/checkpoints/ every checkpoint_every steps.
+
+Note: --steps counts steps, not battles. At ~50 steps/battle, hitting a
+target battle count (e.g. the M2/M3 milestone success criteria, which are
+specified in battles) means multiplying by the average steps/battle, not
+using the battle count directly.
 """
 
 import argparse
@@ -28,7 +33,7 @@ from replay_buffer import ReplayBuffer  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train DQN agent on Pokemon Showdown")
     parser.add_argument(
-        "--battles",
+        "--steps",
         type=int,
         default=100000,
         help="Total environment steps to train for (default: 100000)",
@@ -44,7 +49,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    total_budget = args.battles
+    total_budget = args.steps
     checkpoint_every = args.checkpoint_every
     # Auto-scale so short smoke-test runs still produce output
     log_every = min(500, max(1, total_budget // 200))
@@ -118,7 +123,7 @@ def main() -> None:
                     sum(recent_losses) / len(recent_losses) if recent_losses else float("nan")
                 )
                 print(
-                    f"Battle {total_steps}/{total_budget} | "
+                    f"Step {total_steps}/{total_budget} (episode {episode}) | "
                     f"Win rate (last {log_every}): {win_rate:.2f} | "
                     f"Epsilon: {agent.epsilon:.4f} | "
                     f"Loss: {avg_loss:.4f}"

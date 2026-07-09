@@ -6,8 +6,8 @@ Last updated: 2026-07-09
 
 ## Current Work
 
-**Milestone:** M2 (Structured State Representation) — code complete, verification run remaining  
-**Phase:** Replace flat 100-dim feature vector with per-Pokémon token representation
+**Milestone:** M2 (Structured State Representation) — ✅ COMPLETE, verified  
+**Phase:** M2 is done. Next real work is M3 (transformer + PPO with BC warm-start).
 
 ### Active Tasks
 - [x] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array, exact layout match with `models/metamon_adapter.py`
@@ -17,7 +17,10 @@ Last updated: 2026-07-09
 - [x] Update `models/gym_client.py` — reshapes `(780,)` → `(12, 65)`; `GymClient(structured=False)` mirrors `--flat`
 - [x] Fixed `models/{q_learning,dqn,ppo}/train.py` + `evaluate.py` to pass `structured=False` — their networks are hardcoded to the flat 100-dim vector and would otherwise silently break now that structured is the default
 - [x] Tests: shape/unknown-flag/fainted-flag/bench-ordering coverage in `test/tools/gym.test.js`; full build + battle-loop smoke tests pass
-- [ ] **Verify:** run MLP PPO on flattened structured obs, confirm ≥ 50% win rate vs RandomPlayerAI at 50k battles (parity check against the M1 flat baseline) — not yet run, needs a background training session
+- [x] Renamed `--battles` → `--steps` in `dqn/train.py` and `ppo/train.py` (the flag counted environment steps, not battles — collided in meaning with `evaluate.py`'s genuinely battle-counting `--battles`)
+- [x] Added `--structured` to `ppo/train.py` and `evaluate.py` — `PPOAgent` already took `obs_size` as a parameter, so no architecture changes were needed, just plumbing + a separate `checkpoints/structured/` directory
+- [x] **Verify:** MLP PPO trained on flattened structured obs (2.6M steps ≈ 50k battles), evaluated 500 real battles greedy vs RandomPlayerAI: **51% win rate (254/500)** — clears the ≥50% target, confirms the structured token representation preserves parity with the M1 flat baseline. Checkpoint: `models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`
+- [x] **Bug found + fixed:** `evaluate.py`'s `_run_battles()` did `action = agent.act(obs, valid_mask)` uniformly for all three model types. `QAgent`/`DQNAgent.act()` return a plain `int`, but `PPOAgent.act()` returns `(action, log_prob, value)` — a 3-tuple. Every `evaluate.py --model ppo` run was silently handing the whole tuple to `env.step()`, which JSON-serializes a Python tuple as a JS array; comparing/indexing with that array in `pokemon-gym.ts` always fails, so **every PPO action was rejected as illegal, forever, on battle 1** — an infinite hang with no error, no exception, nothing in the logs. This bug predates this session (written 2026-05-18) — `evaluate.py --model ppo` had never actually completed a run before. See "Recently Completed" for the full incident writeup.
 - [x] **M2.5:** Run `bash scripts/download_metamon.sh` — done 2026-07-02, **119,536 gen1ou trajectories** in `data/metamon_cache/`
 - [x] **M2.5:** Smoke-test BC on real data — done 2026-07-02, `--max_files 200`: 33,270 samples, loss 2.04→1.72, acc 19.8%→34.1% (chance ≈ 11%), no adapter warnings; action histogram over real battles ≈ 71% moves / 29% switches (plausible for human gen1ou)
 - [x] **M2.5:** Full BC run — done 2026-07-02: 4.96M samples/epoch × 5 epochs (24.8M total) in 2414s on MPS; **final loss 1.339, top-1 acc 50.5%** (chance ≈ 11%); checkpoint at `models/checkpoints/bc_pretrain_gen1ou.pt`, verified loading 30/30 tensors into `TransformerPolicy`. M2.5 complete — remaining criterion (warm-start vs from-scratch PPO comparison) blocked on M3.
@@ -34,19 +37,27 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 
 ## Active Plan
 
-**M2 Execution Plan — status:**
+M2 is fully complete — no active plan right now. The next Active Plan should be written when M3 (transformer + PPO, warm-started from the BC checkpoint) starts.
+
+**M2 Execution Plan — final status (all resolved):**
 
 1. ~~**Token schema** (in `feature-extractor.ts`)~~ ✅ Done — 12 tokens, 65 dims each, matches `metamon_adapter.py` exactly
 2. ~~**Stat boost tracking**~~ ❌ Dropped — see "Deviation from the original M2 plan" above
 3. ~~**Bridge update** (in `gym_bridge.js` + `gym_client.py`)~~ ✅ Done — 780-float flat array, `--flat`/`structured=False` for backward compat
-4. **Verification** — remaining
-   - PPO with trunk `Linear(780, 128) → ReLU → Linear(128, 128)` on flattened tokens
-   - Target: ≥ 50% vs RandomPlayerAI at 50k battles (parity with old flat vector confirms correctness)
-   - Token shape stability across move requests, switch requests, and end-of-episode is already covered by `test/tools/gym.test.js` (300-step full-battle smoke test)
+4. ~~**Verification**~~ ✅ Done — MLP PPO on flattened structured obs, 2.6M steps (~50k battles), **51% win rate vs RandomPlayerAI over 500 real evaluation battles**. Parity with the M1 flat baseline confirmed; token representation is not broken.
 
 ---
 
 ## Recently Completed
+
+✅ **M2 verification run + evaluate.py PPO hang bug** (2026-07-09)
+- Ran the M2 verification: PPO with trunk `Linear(780,128)→ReLU→Linear(128,128)` on flattened structured obs, `--steps 2600000` (≈50k battles at the measured ~52 steps/battle), checkpoint at `models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`
+- First evaluation attempt (`evaluate.py --model ppo --structured --battles 500`) hung indefinitely (17+ min, no error, no output). Diagnosed live: the Python process was burning ~40% CPU while the `gym_bridge.js` subprocess was almost completely idle (19s CPU over 18 min) — a sign the loop was spinning without the battle engine doing any real work
+- Root cause, confirmed by direct reproduction: `evaluate.py`'s `_run_battles()` did `action = agent.act(obs, valid_mask)` for all three model types. `QAgent`/`DQNAgent.act()` return a plain `int`; `PPOAgent.act()` returns `(action, log_prob, value)`. The 3-tuple was getting passed whole into `env.step()`, JSON-serialized as a JS array, and silently rejected as an out-of-range/invalid index by `pokemon-gym.ts` on every single call — meaning **every `evaluate.py --model ppo` run, ever, on any checkpoint, since the script was written on 2026-05-18, has hung on battle 1 without any visible error.** M2's structured obs work didn't cause this; it just was the first time anyone ran a PPO evaluation long enough to notice
+- Fixed: `action = act_result[0] if isinstance(act_result, tuple) else act_result` — handles both agent shapes without the caller needing to know which model type is loaded
+- Added a `models/CLAUDE.md`-documented `--structured` flag to `evaluate.py` for evaluating structured-obs checkpoints, and running win-rate progress logging (`Battle N/total | running win rate: ...`) so future runs are never silent for minutes at a time
+- Re-ran the fixed evaluation: **51% win rate (254/500), 55 seconds, no hang** — this is the real, final M2 verification number
+- **Also renamed** `--battles` → `--steps` in `dqn/train.py` and `ppo/train.py` — both flags actually counted environment steps, not battles, which collided in meaning with `evaluate.py`'s correctly-battle-counting `--battles` and would have caused real confusion about training scale later
 
 ✅ **M2 code: Structured State Representation** (2026-07-09)
 - Added `extractFeaturesStructured()` + `TOKEN_DIM=65`/`N_TOKENS=12` to `sim/tools/feature-extractor.ts`; byte-for-byte layout match with `models/metamon_adapter.py` so the M2.5 BC checkpoint stays loadable
@@ -153,15 +164,15 @@ None. All components verified and working.
 
 ## Next Steps
 
-### Immediate (M2 — Structured State)
-All code is done (see Recently Completed). Only remaining:
-1. **Verification run** — MLP PPO with trunk `Linear(780,128)→ReLU→Linear(128,128)` on flattened structured obs, 50k battles vs RandomPlayerAI, target ≥ 50% win rate (parity with the M1 flat-vector baseline). This is a background training session, not yet executed.
+### M2 — Structured State
+✅ Complete and verified (51% win rate vs RandomPlayerAI, 500 battles). Nothing left here.
 
-### Follow-Up (M3 — Transformer)
-After M2 verified:
-- Build `models/transformer/transformer_agent.py` (2-layer encoder, d=128)
-- Train with PPO, 200k–500k battles
-- Compare vs MLP PPO baseline at same battle count
+### Immediate (M3 — Transformer)
+- Build `models/transformer/transformer_agent.py` (2-layer encoder, d=128) — `transformer_policy.py` (M2.5) already has the shared `TransformerPolicy` architecture and `load_pretrain_checkpoint()`; this file just needs the PPO `act()`/`evaluate_actions()`/`update()`/`save()`/`load()` wrapper on top
+- `models/transformer/train.py`: reuse `models/ppo/trajectory_buffer.py`, must accept `--pretrain_checkpoint` and call `load_pretrain_checkpoint()` before PPO starts (see M2.5's M3 Wiring Requirement in MILESTONES.md)
+- Train with PPO, 200k–500k battles, both warm-started (from `models/checkpoints/bc_pretrain_gen1ou.pt`) and from-scratch, for a real comparison
+- Compare vs the M2 MLP PPO baseline (51%) at the same battle count — the transformer needs to beat this, not just match it, to justify the added complexity
+- **Recommendation: hold off on M4 (MCTS) / M5 (opponent modeling) / M6 (server) until M3 has a real recorded win rate.** Building search/opponent-modeling/server-integration on an unproven policy compounds risk if M3 underperforms.
 
 ### Stretch
 - Attention weight visualization to confirm non-uniform attention

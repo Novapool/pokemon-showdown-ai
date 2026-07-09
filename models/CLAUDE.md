@@ -31,13 +31,16 @@ Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs 
 python models/q_learning/train.py
 python models/q_learning/train.py --episodes 50000
 
-# DQN
+# DQN (--steps counts environment steps, not battles — ~50 steps/battle)
 python models/dqn/train.py
-python models/dqn/train.py --battles 500000 --checkpoint-every 50000
+python models/dqn/train.py --steps 500000 --checkpoint-every 50000
 
-# PPO
+# PPO (--steps counts environment steps, not battles)
 python models/ppo/train.py
-python models/ppo/train.py --battles 500000 --rollout-steps 512 --checkpoint-every 50000
+python models/ppo/train.py --steps 500000 --rollout-steps 512 --checkpoint-every 50000
+
+# PPO, M2 structured (12,65)->780 obs — checkpoints go to ppo/checkpoints/structured/
+python models/ppo/train.py --structured --steps 2600000 --rollout-steps 512 --checkpoint-every 250000
 
 # BC pretraining (M2.5) — download dataset once, then train
 bash scripts/download_metamon.sh
@@ -47,6 +50,7 @@ python models/bc_pretrain.py --epochs 5 --format gen1ou --checkpoint_dir models/
 python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200
 python models/evaluate.py --model q_learning --checkpoint models/q_learning/qtable.pkl --battles 200
 python models/evaluate.py --model ppo --checkpoint models/ppo/checkpoints/ppo_step_100000.pt --battles 200
+python models/evaluate.py --model ppo --structured --checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 200
 ```
 
 For the full message type reference and troubleshooting, see `docs/ML-TRAINING.md` -> **Python-Node Bridge Protocol**.
