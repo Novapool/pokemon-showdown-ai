@@ -29,12 +29,12 @@ python models/dqn/train.py
 ```
 | Flag | Default | What it does |
 |---|---|---|
-| `--battles N` | 100000 | Total training steps (not episodes — one battle = many steps). |
+| `--steps N` | 100000 | Total environment steps to train for (not battles — roughly 50 steps per battle). |
 | `--checkpoint-every N` | 25000 | Save the model weights every N steps so you can resume or evaluate mid-training. |
 
 **Example — short run to verify it works:**
 ```bash
-python models/dqn/train.py --battles 5000 --checkpoint-every 1000
+python models/dqn/train.py --steps 5000 --checkpoint-every 1000
 ```
 
 Saves checkpoints to `models/dqn/checkpoints/dqn_step_XXXXX.pt`.
@@ -47,13 +47,14 @@ python models/ppo/train.py
 ```
 | Flag | Default | What it does |
 |---|---|---|
-| `--battles N` | 100000 | Total training steps. |
+| `--steps N` | 100000 | Total environment steps to train for (same convention as DQN — not battles). |
 | `--rollout-steps N` | 512 | How many steps to collect before doing a weight update. Larger = more stable but slower to update. |
 | `--checkpoint-every N` | 25000 | Save weights every N steps. |
+| `--structured` | off | Train on the M2 (12,65)->780 flattened structured observation instead of the legacy flat 100-dim vector. Checkpoints go to `checkpoints/structured/`. |
 
 **Example — short run:**
 ```bash
-python models/ppo/train.py --battles 5000 --rollout-steps 256 --checkpoint-every 1000
+python models/ppo/train.py --steps 5000 --rollout-steps 256 --checkpoint-every 1000
 ```
 
 Saves checkpoints to `models/ppo/checkpoints/ppo_step_XXXXX.pt`.
@@ -71,6 +72,7 @@ python models/evaluate.py --model MODEL --checkpoint PATH
 | `--model` | Yes | Which model type: `q_learning`, `dqn`, or `ppo` |
 | `--checkpoint` | Yes | Path to the saved file (`.pkl` for Q-learning, `.pt` for DQN/PPO) |
 | `--battles N` | No (default 200) | How many test battles to run. More = more accurate win rate. |
+| `--structured` | No | Evaluate a PPO checkpoint trained with `train.py --structured` (M2 verification). |
 
 **Examples:**
 ```bash
@@ -93,7 +95,7 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 1. **Quick smoke test** — make sure everything runs before committing to a long training run:
    ```bash
    python models/q_learning/train.py --episodes 200
-   python models/dqn/train.py --battles 1000 --checkpoint-every 500
+   python models/dqn/train.py --steps 1000 --checkpoint-every 500
    ```
 
 2. **Full training run** — use defaults (takes hours):

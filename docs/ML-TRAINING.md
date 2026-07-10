@@ -40,7 +40,7 @@ const team = Teams.generate('gen1randombattle');
 // team is a packed string ready for the battle stream
 ```
 
-If `Teams.generate` is unavailable in your build, pack teams manually using the format `SPECIES||ITEM|ABILITY|MOVES|NATURE|EVS||IVS||LEVEL|` — see `simulate.js` for working `packMon` helpers.
+If `Teams.generate` is unavailable in your build, teams can be packed manually using the format `SPECIES||ITEM|ABILITY|MOVES|NATURE|EVS||IVS||LEVEL|`. `simulate.js`'s `packMon` helper is a reference implementation of this format (see root `CLAUDE.md` — it's an unrelated script, not part of this project, but the packing format itself is standard PS team format).
 
 ## M1 Gym Wrapper — Start Here for RL
 
@@ -51,7 +51,10 @@ const { PokemonGymEnv } = require('./dist/sim/tools/pokemon-gym');
 const { evaluateVsRandom } = require('./dist/sim/tools/evaluator');
 
 // Step-based training loop
-const env = new PokemonGymEnv({ seed: [1, 2, 3, 4] });
+// 'structured' (shown here) is the default: (12,65) tokens flattened to 780 floats.
+// q_learning/dqn/ppo's networks are hardcoded to the legacy 100-dim vector — pass
+// obsMode: 'flat' if you're feeding one of those, not a new/transformer model.
+const env = new PokemonGymEnv({ seed: [1, 2, 3, 4], obsMode: 'structured' });
 let obs = await env.reset();
 while (true) {
   const mask = env.validActions();           // boolean[9]
@@ -113,7 +116,7 @@ At 50 concurrent battles (`CONCURRENCY = 50`), expect roughly 2,000–5,000 batt
 
 ## Running Battles
 
-The core pattern from `simulate.js`:
+The core pattern (see `docs/examples/parallel-training-skeleton.js` for the full runnable version):
 
 ```javascript
 const { BattleStream, getPlayerStreams } = require('./dist/sim/index');
@@ -159,7 +162,7 @@ The `|faint|` line format is `|faint|POSITION` where `POSITION` is `p1a`, `p2a`,
 
 ## Concurrency Pool
 
-Run battles in parallel without hammering your process limit. From `simulate.js`:
+Run battles in parallel without hammering your process limit. This is `runConcurrent()` from `docs/examples/parallel-training-skeleton.js`:
 
 ```javascript
 async function runConcurrent(tasks, limit) {
@@ -222,66 +225,12 @@ const reward = (won ? 1.0 : -1.0) * 1.0
 
 ## Observation Space
 
-Build your observation vector inside `chooseMove`. The request object provides everything needed.
+`PokemonGymEnv` provides observations via two modes:
 
-```javascript
-class MLAgentAI extends RandomPlayerAI {
-  constructor(playerStream, options, model) {
-    super(playerStream, options);
-    this.model = model;
-    this.dex = Dex.mod('gen1');
-  }
+- **`'structured'` (default):** A 12×65 per-Pokémon token representation flattened to 780 floats. Suitable for transformer-based models or new architectures.
+- **`'flat'` (legacy):** A flat ~100-dimensional feature vector. Required by the baseline models `q_learning`, `dqn`, and `ppo`, which have networks hardcoded for this input shape.
 
-  chooseMove(active, moves) {
-    // --- My active Pokemon ---
-    const conditionStr = active.condition || '100/100';  // "200/350 par"
-    const [hpStr, statusAndMax] = conditionStr.split(' ');
-    const [currentHp, maxHp] = hpStr.split('/').map(Number);
-    const hpFraction = maxHp > 0 ? currentHp / maxHp : 0;
-
-    const boosts = active.boosts || {};
-    // boosts: { atk, def, spa, spd, spe, accuracy, evasion } — each -6 to +6
-
-    // --- Available moves (up to 4) ---
-    const moveFeatures = moves.slice(0, 4).map(m => {
-      const data = this.dex.moves.get(m.move.move);
-      return {
-        basePower: (data.basePower || 0) / 150,   // normalize to ~0-1
-        accuracy: (data.accuracy === true ? 100 : (data.accuracy || 100)) / 100,
-        category: data.category,                   // 'Physical', 'Special', 'Status'
-        type: data.type,                           // 'Fire', 'Water', etc.
-        pp: m.move.pp,
-        disabled: m.move.disabled ? 1 : 0,
-        isZMove: m.move.zMove ? 1 : 0,
-      };
-    });
-
-    // Pad to always have 4 move slots
-    while (moveFeatures.length < 4) moveFeatures.push(null);
-
-    const obs = {
-      hpFraction,
-      boostAtk: (boosts.atk || 0) / 6,
-      boostDef: (boosts.def || 0) / 6,
-      boostSpa: (boosts.spa || 0) / 6,
-      boostSpd: (boosts.spd || 0) / 6,
-      boostSpe: (boosts.spe || 0) / 6,
-      moves: moveFeatures,
-      legalMask: moves.map(m => m.move.disabled ? 0 : 1),
-    };
-
-    // Run policy, get action index
-    const actionIndex = this.model.predict(obs);
-    return moves[actionIndex]?.choice ?? this.prng.sample(moves).choice;
-  }
-}
-```
-
-**What you do NOT have access to in `chooseMove`:**
-- Opponent's HP or moves (you see the battle log but `chooseMove` only receives your own request data)
-- Exact opponent stats (inferred from protocol lines if you parse them)
-
-To build richer observations including opponent state, override `receiveRequest` directly and parse `request.side.pokemon` for your full team data.
+For the exact layout of both observation modes (field-by-field specification of each mode's structure), see `docs/AI-PLAYERS.md` → "Gym Wrapper (PokemonGymEnv)" → "Observation Space".
 
 ## Action Space
 
@@ -353,7 +302,7 @@ const p1Seed = seed;
 const p2Seed = [seed[0] ^ 0xAAAA, seed[1], seed[2], seed[3]];
 ```
 
-This matches the seeding pattern in `simulate.js` and guarantees different PRNG states for each player while keeping battles reproducible from the iteration number.
+This matches the seed-derivation/XOR-decorrelation pattern in `docs/examples/parallel-training-skeleton.js` and guarantees different PRNG states for each player while keeping battles reproducible from the iteration number.
 
 ### 3. Evolutionary / Genetic — Simplest to Implement
 
@@ -444,7 +393,7 @@ These add held items, abilities, and weather — richer features but the same tr
 
 **Move id vs move name:** `m.move.move` is the normalized id (`"thunderbolt"`), not the display name. Always pass the id to `dex.moves.get()`.
 
-**Gen-scoped Dex:** Base powers differ between generations. Surf is 95 BP in gens 1-5 and 90 BP in gen 6+. Always use `Dex.mod('gen1')` when running gen 1 formats. See `simulate.js` `GEN_DEX` for the pattern.
+**Gen-scoped Dex:** Base powers differ between generations. Surf is 95 BP in gens 1-5 and 90 BP in gen 6+. Always use `Dex.mod('gen1')` when running gen 1 formats. See `docs/AI-PLAYERS.md` → 'DamageFirstAI — a Concrete Example' for the `GEN_DEX` pattern.
 
 **Seed correlation:** If you use the same seed for both players in the same battle, their PRNG states will be correlated. XOR the seed for one player as shown above.
 

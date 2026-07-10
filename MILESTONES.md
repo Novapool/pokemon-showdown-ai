@@ -182,7 +182,7 @@ M3 (transformer encoder needs per-Pokémon tokens as input) — fully unblocked.
 
 ---
 
-## M2.5: Behavior Cloning Pretraining 🔄 IN PROGRESS
+## M2.5: Behavior Cloning Pretraining ✅ COMPLETE
 
 **Status:** ✅ Complete (pending only the M3 warm-start comparison, which needs M3)
 **Goals:** Warm-start the transformer policy on human gameplay before PPO ever

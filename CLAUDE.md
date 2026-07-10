@@ -28,6 +28,7 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 | `docs/DATA-FORMATS.md` | Battle protocol, team formats, CSV output schemas |
 | `docs/BATTLE-FORMATS.md` | Available formats; choosing formats for training |
 | `docs/MODEL-COMPARISON.md` | Model exploration results and winner selection (M2 results — fill after training) |
+| `models/CLAUDE.md` | Working in `models/` — Python↔Node bridge architecture, obsMode requirements per model, quick-start training/evaluation commands |
 | `sim/SIMULATOR.md` | Detailed battle protocol (stdin/stdout message format) |
 | `sim/TEAMS.md` | Team formats: packed, JSON, export |
 | `sim/DEX.md` | Accessing Pokedex/move/ability data via `Dex` |

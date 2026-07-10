@@ -1,6 +1,6 @@
 # Parallel Battle Simulation
 
-How to run thousands of Pokemon battles concurrently for ML training data generation. Based on `simulate.js` at the repo root, which runs 400,000 battles for a gym leader curriculum experiment.
+How to run thousands of Pokemon battles concurrently for ML training data generation. Patterns are packaged in `docs/examples/parallel-training-skeleton.js`, a self-contained, runnable reference for this project's worker-pool concurrency and seeding approach.
 
 ---
 
@@ -16,7 +16,7 @@ Worker threads add overhead (serialization, thread creation) and are not needed 
 
 ## The Concurrency Pattern
 
-`simulate.js` uses a worker-pool pattern that keeps exactly `limit` promises in flight at once:
+`docs/examples/parallel-training-skeleton.js` uses a worker-pool pattern that keeps exactly `limit` promises in flight at once (`runConcurrent()`):
 
 ```javascript
 async function runConcurrent(tasks, limit) {
@@ -56,7 +56,7 @@ Note that `tasks` is an array of **thunks** (zero-argument functions returning P
 
 ## Running a Single Battle as a Promise
 
-This is the unit of work that fills the task array. From `simulate.js`:
+This is the unit of work that fills the task array. See `runBattle()` in `docs/examples/parallel-training-skeleton.js` for the runnable version:
 
 ```javascript
 const { BattleStream, getPlayerStreams } = require('./dist/sim/index');
@@ -124,7 +124,7 @@ Key points:
 
 Seeds are 4-element arrays of integers. Passing the same seed to `>start` always produces the same sequence of random events (damage rolls, crits, AI decisions if the AI also uses a seed).
 
-Seed derivation strategy from `simulate.js`:
+Seed derivation strategy (see `docs/examples/parallel-training-skeleton.js` for the runnable version):
 
 ```javascript
 // Top-level base seed per iteration
@@ -159,15 +159,11 @@ const seed = prng.getSeed();  // number[4]
 
 ## Scale Reference
 
-From `simulate.js` (the gym leader curriculum experiment):
-
-```
-1000 iterations × 5 starters × 8 gyms × 10 battles = 400,000 total battles
-```
+See `TOTAL_BATTLES = 10000` in `docs/examples/parallel-training-skeleton.js` for a baseline configuration. Expect roughly 2,000–5,000 battles/minute at CONCURRENCY=50 depending on battle length and format.
 
 At CONCURRENCY=50, this completes in a few minutes on modern hardware. The bottleneck is pure JS execution in the battle engine, not I/O.
 
-The simulation outputs results to CSV in real-time as battles finish within each iteration batch, so partial results are usable if the run is interrupted.
+The simulation outputs results to CSV in real-time as battles finish, so partial results are usable if the run is interrupted.
 
 ---
 
@@ -176,7 +172,7 @@ The simulation outputs results to CSV in real-time as battles finish within each
 Start at 50 and increase. Watch Node.js heap:
 
 ```bash
-node --max-old-space-size=4096 simulate.js
+node --max-old-space-size=4096 docs/examples/parallel-training-skeleton.js
 ```
 
 | CONCURRENCY | When to use |
@@ -215,7 +211,7 @@ Streaming writes avoid buffering gigabytes of CSV in memory for large runs.
 
 ## Custom AI for Training
 
-Extend `RandomPlayerAI` or `BattlePlayer` to implement the agent being trained. From `simulate.js`:
+Extend `RandomPlayerAI` or `BattlePlayer` to implement the agent being trained. Example (see `docs/AI-PLAYERS.md` → 'DamageFirstAI — a Concrete Example' for the full pattern):
 
 ```javascript
 const { RandomPlayerAI } = require('./dist/sim/tools/random-player-ai');
@@ -255,77 +251,7 @@ For a neural-network agent, override `receiveRequest` in `BattlePlayer`, extract
 
 ## Full Skeleton for a Training Run
 
-```javascript
-'use strict';
-const { BattleStream, getPlayerStreams, Teams, PRNG } = require('./dist/sim/index');
-const { RandomPlayerAI } = require('./dist/sim/tools/random-player-ai');
-const fs = require('fs');
-
-const CONCURRENCY = 50;
-const TOTAL_BATTLES = 10000;
-const FORMAT = 'gen7randombattle';
-
-async function runBattle(seed) {
-  const battleStream = new BattleStream();
-  const streams = getPlayerStreams(battleStream);
-
-  const p1 = new RandomPlayerAI(streams.p1, { seed: [seed[0] ^ 0xAAAA, seed[1], seed[2], seed[3]] });
-  const p2 = new RandomPlayerAI(streams.p2, { seed: [seed[0] ^ 0x5555, seed[1], seed[2], seed[3]] });
-  void p1.start();
-  void p2.start();
-
-  void streams.omniscient.write(
-    `>start ${JSON.stringify({ formatid: FORMAT, seed })}\n` +
-    `>player p1 ${JSON.stringify({ name: 'p1' })}\n` +
-    `>player p2 ${JSON.stringify({ name: 'p2' })}`
-  );
-
-  let winner = null, turns = 0;
-  try {
-    for await (const chunk of streams.omniscient) {
-      for (const line of chunk.split('\n')) {
-        if (line.startsWith('|win|')) winner = line.slice(5).trim();
-        if (line.startsWith('|turn|')) turns = parseInt(line.split('|')[2]);
-      }
-    }
-  } catch (_) {}
-  try { streams.omniscient.writeEnd(); } catch (_) {}
-
-  return { winner, turns, seed };
-}
-
-async function runConcurrent(tasks, limit) {
-  const results = new Array(tasks.length);
-  let idx = 0;
-  async function worker() {
-    while (idx < tasks.length) { const i = idx++; results[i] = await tasks[i](); }
-  }
-  const workers = [];
-  for (let i = 0; i < Math.min(limit, tasks.length); i++) workers.push(worker());
-  await Promise.all(workers);
-  return results;
-}
-
-async function main() {
-  const out = fs.createWriteStream('battles.csv');
-  out.write('battle_id,winner,turns\n');
-
-  const tasks = Array.from({ length: TOTAL_BATTLES }, (_, i) => {
-    const seed = [i + 1, (i * 3 + 7) & 0xFFFF, (i * 7 + 13) & 0xFFFF, (i * 11 + 17) & 0xFFFF];
-    return () => runBattle(seed);
-  });
-
-  const results = await runConcurrent(tasks, CONCURRENCY);
-  for (let i = 0; i < results.length; i++) {
-    const { winner, turns } = results[i];
-    out.write(`${i + 1},${winner ?? 'tie'},${turns}\n`);
-  }
-  out.end();
-  console.log(`Done: ${TOTAL_BATTLES} battles → battles.csv`);
-}
-
-main().catch(err => { console.error(err); process.exit(1); });
-```
+The full runnable skeleton — worker-pool concurrency, seed derivation with XOR decorrelation, and streaming CSV output — lives in `docs/examples/parallel-training-skeleton.js`. Run it directly with `node docs/examples/parallel-training-skeleton.js` after `./build`.
 
 ---
 
