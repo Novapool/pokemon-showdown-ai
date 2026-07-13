@@ -12,6 +12,10 @@ Usage:
     # M2 verification: a PPO checkpoint trained with --structured
     python models/evaluate.py --model ppo --structured \
         --checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 200
+
+    # M3: transformer agent (always structured, unflattened (12,65) obs)
+    python models/evaluate.py --model transformer \
+        --checkpoint models/transformer/checkpoints/pretrained/transformer_step_2600000_final.pt --battles 200
 """
 
 import argparse
@@ -50,17 +54,28 @@ def _load_agent(model: str, checkpoint: str):
         agent = PPOAgent.load(checkpoint)
         return agent
 
+    elif model == "transformer":
+        # trajectory_buffer.py (models/ppo/) is a module-level import inside
+        # transformer_agent.py, so ppo/ must be on sys.path before importing it.
+        sys.path.insert(0, str(_MODELS_DIR / "ppo"))
+        sys.path.insert(0, str(_MODELS_DIR / "transformer"))
+        from transformer_agent import TransformerAgent
+
+        agent = TransformerAgent.load(checkpoint)
+        return agent
+
     else:
         raise ValueError(f"Unknown model type: {model!r}")
 
 
-def _run_battles(agent, n_battles: int, structured: bool = False) -> tuple:
+def _run_battles(agent, n_battles: int, structured: bool = False, flatten: bool = True) -> tuple:
     """Run n_battles greedy episodes; return (wins, total).
 
-    structured=True flattens the (12, 65) M2 observation to match a PPO
-    checkpoint trained with train.py --structured. All other baselines
-    (q_learning/dqn/ppo without --structured) expect the legacy flat
-    100-dim vector.
+    structured=True makes GymClient return the (12, 65) M2 observation
+    instead of the legacy flat 100-dim vector. flatten=True additionally
+    reshapes that to (780,), matching a PPO checkpoint trained with
+    train.py --structured. The transformer consumes the (12, 65) observation
+    directly, so its caller passes structured=True, flatten=False.
     """
     env = GymClient(structured=structured)
     wins = 0
@@ -71,17 +86,17 @@ def _run_battles(agent, n_battles: int, structured: bool = False) -> tuple:
     try:
         for i in range(1, n_battles + 1):
             obs, valid_mask = env.reset()
-            if structured:
+            if structured and flatten:
                 obs = obs.reshape(-1)
             done = False
             while not done:
-                # PPOAgent.act() returns (action, log_prob, value); QAgent/DQNAgent.act()
-                # return a plain int. Handle both without the caller needing to know
-                # which model type is loaded.
+                # PPOAgent/TransformerAgent.act() returns (action, log_prob, value);
+                # QAgent/DQNAgent.act() return a plain int. Handle both without the
+                # caller needing to know which model type is loaded.
                 act_result = agent.act(obs, valid_mask)
                 action = act_result[0] if isinstance(act_result, tuple) else act_result
                 obs, _reward, done, info, valid_mask = env.step(action)
-                if structured:
+                if structured and flatten:
                     obs = obs.reshape(-1)
             if done and info.get("winner") == "Gym":
                 wins += 1
@@ -101,7 +116,7 @@ def main():
     parser.add_argument(
         "--model",
         required=True,
-        choices=["q_learning", "dqn", "ppo"],
+        choices=["q_learning", "dqn", "ppo", "transformer"],
         help="Model architecture to evaluate.",
     )
     parser.add_argument(
@@ -123,10 +138,16 @@ def main():
     args = parser.parse_args()
 
     if args.structured and args.model != "ppo":
-        parser.error("--structured is only meaningful with --model ppo")
+        parser.error(
+            "--structured is only meaningful with --model ppo "
+            "(transformer always uses structured, unflattened observations; no flag needed)"
+        )
 
     agent = _load_agent(args.model, args.checkpoint)
-    wins, total = _run_battles(agent, args.battles, structured=args.structured)
+    if args.model == "transformer":
+        wins, total = _run_battles(agent, args.battles, structured=True, flatten=False)
+    else:
+        wins, total = _run_battles(agent, args.battles, structured=args.structured, flatten=True)
     win_rate = wins / total if total > 0 else 0.0
 
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")

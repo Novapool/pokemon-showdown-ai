@@ -1,15 +1,25 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 ---
 
 ## Current Work
 
-**Milestone:** M2 (Structured State Representation) — ✅ COMPLETE, verified  
-**Phase:** M2 is done. Next real work is M3 (transformer + PPO with BC warm-start).
+**Milestone:** M3 (Transformer Encoder + PPO, BC warm-start) — both 2.6M-step runs complete and evaluated; extending the warm-started run to 10.4M steps (~200k battles, the low end of the MILESTONES.md M3 target) to see if more training closes the gap with the MLP baseline before calling a final result
+**Phase:** At equal 2.6M-step compute, neither transformer variant beat the 51% MLP-PPO baseline (scratch: 32%, warm-started: 41%). Warm-start clearly helps (+9pp) but 2.6M steps (~50k battles) is well short of MILESTONES.md's actual M3 target (200k–500k battles / ~10.4M–26M steps), and transformers are typically more sample-hungry than MLPs. Resuming the warm-started checkpoint to 10.4M steps to test whether it's still climbing.
 
-### Active Tasks
+### Active Tasks (M3)
+- [x] `models/transformer/transformer_agent.py` — `TransformerAgent(nn.Module)`, PPO wrapper composing `TransformerPolicy` as `self.policy` (composition, not subclassing, so BC checkpoint keys stay unprefixed and loadable)
+- [x] `models/transformer/train.py` — rollout/GAE/checkpoint training loop mirroring `models/ppo/train.py`; always structured `(12,65)` unflattened; `--pretrain_checkpoint` flag calls `load_pretrain_checkpoint(agent.policy, path)` before PPO starts; checkpoints split into `checkpoints/{scratch,pretrained}/`; `--resume <checkpoint>` restores full agent+optimizer state and parses the starting step count from the filename (added after a training run was killed mid-flight)
+- [x] `models/evaluate.py` — added `--model transformer`; split the old single `structured` bool in `_run_battles` into `structured`/`flatten` so the transformer gets raw `(12,65)` while PPO-structured still gets flattened `(780,)`
+- [x] Smoke-tested: agent construction/act/save/load, BC warm-start (30/30 tensors loaded into `agent.policy`), a short training run in both scratch and pretrained modes, `--resume`, and `evaluate.py --model transformer` — all pass with no shape errors
+- [x] **From-scratch run:** 2.6M steps, checkpoint `models/transformer/checkpoints/scratch/transformer_step_2600000_final.pt`. Evaluated 500 real battles: **32% win rate (158/500)** — does not beat, and does not match, the M2 MLP-PPO baseline (51%)
+- [x] **Warm-started run (2.6M steps):** checkpoint `models/transformer/checkpoints/pretrained/transformer_step_2600000_final.pt`. Evaluated 500 real battles: **41% win rate (204/500)** — better than from-scratch, still below the 51% MLP baseline
+- [ ] **In progress:** extending the warm-started run from 2.6M → 10.4M steps (~200k battles) via `--resume`, to test whether more training (matching MILESTONES.md's actual M3 target range) closes the gap. Run was interrupted (Ctrl+C) at step 7,600,000 and resumed from `checkpoints/pretrained/transformer_step_7600000.pt`
+- [ ] **Remaining:** evaluate the 10.4M-step checkpoint at 500 battles once training finishes, then decide the final M3 outcome — if it still underperforms 51%, that's a real finding that the transformer is worse than the MLP baseline for this task at any practical scale, and M4/M5 should not proceed on top of it per the MILESTONES.md recommendation
+
+### Active Tasks (M2, complete)
 - [x] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array, exact layout match with `models/metamon_adapter.py`
 - [x] Add opponent-reveal tracker to `sim/tools/pokemon-gym.ts` — reconstructs revealed opponent state (species/HP/status/fainted/used moves) from `|switch|/|drag|/|-damage|/|-heal|/|-status|/|-curestatus|/|faint|/|move|` lines on the battle log, never from omniscient state
 - [x] Wire `obsMode: 'flat' | 'structured'` into `PokemonGymEnv` (default `'structured'`)
@@ -37,7 +47,16 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 
 ## Active Plan
 
-M2 is fully complete — no active plan right now. The next Active Plan should be written when M3 (transformer + PPO, warm-started from the BC checkpoint) starts.
+**M3 Execution Plan — code phase complete, training phase in progress:**
+
+1. ~~**`TransformerAgent`** (composes `TransformerPolicy`, PPO wrapper)~~ ✅ Done
+2. ~~**`models/transformer/train.py`** (rollout PPO loop, `--pretrain_checkpoint` warm-start, `--resume`)~~ ✅ Done
+3. ~~**`evaluate.py --model transformer`**~~ ✅ Done
+4. ~~**From-scratch training run (2.6M steps) + evaluation**~~ ✅ Done — **32% win rate (158/500)**, underperforms the 51% MLP-PPO baseline
+5. ~~**Warm-started training run (2.6M steps, `--pretrain_checkpoint`) + evaluation**~~ ✅ Done — **41% win rate (204/500)**, better than from-scratch but still below the MLP baseline
+6. **Extend warm-started run to 10.4M steps (~200k battles) + re-evaluation** ⏳ In progress — tests whether the gap closes at MILESTONES.md's actual M3 target scale before calling a final result
+
+M2 is fully complete (see below).
 
 **M2 Execution Plan — final status (all resolved):**
 
@@ -49,6 +68,28 @@ M2 is fully complete — no active plan right now. The next Active Plan should b
 ---
 
 ## Recently Completed
+
+✅ **M3 verification: warm-started transformer run (41%) — still below MLP baseline** (2026-07-11)
+- Trained the transformer PPO agent warm-started from the BC checkpoint (`models/checkpoints/bc_pretrain_gen1ou.pt`) for 2.6M steps — same budget as the from-scratch run and the M2 MLP baseline. Evaluated 500 real battles vs RandomPlayerAI: **41% win rate (204/500)** — a +9pp improvement over the from-scratch transformer (32%), confirming BC warm-start helps, but still below the MLP-PPO baseline's 51% at equal compute
+- Comparison table at 2.6M steps: MLP-PPO baseline 51% (254/500) > transformer warm-started 41% (204/500) > transformer from-scratch 32% (158/500)
+- **Decision:** 2.6M steps (~50k battles) was chosen to match the M2 baseline for a controlled comparison, but it's well short of MILESTONES.md's actual M3 target range (200k–500k battles / ~10.4M–26M steps). Transformers are typically more sample-hungry than MLPs, so it's plausible the warm-started variant is still climbing rather than having plateaued below 51%. Resuming the warm-started run to **10.4M steps** (~200k battles, the low end of the target range) before drawing a final M3 conclusion
+- Run was interrupted (Ctrl+C, not a bug — `KeyboardInterrupt` mid-`agent.act()`) at step 7,600,000; resumed via `--resume models/transformer/checkpoints/pretrained/transformer_step_7600000.pt`
+- **Next:** finish the 10.4M-step run, evaluate at 500 battles, compare against the 51% baseline one more time — that result is the real M3 conclusion
+
+✅ **M3 verification: from-scratch transformer run (32%) + --resume flag** (2026-07-10)
+- Trained the transformer PPO agent from scratch for 2.6M steps (same budget as the M2 MLP-PPO baseline). Evaluated 500 real battles vs RandomPlayerAI: **32% win rate (158/500)** — a real result, well below the MLP baseline's 51% at equal compute. Does not meet the M3 success criterion (transformer must beat, not just match, the MLP baseline)
+- **Diagnosed a scare mid-run:** rollout win rate sat at ~0% for a long stretch early in training (step ~500k/2.6M), which looked like a possible bug. Investigated by testing a completely untrained `TransformerAgent`, a completely untrained MLP `PPOAgent`, and a literal uniform-random-over-all-valid-actions policy — all three scored 0-3% vs `RandomPlayerAI`, ruling out anything transformer-specific. Root cause: `RandomPlayerAI` (`sim/tools/random-player-ai.ts`) defaults to `move: 1.0`, so its switch condition (`this.prng.random() > this.move`) is never true — it essentially never voluntarily switches, only attacks. A policy that hasn't yet learned to prefer moves over switches (true of any untrained/early-training policy, since ~5/9 actions are switches) loses almost every battle to an opponent that presses the attack every turn. Not a bug — expected early-training behavior that resolves as the policy learns, which the final 32% (vs. near-0% early on) confirms
+- **Added `--resume <checkpoint>` to `models/transformer/train.py`** after a training run was killed mid-flight. Restores full agent + optimizer state via `TransformerAgent.load()`, parses the starting step count from the checkpoint filename (`transformer_step_N.pt`), and reuses the same checkpoint directory (scratch/pretrained) so the resumed run keeps appending to the original sequence. Mutually exclusive with `--pretrain_checkpoint` (resuming already restores whatever weights the original run started from). Smoke-tested: resumed from a fake `step_100` checkpoint with `--steps 300`, correctly continued to step 300 and saved into the same directory
+- Checkpoint: `models/transformer/checkpoints/scratch/transformer_step_2600000_final.pt`
+- **Next:** the warm-started run (BC pretrain checkpoint) is the actual test of the M3 hypothesis — in progress now
+
+✅ **M3 code: Transformer PPO agent + training loop** (2026-07-10)
+- Created `models/transformer/transformer_agent.py` — `TransformerAgent(nn.Module)` composes `TransformerPolicy` (built in M2.5) as `self.policy` rather than subclassing it, so the policy's state-dict keys (`embed.*`, `encoder.*`, `policy_head.*`, `value_head.*`) stay unprefixed and `load_pretrain_checkpoint()` — which matches by exact key name — loads the BC checkpoint's 30/30 tensors into `agent.policy` directly. `act()`/`evaluate_actions()`/`update()`/`save()`/`load()` mirror `models/ppo/ppo_agent.py`'s `PPOAgent`, duplicated rather than shared via a mixin (matches the existing per-model-family convention — `q_learning`/`dqn`/`ppo` already each duplicate `_pick_device()` with no shared base class)
+- Created `models/transformer/train.py` — same rollout/GAE/checkpoint/logging structure as `models/ppo/train.py`, but always `GymClient(structured=True)` unflattened (no `--structured` flag — the transformer has exactly one obs shape). New `--pretrain_checkpoint <path>` flag calls `load_pretrain_checkpoint(agent.policy, path)` — **not** `agent` — before training starts; checkpoints split into `checkpoints/scratch/` vs `checkpoints/pretrained/` so a from-scratch and warm-started run at the same step count never collide
+- Modified `models/evaluate.py` — added `"transformer"` to `--model` choices and a `_load_agent` branch; split `_run_battles`'s single `structured` bool into `structured` (does `GymClient` return `(12,65)`) and `flatten` (additionally reshape to `(780,)`) — PPO-structured needs both True, transformer needs `structured=True, flatten=False`. No new CLI flag; the flatten decision is derived from `--model`
+- Updated `models/CLAUDE.md`'s directory table and Quick-Start block with the new `transformer/` files and commands
+- Smoke-tested end-to-end: agent construction/act()/save()/load(), BC checkpoint warm-start (`[pretrain] loaded 30/30 tensors`, confirming the `agent.policy` vs `agent` wiring is correct), a 400-step training run in both scratch and pretrained modes (checkpoints land in the correct separate subdirs), and `evaluate.py --model transformer --battles 10` (loads and runs without shape errors)
+- **Remaining for M3:** the real training runs (~200k–500k battles, both scratch and pretrained) and the win-rate comparison against the 51% MLP-PPO baseline haven't been executed yet (needs a background training session, same as M2's verification run)
 
 ✅ **M2 verification run + evaluate.py PPO hang bug** (2026-07-09)
 - Ran the M2 verification: PPO with trunk `Linear(780,128)→ReLU→Linear(128,128)` on flattened structured obs, `--steps 2600000` (≈50k battles at the measured ~52 steps/battle), checkpoint at `models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`
@@ -168,9 +209,8 @@ None. All components verified and working.
 ✅ Complete and verified (51% win rate vs RandomPlayerAI, 500 battles). Nothing left here.
 
 ### Immediate (M3 — Transformer)
-- Build `models/transformer/transformer_agent.py` (2-layer encoder, d=128) — `transformer_policy.py` (M2.5) already has the shared `TransformerPolicy` architecture and `load_pretrain_checkpoint()`; this file just needs the PPO `act()`/`evaluate_actions()`/`update()`/`save()`/`load()` wrapper on top
-- `models/transformer/train.py`: reuse `models/ppo/trajectory_buffer.py`, must accept `--pretrain_checkpoint` and call `load_pretrain_checkpoint()` before PPO starts (see M2.5's M3 Wiring Requirement in MILESTONES.md)
-- Train with PPO, 200k–500k battles, both warm-started (from `models/checkpoints/bc_pretrain_gen1ou.pt`) and from-scratch, for a real comparison
+- ✅ Code done: `models/transformer/transformer_agent.py` + `models/transformer/train.py` + `evaluate.py --model transformer`, all smoke-tested (see Recently Completed)
+- **Remaining:** train with PPO, 200k–500k battles, both warm-started (`--pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt`) and from-scratch, for a real comparison
 - Compare vs the M2 MLP PPO baseline (51%) at the same battle count — the transformer needs to beat this, not just match it, to justify the added complexity
 - **Recommendation: hold off on M4 (MCTS) / M5 (opponent modeling) / M6 (server) until M3 has a real recorded win rate.** Building search/opponent-modeling/server-integration on an unproven policy compounds risk if M3 underperforms.
 

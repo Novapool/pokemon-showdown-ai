@@ -12,7 +12,7 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `ppo/` | PPO agent (`ppo_agent.py`, `trajectory_buffer.py`, `train.py`, `checkpoints/`) |
 | `metamon_adapter.py` | Streams Metamon human-replay trajectories as `(obs (12,65), action, done)`; M2.5 |
 | `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays; saves to `checkpoints/bc_pretrain_gen1ou.pt` |
-| `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; M3 agent/train land here |
+| `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
 | `checkpoints/` | BC pretraining checkpoints |
 
 ## Bridge Architecture
@@ -46,11 +46,20 @@ python models/ppo/train.py --structured --steps 2600000 --rollout-steps 512 --ch
 bash scripts/download_metamon.sh
 python models/bc_pretrain.py --epochs 5 --format gen1ou --checkpoint_dir models/checkpoints
 
+# Transformer PPO (M3) — always structured (12,65) obs, no --structured flag.
+# Both from-scratch and warm-started runs are needed to compare against the
+# M2 MLP-PPO baseline (51% win rate). Checkpoints go to checkpoints/scratch/
+# or checkpoints/pretrained/ depending on --pretrain_checkpoint.
+python models/transformer/train.py --steps 2600000 --rollout-steps 512 --checkpoint-every 250000
+python models/transformer/train.py --steps 2600000 --rollout-steps 512 --checkpoint-every 250000 \
+    --pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt
+
 # Evaluate a checkpoint
 python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200
 python models/evaluate.py --model q_learning --checkpoint models/q_learning/qtable.pkl --battles 200
 python models/evaluate.py --model ppo --checkpoint models/ppo/checkpoints/ppo_step_100000.pt --battles 200
 python models/evaluate.py --model ppo --structured --checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 200
+python models/evaluate.py --model transformer --checkpoint models/transformer/checkpoints/pretrained/transformer_step_2600000_final.pt --battles 200
 ```
 
 For the full message type reference and troubleshooting, see `docs/ML-TRAINING.md` -> **Python-Node Bridge Protocol**.
