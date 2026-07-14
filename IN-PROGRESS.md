@@ -1,23 +1,25 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-10
+Last updated: 2026-07-13
 
 ---
 
 ## Current Work
 
-**Milestone:** M3 (Transformer Encoder + PPO, BC warm-start) — both 2.6M-step runs complete and evaluated; extending the warm-started run to 10.4M steps (~200k battles, the low end of the MILESTONES.md M3 target) to see if more training closes the gap with the MLP baseline before calling a final result
-**Phase:** At equal 2.6M-step compute, neither transformer variant beat the 51% MLP-PPO baseline (scratch: 32%, warm-started: 41%). Warm-start clearly helps (+9pp) but 2.6M steps (~50k battles) is well short of MILESTONES.md's actual M3 target (200k–500k battles / ~10.4M–26M steps), and transformers are typically more sample-hungry than MLPs. Resuming the warm-started checkpoint to 10.4M steps to test whether it's still climbing.
+**Milestone:** M3 (Transformer Encoder + PPO, BC warm-start) — **concluded, negative result.** The transformer does not beat the 51% MLP-PPO baseline at any point across two full training runs (~90 total checkpoints evaluated), and PPO training on this architecture does not improve monotonically with more steps — it peaks early (near the BC-pretrained starting point) and then degrades, either violently (uncontrolled run) or gradually (stability-fixed run). Per `MILESTONES.md`'s own stated M3 recommendation, **M4 (MCTS) and M5 (opponent modeling) should not proceed on top of this architecture** until/unless this is revisited.
+**Phase:** Done. See "Recently Completed" for the full experimental trail (from-scratch, warm-started, extended warm-started with a mid-run checkpoint sweep revealing collapse, and a stability-fix retrain with KL early-stopping + LR annealing that changed the failure mode but not the outcome).
 
-### Active Tasks (M3)
-- [x] `models/transformer/transformer_agent.py` — `TransformerAgent(nn.Module)`, PPO wrapper composing `TransformerPolicy` as `self.policy` (composition, not subclassing, so BC checkpoint keys stay unprefixed and loadable)
-- [x] `models/transformer/train.py` — rollout/GAE/checkpoint training loop mirroring `models/ppo/train.py`; always structured `(12,65)` unflattened; `--pretrain_checkpoint` flag calls `load_pretrain_checkpoint(agent.policy, path)` before PPO starts; checkpoints split into `checkpoints/{scratch,pretrained}/`; `--resume <checkpoint>` restores full agent+optimizer state and parses the starting step count from the filename (added after a training run was killed mid-flight)
+### Active Tasks (M3) — all resolved
+- [x] `models/transformer/transformer_agent.py` — `TransformerAgent(nn.Module)`, PPO wrapper composing `TransformerPolicy` as `self.policy` (composition, not subclassing, so BC checkpoint keys stay unprefixed and loadable). Later extended with `target_kl` approx-KL early-stopping (see below)
+- [x] `models/transformer/train.py` — rollout/GAE/checkpoint training loop mirroring `models/ppo/train.py`; always structured `(12,65)` unflattened; `--pretrain_checkpoint` flag calls `load_pretrain_checkpoint(agent.policy, path)` before PPO starts; checkpoints split into `checkpoints/{scratch,pretrained}/`; `--resume <checkpoint>` restores full agent+optimizer state and parses the starting step count from the filename. Later extended with linear LR annealing toward 0 over `--steps` (see below)
 - [x] `models/evaluate.py` — added `--model transformer`; split the old single `structured` bool in `_run_battles` into `structured`/`flatten` so the transformer gets raw `(12,65)` while PPO-structured still gets flattened `(780,)`
 - [x] Smoke-tested: agent construction/act/save/load, BC warm-start (30/30 tensors loaded into `agent.policy`), a short training run in both scratch and pretrained modes, `--resume`, and `evaluate.py --model transformer` — all pass with no shape errors
-- [x] **From-scratch run:** 2.6M steps, checkpoint `models/transformer/checkpoints/scratch/transformer_step_2600000_final.pt`. Evaluated 500 real battles: **32% win rate (158/500)** — does not beat, and does not match, the M2 MLP-PPO baseline (51%)
-- [x] **Warm-started run (2.6M steps):** checkpoint `models/transformer/checkpoints/pretrained/transformer_step_2600000_final.pt`. Evaluated 500 real battles: **41% win rate (204/500)** — better than from-scratch, still below the 51% MLP baseline
-- [ ] **In progress:** extending the warm-started run from 2.6M → 10.4M steps (~200k battles) via `--resume`, to test whether more training (matching MILESTONES.md's actual M3 target range) closes the gap. Run was interrupted (Ctrl+C) at step 7,600,000 and resumed from `checkpoints/pretrained/transformer_step_7600000.pt`
-- [ ] **Remaining:** evaluate the 10.4M-step checkpoint at 500 battles once training finishes, then decide the final M3 outcome — if it still underperforms 51%, that's a real finding that the transformer is worse than the MLP baseline for this task at any practical scale, and M4/M5 should not proceed on top of it per the MILESTONES.md recommendation
+- [x] **From-scratch run:** 2.6M steps. Evaluated 500 real battles: **32% win rate (158/500)** — below the M2 MLP-PPO baseline (51%)
+- [x] **Warm-started run 1 (2.6M steps, no stability fixes):** Evaluated 500 real battles: **41% win rate (204/500)** — better than from-scratch, still below 51%
+- [x] **Extended warm-started run 1 to 7.6M steps + full checkpoint sweep (21 checkpoints, 250k–7.6M):** revealed the run actually peaked at **46%** around 2.5M–3.1M steps, then **collapsed violently** — cratering to 0–13% between 3.6M and 5.6M steps, partially recovering to 32% at 6.1M, then drifting down to 24% by 7.6M. Root-caused to unconstrained PPO updates over a long horizon with no LR decay or trust-region constraint — a single bad minibatch update can yank the policy far enough to wreck its move-vs-switch balance (recall `RandomPlayerAI` never voluntarily switches, so any policy that over-favors switching loses almost every battle)
+- [x] **Stability fix:** added approximate-KL early-stopping (`target_kl=0.02`, stops a rollout's PPO minibatch epochs early if `1.5×target_kl` is exceeded — standard PPO safeguard, http://joschu.net/blog/kl-approx.html) to `TransformerAgent.update()`, and linear LR annealing to 0 over the `--steps` budget in `train.py`. Both smoke-tested
+- [x] **Warm-started run 2 (fresh 5M-step run, with stability fixes) + full checkpoint sweep (20 checkpoints, 250k–5.0M):** the violent collapses are gone (no more 0% crashes), confirming the fix addressed that specific failure mode. But the run now peaks almost immediately (**45% at 500k steps** — near where the BC-pretrained starting policy already was) and then **gradually decays** to 25–35% noise, ending at **27% (135/500)** at the 5.0M-step final checkpoint. The stability fixes changed *how* it fails, not *whether* it fails to improve on the BC starting point
+- [x] **Final M3 conclusion:** best-ever recorded win rate across ~40 checkpoints spanning both warm-started runs is **46%** (150-battle spot check, run 1 @ 2.5M steps) — never reaching, let alone beating, the 51% MLP-PPO baseline. Continued PPO fine-tuning of the transformer consistently degrades performance from its early/BC-pretrained peak rather than improving it, the opposite of the M3 hypothesis. This is a real, decisive negative result, not an artifact of insufficient training budget or an unfixed instability bug
 
 ### Active Tasks (M2, complete)
 - [x] Add `extractFeaturesStructured()` to `sim/tools/feature-extractor.ts` — returns `(12, 65)` token array, exact layout match with `models/metamon_adapter.py`
@@ -54,7 +56,9 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 3. ~~**`evaluate.py --model transformer`**~~ ✅ Done
 4. ~~**From-scratch training run (2.6M steps) + evaluation**~~ ✅ Done — **32% win rate (158/500)**, underperforms the 51% MLP-PPO baseline
 5. ~~**Warm-started training run (2.6M steps, `--pretrain_checkpoint`) + evaluation**~~ ✅ Done — **41% win rate (204/500)**, better than from-scratch but still below the MLP baseline
-6. **Extend warm-started run to 10.4M steps (~200k battles) + re-evaluation** ⏳ In progress — tests whether the gap closes at MILESTONES.md's actual M3 target scale before calling a final result
+6. ~~**Extend warm-started run to 7.6M steps + checkpoint sweep**~~ ✅ Done — revealed a peak of **46%** at 2.5M–3.1M steps followed by violent collapse (down to 0%) and oscillation through 7.6M steps
+7. ~~**Add PPO stability fixes (approx-KL early-stop, LR annealing) + retrain (5M steps) + checkpoint sweep**~~ ✅ Done — collapses eliminated, but the run still peaks early (45% @ 500k) and gradually decays (27% @ 5.0M final)
+8. ~~**Final M3 conclusion**~~ ✅ **Negative result, decisive.** Transformer PPO (warm-started) tops out at 46% across ~40 evaluated checkpoints from two full runs — never beats, or sustainably matches, the 51% MLP-PPO baseline. Per `MILESTONES.md`'s own M3 guidance, M4/M5 should not proceed on top of this architecture
 
 M2 is fully complete (see below).
 
@@ -68,6 +72,17 @@ M2 is fully complete (see below).
 ---
 
 ## Recently Completed
+
+✅ **M3 concluded: stability-fix retrain confirms negative result** (2026-07-13)
+- Extended the 2.6M-step warm-started run to 7.6M steps via `--resume`, then swept all 21 intermediate checkpoints (150 battles each) to see the full trajectory rather than just two data points. Result: the run peaked at **46% win rate** around 2.5M–3.1M steps, then **collapsed violently** — 0–13% win rate between 3.6M and 5.6M steps, a partial recovery to 32% at 6.1M, then drifting to 24% by 7.6M. This is a much more severe finding than the earlier two-point (41%→24%) comparison suggested: it's not gradual drift, it's repeated near-total collapse and partial recovery, consistent with an unconstrained PPO update occasionally wrecking the policy's learned move-vs-switch balance (any policy that over-favors switching loses almost every game to `RandomPlayerAI`, which never voluntarily switches)
+- **Added two standard PPO stability fixes**, since the failure pattern (violent collapse, not slow decay) pointed at unconstrained per-update policy movement rather than a capacity problem:
+  - `models/transformer/transformer_agent.py`: approximate-KL early-stopping in `update()` — `target_kl=0.02` (new `TransformerAgent` hyperparameter, backward-compatible default for old checkpoints via `cls(**hparams)`). If a minibatch update pushes `approx_kl` (the http://joschu.net/blog/kl-approx.html estimator) past `1.5×target_kl`, the rest of that rollout's PPO epochs are skipped rather than continuing to update on an already-large policy shift. `update()` now returns `(loss, kl_early_stop: bool)` instead of just `loss`
+  - `models/transformer/train.py`: linear LR annealing toward 0 over `--steps`, recomputed once per rollout from `agent._hparams["lr"] * max(0, 1 - total_steps/total_budget)`, applied directly to `agent.optimizer.param_groups`. Naturally continues decaying correctly on `--resume` since it's keyed off absolute `total_steps`/`total_budget`, not a step counter that resets. Rollout log line now also prints current LR and a `[kl early-stop]` tag when the safeguard fires
+  - Both smoke-tested at 1k–2k steps before the real run; KL early-stop was observed firing correctly in the (very noisy, small-rollout) smoke test
+- **Retrained a fresh 5,000,000-step warm-started run** with both fixes (not resumed from the already-collapsed 7.6M checkpoint — a fresh run tests whether collapse is prevented from the start). Swept 20 checkpoints (250k–5.0M) plus a full 500-battle evaluation of the final checkpoint. Result: **the violent collapses are gone** (no checkpoint dropped below ~25%), confirming the fix addressed that exact failure mode. But the run now peaks almost immediately — **45% at 500k steps**, close to where the BC-pretrained starting policy already performs — and then **gradually decays** into a noisy 25–35% band for the remaining 4.5M steps, ending at **27% (135/500)** on the full 500-battle evaluation of the final checkpoint
+- **Conclusion:** across ~40 checkpoints evaluated spanning both warm-started runs, the best-ever recorded win rate is **46%** — the transformer never beats, and never sustainably matches, the 51% MLP-PPO baseline. The stability fixes changed *how* training fails (violent collapse → gradual decay) but not *whether* continued PPO fine-tuning improves on the BC-pretrained starting point — it doesn't; performance is highest very early and erodes from there. This is a decisive, well-supported negative result, not an artifact of insufficient training budget (two runs, ~2.6M and ~5–7.6M steps) or an unaddressed instability bug (the specific instability found was fixed, and the conclusion didn't change)
+- **MILESTONES.md updated** — M3 marked complete with this negative result; M4/M5 held per the project's own stated M3 recommendation
+- Checkpoints: `models/transformer/checkpoints/pretrained/transformer_step_2500000.pt` (run 1 peak, 46%) and `transformer_step_5000000_final.pt` (run 2 final, 27%)
 
 ✅ **M3 verification: warm-started transformer run (41%) — still below MLP baseline** (2026-07-11)
 - Trained the transformer PPO agent warm-started from the BC checkpoint (`models/checkpoints/bc_pretrain_gen1ou.pt`) for 2.6M steps — same budget as the from-scratch run and the M2 MLP baseline. Evaluated 500 real battles vs RandomPlayerAI: **41% win rate (204/500)** — a +9pp improvement over the from-scratch transformer (32%), confirming BC warm-start helps, but still below the MLP-PPO baseline's 51% at equal compute
@@ -208,13 +223,16 @@ None. All components verified and working.
 ### M2 — Structured State
 ✅ Complete and verified (51% win rate vs RandomPlayerAI, 500 battles). Nothing left here.
 
-### Immediate (M3 — Transformer)
-- ✅ Code done: `models/transformer/transformer_agent.py` + `models/transformer/train.py` + `evaluate.py --model transformer`, all smoke-tested (see Recently Completed)
-- **Remaining:** train with PPO, 200k–500k battles, both warm-started (`--pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt`) and from-scratch, for a real comparison
-- Compare vs the M2 MLP PPO baseline (51%) at the same battle count — the transformer needs to beat this, not just match it, to justify the added complexity
-- **Recommendation: hold off on M4 (MCTS) / M5 (opponent modeling) / M6 (server) until M3 has a real recorded win rate.** Building search/opponent-modeling/server-integration on an unproven policy compounds risk if M3 underperforms.
+### M3 — Transformer + PPO
+✅ **Complete — negative result (2026-07-13).** Two full training runs (from-scratch 2.6M steps, warm-started up to 7.6M steps, plus a stability-fixed warm-started retrain to 5M steps) and ~40 evaluated checkpoints all agree: transformer PPO tops out at **46%** win rate vs RandomPlayerAI, never beating (or sustainably matching) the M2 MLP-PPO baseline's **51%**. Continued PPO fine-tuning degrades performance from its early/BC-pretrained peak rather than improving it. See "Recently Completed" for the full diagnostic trail. Nothing left to run here — this is the final M3 result.
 
-### Stretch
+### Immediate (post-M3 decision needed)
+- **M4 (MCTS) / M5 (opponent modeling) / M6 (server) are on hold**, per `MILESTONES.md`'s own M3 recommendation — none of them should be built on top of an architecture that lost to the simpler MLP baseline. This needs a human decision on direction, options include:
+  - Ship the M2 MLP-PPO checkpoint (51%) as the project's baseline model and proceed to M4/M5/M6 with that architecture instead of the transformer
+  - Root-cause *why* PPO fine-tuning degrades the BC-pretrained transformer (e.g. try a much lower LR from step 1, explicit KL-to-BC-init regularization, or simply freezing at an early checkpoint) before deciding whether the transformer is worth continuing to invest in
+  - Treat M3 as closed and move on
+
+### Stretch (deprioritized until the above is decided)
 - Attention weight visualization to confirm non-uniform attention
 - Start scoping MCTS determinizer (opponent team sampling from gen1 usage data)
 

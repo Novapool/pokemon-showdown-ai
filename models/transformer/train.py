@@ -212,7 +212,7 @@ def main() -> None:
             # as early ones. Uses current progress against total_budget, so a
             # --resume run keeps decaying rather than jumping back to full lr.
             frac_remaining = max(0.0, 1.0 - total_steps / total_budget)
-            current_lr = agent._hparams["lr"] * frac_remaining
+            current_lr = agent.lr * frac_remaining
             for param_group in agent.optimizer.param_groups:
                 param_group["lr"] = current_lr
 

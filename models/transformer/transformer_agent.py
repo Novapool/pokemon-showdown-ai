@@ -53,6 +53,7 @@ class TransformerAgent(nn.Module):
         self.ppo_epochs = ppo_epochs
         self.batch_size = batch_size
         self.target_kl = target_kl
+        self.lr = lr
 
         self.policy = TransformerPolicy(
             token_dim=token_dim,
@@ -241,13 +242,12 @@ class TransformerAgent(nn.Module):
                 # policy is the failure mode behind the mid-training win-rate
                 # collapses observed on long runs — stop this rollout's updates
                 # rather than let the policy move further on a bad batch.
-                if self.target_kl is not None:
-                    with torch.no_grad():
-                        approx_kl = (ratio - 1 - log_ratio).mean().item()
-                    if approx_kl > 1.5 * self.target_kl:
-                        stop_early = True
-                        kl_early_stop = True
-                        break
+                with torch.no_grad():
+                    approx_kl = (ratio - 1 - log_ratio).mean().item()
+                if approx_kl > 1.5 * self.target_kl:
+                    stop_early = True
+                    kl_early_stop = True
+                    break
 
             if stop_early:
                 break

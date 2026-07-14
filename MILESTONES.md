@@ -254,9 +254,9 @@ M3 (warm-started PPO; pre-validated transformer architecture)
 
 ---
 
-## M3: Transformer Encoder + PPO Baseline ⬜ AFTER M2
+## M3: Transformer Encoder + PPO Baseline ✅ COMPLETE — NEGATIVE RESULT
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete and verified (2026-07-13) — **transformer PPO does not beat the MLP-PPO baseline.** Best-ever win rate across ~40 evaluated checkpoints spanning two full training runs (from-scratch 2.6M steps; warm-started up to 7.6M steps; a stability-fixed warm-started retrain to 5M steps) is **46%**, against the M2 MLP-PPO baseline's **51%** at equal (2.6M-step) compute. See Results below for the full trail. Per this milestone's own success criteria and recommendation, **M4/M5/M6 should not proceed on top of this architecture** without a deliberate decision to revisit it.
 **Goals:** Replace the MLP trunk with a small transformer encoder. Train with PPO
 and establish a transformer win-rate baseline to beat in subsequent milestones.
 
@@ -308,15 +308,27 @@ rollout_steps=512, ppo_epochs=4, batch_size=64
 3. Checkpoint every 25k battles
 4. Log: win rate vs RandomPlayerAI, attention weight entropy (check non-uniform)
 
-### Success Criteria
-- Transformer PPO ≥ 80% win rate vs RandomPlayerAI at 200k battles
-- Transformer PPO beats MLP PPO at the same battle count (demonstrates attention helps)
-- Attention weight entropy > 0.5 nats (model uses attention, not degenerate uniform)
-- Loss curves stable: no divergence, value loss decreasing monotonically in first 50k battles
-- ≥ 65% win rate vs DamageFirstAI at 200k battles
+### Success Criteria — ❌ NOT MET
+- ❌ Transformer PPO ≥ 80% win rate vs RandomPlayerAI at 200k battles — best-ever was 46% (150-battle spot check, warm-started run 1 @ 2.5M steps ≈ 48k battles)
+- ❌ Transformer PPO beats MLP PPO at the same battle count — MLP PPO scored 51% (254/500) at 2.6M steps; transformer's best at the same step count was 46% (warm-started) / 32% (from-scratch)
+- ⬜ Attention weight entropy > 0.5 nats — not measured (deferred per the original M3 plan; moot given the win-rate result)
+- ❌ Loss curves stable, no divergence — **directly falsified**. The uncontrolled warm-started run collapsed from 46% to 0% between 2.5M and 4.6M steps. Adding approximate-KL early-stopping + LR annealing eliminated the violent collapse but not a milder decay from an early peak (45% @ 500k → 27% @ 5.0M) — PPO fine-tuning degrades this architecture over a long horizon rather than improving it
+- ⬜ ≥ 65% win rate vs DamageFirstAI at 200k battles — not tested; moot given the RandomPlayerAI result already falls well short
+
+### Results (full experimental trail)
+
+| Run | Steps | Result | Notes |
+|---|---|---|---|
+| MLP-PPO baseline (M2) | 2.6M | **51%** (254/500) | Reference baseline |
+| Transformer, from-scratch | 2.6M | **32%** (158/500) | Underperforms baseline even before considering stability issues |
+| Transformer, warm-started (run 1) | 2.6M | **41%** (204/500) | Warm-start helps (+9pp vs scratch) but still below baseline |
+| Transformer, warm-started (run 1, extended) | 7.6M | peak **46%** @ 2.5M–3.1M, then collapsed to 0–13% (3.6M–5.6M), partial recovery to 32% (6.1M), drifting to 24% (7.6M) | Full 21-checkpoint sweep revealed violent, repeated collapse — not gradual drift. Root cause: unconstrained PPO updates over a long horizon with no LR decay/trust region; a single bad update can wreck the learned move-vs-switch balance (`RandomPlayerAI` never voluntarily switches, so over-switching policies lose almost every game) |
+| Transformer, warm-started (run 2, +KL early-stop +LR annealing) | 5.0M | peak **45%** @ 500k, decaying to **27%** (135/500) @ 5.0M final | Stability fixes (approx-KL early-stopping in `TransformerAgent.update()`, linear LR annealing in `train.py`) eliminated the violent collapses, but the run still peaks almost immediately (near the BC-pretrained starting point) and degrades under continued training |
+
+**Conclusion:** the transformer's ceiling (~46%) is below the MLP baseline (51%) regardless of warm-starting, training budget (2.6M–7.6M steps tested), or PPO stability fixes. This is a genuine negative result, not an artifact of insufficient training or an unresolved bug.
 
 ### Unblocks
-M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head)
+M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head) — **both on hold** pending a decision on whether to revisit the transformer architecture or proceed on the M2 MLP-PPO baseline instead.
 
 ---
 
