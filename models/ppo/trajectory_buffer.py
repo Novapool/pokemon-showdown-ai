@@ -22,6 +22,7 @@ class TrajectoryBuffer:
         self._dones: list = []
         self._values: list = []
         self._log_probs: list = []
+        self._masks: list = []
 
         self.returns: torch.Tensor | None = None
         self.advantages: torch.Tensor | None = None
@@ -38,14 +39,25 @@ class TrajectoryBuffer:
         done: bool,
         value: float,
         log_prob: float,
+        valid_mask=None,
     ) -> None:
-        """Append one step of data to the buffer."""
+        """Append one step of data to the buffer.
+
+        valid_mask is the action-legality mask (length n_actions, truthy =
+        legal) that was in force when `action` was chosen. It is stored so
+        PPO updates can re-mask logits with the real per-step mask (M3.2)
+        instead of pretending every action was legal. None (legacy callers)
+        stores an all-legal mask.
+        """
         self._obs.append(obs.copy())
         self._actions.append(action)
         self._rewards.append(reward)
         self._dones.append(done)
         self._values.append(value)
         self._log_probs.append(log_prob)
+        if valid_mask is None:
+            valid_mask = np.ones(9, dtype=bool)
+        self._masks.append(np.asarray(valid_mask, dtype=bool).copy())
 
     # ------------------------------------------------------------------
     # Advantage computation
@@ -105,6 +117,7 @@ class TrajectoryBuffer:
                 "returns"    — float32 tensor, shape (T,)
                 "advantages" — float32 tensor, shape (T,)
                 "log_probs"  — float32 tensor, shape (T,)
+                "masks"      — bool tensor, shape (T, n_actions)
         """
         if self.returns is None or self.advantages is None:
             raise RuntimeError(
@@ -118,6 +131,7 @@ class TrajectoryBuffer:
             "returns": self.returns,
             "advantages": self.advantages,
             "log_probs": torch.tensor(self._log_probs, dtype=torch.float32),
+            "masks": torch.tensor(np.stack(self._masks, axis=0), dtype=torch.bool),
         }
 
     # ------------------------------------------------------------------
@@ -132,6 +146,7 @@ class TrajectoryBuffer:
         self._dones = []
         self._values = []
         self._log_probs = []
+        self._masks = []
 
         if hasattr(self, "returns"):
             del self.returns

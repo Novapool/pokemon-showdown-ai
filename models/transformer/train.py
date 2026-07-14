@@ -100,6 +100,43 @@ def parse_args() -> argparse.Namespace:
         help="Number of parallel battle environments (default: 8)",
     )
     parser.add_argument(
+        "--checkpoint-dir",
+        type=str,
+        default=None,
+        help=(
+            "Override the checkpoint directory (default: checkpoints/scratch "
+            "or checkpoints/pretrained next to this script). Use for runs that "
+            "must not overwrite an earlier run's checkpoints at the same step "
+            "counts (e.g. the M3.2 decision run vs the original M3 runs)."
+        ),
+    )
+    parser.add_argument(
+        "--value-warmup-steps",
+        type=int,
+        default=0,
+        help=(
+            "M3.2: freeze embed/encoder/policy_head for the first N steps so "
+            "the (randomly initialized) value head fits the BC policy before "
+            "full PPO gradients flow through the shared encoder. 0 = off."
+        ),
+    )
+    parser.add_argument(
+        "--bc-anchor",
+        type=str,
+        default=None,
+        help=(
+            "M3.2: path to a BC checkpoint to use as a frozen KL anchor — "
+            "adds coef × KL(π‖π_BC) to the PPO loss. Usually the same file as "
+            "--pretrain_checkpoint. Works with --resume (re-attached each run)."
+        ),
+    )
+    parser.add_argument(
+        "--bc-anchor-coef",
+        type=float,
+        default=0.05,
+        help="Initial KL-anchor coefficient; annealed to 0 with the LR schedule (default: 0.05)",
+    )
+    parser.add_argument(
         "--device",
         choices=["cpu", "mps", "cuda"],
         default=None,
@@ -142,7 +179,11 @@ def main() -> None:
         # Separate subdir per run mode so a from-scratch and a warm-started run
         # never overwrite each other's checkpoints at the same step count.
         run_mode = "pretrained" if args.pretrain_checkpoint else "scratch"
-        checkpoint_dir = Path(__file__).parent / "checkpoints" / run_mode
+        checkpoint_dir = (
+            Path(args.checkpoint_dir)
+            if args.checkpoint_dir
+            else Path(__file__).parent / "checkpoints" / run_mode
+        )
         agent = TransformerAgent(device=args.device)
         if args.pretrain_checkpoint:
             # Must load into agent.policy, not agent — TransformerAgent composes
@@ -155,13 +196,25 @@ def main() -> None:
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
+    # M3.2: BC KL-anchor (never persisted in checkpoints, so re-attach on
+    # every run, resumed or not) and value-head warmup (keyed off absolute
+    # total_steps, so a --resume past the threshold never re-freezes).
+    if args.bc_anchor:
+        agent.set_bc_anchor(args.bc_anchor, args.bc_anchor_coef)
+    warmup_active = 0 <= total_steps < args.value_warmup_steps
+    if warmup_active:
+        agent.set_policy_frozen(True)
+
     print(
         f"Starting Transformer PPO training: {total_budget} steps | "
         f"obs_mode=structured (12,65) | rollout={rollout_steps} steps | "
         f"num_envs={num_envs} | device={agent.device} | "
         f"checkpoint every {checkpoint_every} steps | "
         f"pretrain={args.pretrain_checkpoint or 'none (from scratch)'} | "
-        f"resumed_from={args.resume or 'none'} (starting at step {total_steps})",
+        f"value_warmup={args.value_warmup_steps or 'off'} | "
+        f"bc_anchor={args.bc_anchor or 'off'}"
+        + (f" (coef {args.bc_anchor_coef})" if args.bc_anchor else "")
+        + f" | resumed_from={args.resume or 'none'} (starting at step {total_steps})",
         flush=True,
     )
 
@@ -180,6 +233,9 @@ def main() -> None:
 
             while steps_this_rollout < rollout_steps and total_steps < total_budget:
                 actions, log_probs, values = agent.act_batch(obs_batch, masks)
+                # The masks in force when the actions were chosen — stored per
+                # step so PPO updates re-mask with real legality (M3.2).
+                step_masks = masks
                 next_obs, rewards, dones, infos, masks = env.step(actions)
 
                 for i in range(num_envs):
@@ -198,6 +254,7 @@ def main() -> None:
                         bool(dones[i]),
                         float(values[i]),
                         float(log_probs[i]),
+                        valid_mask=step_masks[i],
                     )
                     if dones[i]:
                         rollout_episodes += 1
@@ -235,6 +292,14 @@ def main() -> None:
             for b in buffers:
                 b.clear()
 
+            # End of value warmup: unfreeze once total_steps crosses the
+            # threshold (checked per rollout; the exact boundary step doesn't
+            # matter at these scales).
+            if warmup_active and total_steps >= args.value_warmup_steps:
+                agent.set_policy_frozen(False)
+                warmup_active = False
+                print(f"[value-warmup] complete at step {total_steps} — policy unfrozen", flush=True)
+
             # Linear LR annealing toward 0 over the training budget — late-run
             # updates on a mostly-converged policy shouldn't be as aggressive
             # as early ones. Uses current progress against total_budget, so a
@@ -243,6 +308,11 @@ def main() -> None:
             current_lr = agent.lr * frac_remaining
             for param_group in agent.optimizer.param_groups:
                 param_group["lr"] = current_lr
+
+            # The BC anchor anneals with the same schedule: strong early (when
+            # updates are most able to wreck the BC policy), fading to zero.
+            if args.bc_anchor:
+                agent.bc_anchor_coef = args.bc_anchor_coef * frac_remaining
 
             # ----------------------------------------------------------------
             # Log rollout summary
@@ -255,6 +325,8 @@ def main() -> None:
                 f"Win rate (rollout): {win_rate:.2f} | "
                 f"Loss: {loss:.3f} | "
                 f"LR: {current_lr:.2e}"
+                + (f" | anchor: {agent.bc_anchor_coef:.3f}" if args.bc_anchor else "")
+                + (" | [value-warmup]" if warmup_active else "")
                 + (" | [kl early-stop]" if kl_early_stop else "")
             )
 

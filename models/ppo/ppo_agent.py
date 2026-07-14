@@ -211,10 +211,14 @@ class PPOAgent(nn.Module):
         old_log_probs = data["log_probs"].to(self.device)
 
         n = obs.shape[0]
-        # Build a uniform valid mask (all actions valid) for minibatch evaluation.
-        # The actual per-step masks are not stored in the buffer; PPO uses the
-        # importance-ratio clipping rather than re-masking during updates.
-        full_mask = torch.ones(n, self._hparams["n_actions"], dtype=torch.bool, device=self.device)
+        # Real per-step action-legality masks (M3.2). Older buffers without a
+        # "masks" key fall back to all-legal, the pre-M3.2 behavior.
+        if "masks" in data:
+            full_mask = data["masks"].to(self.device)
+        else:
+            full_mask = torch.ones(
+                n, self._hparams["n_actions"], dtype=torch.bool, device=self.device
+            )
 
         total_loss_sum = 0.0
         num_updates = 0

@@ -12,7 +12,12 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
-from transformer_policy import TransformerPolicy, N_ACTIONS, TOKEN_DIM
+from transformer_policy import (
+    TransformerPolicy,
+    load_pretrain_checkpoint,
+    N_ACTIONS,
+    TOKEN_DIM,
+)
 
 
 def _pick_device() -> torch.device:
@@ -72,7 +77,16 @@ class TransformerAgent(nn.Module):
         self.device = torch.device(device) if device else _pick_device()
         self.to(self.device)
 
-        # Single optimizer over all parameters
+        # M3.2: optional frozen BC policy used as a KL anchor during PPO
+        # updates, and a policy-freeze flag for value-head warmup. Both are
+        # configured by train.py (set_bc_anchor / set_policy_frozen), never
+        # persisted in checkpoints.
+        self.bc_policy: TransformerPolicy | None = None
+        self.bc_anchor_coef = 0.0
+        self._policy_frozen = False
+
+        # Single optimizer over all parameters. Created before set_bc_anchor()
+        # can ever run, so the frozen anchor's parameters are never optimized.
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
         # Store hparams for save/load
@@ -93,6 +107,41 @@ class TransformerAgent(nn.Module):
             batch_size=batch_size,
             target_kl=target_kl,
         )
+
+    # ------------------------------------------------------------------
+    # M3.2 configuration (value-head warmup, BC KL-anchor)
+    # ------------------------------------------------------------------
+
+    def set_policy_frozen(self, frozen: bool) -> None:
+        """Freeze/unfreeze everything except the value head.
+
+        Used for value-head warmup: BC pretraining trains the policy head
+        only, so the value head starts random. Freezing embed/encoder/
+        policy_head for the first N steps lets the value function fit the BC
+        policy before full PPO gradients flow through the shared encoder and
+        scramble the BC-learned features (the M3 failure mode).
+        """
+        for module in (self.policy.embed, self.policy.encoder, self.policy.policy_head):
+            for p in module.parameters():
+                p.requires_grad = not frozen
+        self._policy_frozen = frozen
+
+    def set_bc_anchor(self, checkpoint_path: str, coef: float) -> None:
+        """Attach a frozen copy of the BC policy as a KL anchor.
+
+        update() adds `coef × KL(π_θ ‖ π_BC)` to the loss so PPO fine-tuning
+        can't drift arbitrarily far from human-cloned play. The anchor is a
+        separate frozen TransformerPolicy loaded from the BC checkpoint; it is
+        never saved into training checkpoints (train.py re-attaches it on
+        --resume), and its parameters are not in the optimizer.
+        """
+        policy_keys = ("token_dim", "n_actions", "d_model", "nhead", "num_layers", "d_ff", "dropout")
+        self.bc_policy = TransformerPolicy(**{k: self._hparams[k] for k in policy_keys})
+        load_pretrain_checkpoint(self.bc_policy, checkpoint_path)
+        self.bc_policy.to(self.device).eval()
+        for p in self.bc_policy.parameters():
+            p.requires_grad = False
+        self.bc_anchor_coef = coef
 
     # ------------------------------------------------------------------
     # Inference
@@ -177,10 +226,12 @@ class TransformerAgent(nn.Module):
             valid_mask_batch: bool tensor,    shape (B, n_actions)
 
         Returns:
-            (log_probs, values, entropy)
+            (log_probs, values, entropy, dist)
               log_probs — float32 tensor, shape (B,)
               values    — float32 tensor, shape (B,)
               entropy   — scalar float32 tensor (mean entropy)
+              dist      — the Categorical over masked logits (used by the
+                          BC KL-anchor term in update())
         """
         logits, values = self.policy(obs_batch)
         logits = logits.masked_fill(~valid_mask_batch, -1e9)
@@ -189,7 +240,7 @@ class TransformerAgent(nn.Module):
         log_probs = dist.log_prob(actions_batch)
         entropy = dist.entropy().mean()
 
-        return log_probs, values, entropy
+        return log_probs, values, entropy, dist
 
     # ------------------------------------------------------------------
     # Update
@@ -219,10 +270,14 @@ class TransformerAgent(nn.Module):
         old_log_probs = data["log_probs"].to(self.device)
 
         n = obs.shape[0]
-        # Build a uniform valid mask (all actions valid) for minibatch evaluation.
-        # The actual per-step masks are not stored in the buffer; PPO uses the
-        # importance-ratio clipping rather than re-masking during updates.
-        full_mask = torch.ones(n, self._hparams["n_actions"], dtype=torch.bool, device=self.device)
+        # Real per-step action-legality masks (M3.2). Older buffers without a
+        # "masks" key fall back to all-legal, the pre-M3.2 behavior.
+        if "masks" in data:
+            full_mask = data["masks"].to(self.device)
+        else:
+            full_mask = torch.ones(
+                n, self._hparams["n_actions"], dtype=torch.bool, device=self.device
+            )
 
         total_loss_sum = 0.0
         num_updates = 0
@@ -243,7 +298,7 @@ class TransformerAgent(nn.Module):
                 old_log_probs_b = old_log_probs[idx]
                 mask_b = full_mask[idx]
 
-                new_log_probs, values_b, entropy = self.evaluate_actions(
+                new_log_probs, values_b, entropy, dist = self.evaluate_actions(
                     obs_b, actions_b, mask_b
                 )
 
@@ -267,6 +322,18 @@ class TransformerAgent(nn.Module):
                     - self.entropy_coef * entropy
                 )
 
+                # BC KL-anchor (M3.2): penalize divergence from the frozen BC
+                # policy so PPO can't wander far from human-cloned play.
+                # Illegal actions are masked to -1e9 in both distributions, so
+                # their ~0 probabilities contribute nothing to the KL.
+                if self.bc_policy is not None and self.bc_anchor_coef > 0:
+                    with torch.no_grad():
+                        bc_logits, _ = self.bc_policy(obs_b)
+                        bc_logits = bc_logits.masked_fill(~mask_b, -1e9)
+                    bc_dist = Categorical(logits=bc_logits)
+                    anchor_kl = torch.distributions.kl_divergence(dist, bc_dist).mean()
+                    loss = loss + self.bc_anchor_coef * anchor_kl
+
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
@@ -280,9 +347,12 @@ class TransformerAgent(nn.Module):
                 # policy is the failure mode behind the mid-training win-rate
                 # collapses observed on long runs — stop this rollout's updates
                 # rather than let the policy move further on a bad batch.
+                # While the policy is frozen (value warmup) the only ratio
+                # movement is dropout noise — skip the early-stop so value
+                # epochs aren't cut short spuriously.
                 with torch.no_grad():
                     approx_kl = (ratio - 1 - log_ratio).mean().item()
-                if approx_kl > 1.5 * self.target_kl:
+                if not self._policy_frozen and approx_kl > 1.5 * self.target_kl:
                     stop_early = True
                     kl_early_stop = True
                     break

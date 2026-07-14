@@ -137,6 +137,9 @@ def main() -> None:
 
             while steps_this_rollout < rollout_steps and total_steps < total_budget:
                 actions, log_probs, values = agent.act_batch(obs_batch, masks)
+                # The masks in force when the actions were chosen — stored per
+                # step so PPO updates re-mask with real legality (M3.2).
+                step_masks = masks
                 next_obs, rewards, dones, infos, masks = env.step(actions)
                 next_obs = _flatten(next_obs)
 
@@ -156,6 +159,7 @@ def main() -> None:
                         bool(dones[i]),
                         float(values[i]),
                         float(log_probs[i]),
+                        valid_mask=step_masks[i],
                     )
                     if dones[i]:
                         rollout_episodes += 1

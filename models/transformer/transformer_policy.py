@@ -46,7 +46,13 @@ class TransformerPolicy(nn.Module):
             dropout=dropout,
             batch_first=True,
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        # enable_nested_tensor=False: the nested-tensor fast path only engages
+        # in eval mode and uses aten ops not implemented on MPS (needed for the
+        # frozen M3.2 BC-anchor policy, which runs in eval mode). Disabling it
+        # changes nothing numerically and does not affect checkpoints.
+        self.encoder = nn.TransformerEncoder(
+            encoder_layer, num_layers=num_layers, enable_nested_tensor=False
+        )
         self.policy_head = nn.Linear(d_model, n_actions)
         self.value_head = nn.Linear(d_model, 1)
 
