@@ -53,6 +53,9 @@ python models/ppo/train.py
 | `--structured` | off | Train on the M2 (12,65)->780 flattened structured observation instead of the legacy flat 100-dim vector. Checkpoints go to `checkpoints/structured/`. |
 | `--num-envs N` | 8 | Parallel battle simulations (M3.1, ~5x throughput at 8). `1` = old serial behavior. |
 | `--device D` | auto | Force `cpu`, `mps`, or `cuda` (default auto-detects cuda > mps > cpu). |
+| `--opponent O` | random | `random`, `damagefirst` (max-base-power heuristic), or `selfplay` (frozen past checkpoints; see `--selfplay-pool`). |
+| `--selfplay-pool DIR` | own checkpoint dir | Where self-play opponents are sampled from (50% newest / 50% uniform). |
+| `--checkpoint-dir DIR` | per-mode default | Override checkpoint directory so a new run never overwrites an old run's files. |
 
 **Example — short run:**
 ```bash
@@ -85,6 +88,7 @@ python models/evaluate.py --model MODEL --checkpoint PATH
 | `--structured` | No | Evaluate a PPO checkpoint trained with `train.py --structured` (M2 verification). |
 | `--num-envs N` | No (default 8) | Parallel battle simulations. `1` = old serial behavior. |
 | `--device D` | No (default auto) | Force `cpu`/`mps`/`cuda` for ppo/transformer inference. |
+| `--opponent O` | No (default random) | `random` or `damagefirst` (max-base-power heuristic). |
 
 **Examples:**
 ```bash

@@ -371,9 +371,41 @@ M3.2 (fast retraining runs), M3.3 (parallel self-play)
 
 ---
 
-## M3.2: BC→PPO Degradation Fix ⬜ NEXT
+## M3.2: BC→PPO Degradation Fix ✅ COMPLETE — TRANSFORMER RETIRED
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete (2026-07-14). The fixes worked on the diagnosed
+mechanism, but the transformer still does not beat the MLP baseline — **per
+this milestone's own criterion, the transformer is retired and M4+ proceeds
+on the MLP-PPO architecture.**
+
+### Decision Run (5M steps, warm-started, value warmup 200k, BC anchor 0.05, real masks)
+
+Full 20-checkpoint sweep (150 battles each) + 500-battle confirmations:
+
+| Phase | Result |
+|---|---|
+| 250k–3.5M steps | **44–55%** vs Random, peak 55% @ 500k — holds at baseline parity for 3.5M steps with no collapse (old runs were at 25–35% by 2M and had cratered to 0–13% in run 1) |
+| 3.75M–5M steps | Decays 35% → 29% → 25% as the KL-anchor coefficient anneals toward zero |
+| Best checkpoint, confirmed | **53% (263/500)** vs Random — statistical parity with the MLP's 51% (254/500), not a win (`m32/transformer_step_500000.pt`) |
+| Best checkpoint vs DamageFirstAI | **39% (77/200)** — clearly behind the MLP's 51% (101/200) |
+
+### What this establishes
+- The **diagnosis was right**: with the value-head warmup and BC anchor in
+  place, PPO no longer destroys the BC policy — the model holds at its
+  BC-level plateau for 3.5M steps instead of peaking immediately and decaying.
+- The **anchor is load-bearing**: decay resumes almost exactly as the anchor
+  coefficient anneals away (~3.75M steps onward). Unconstrained PPO on this
+  architecture erodes the BC policy at any LR; it does not improve it.
+- The transformer's ceiling remains the BC policy itself (~50–55% vs Random),
+  and it generalizes worse than the MLP to a stronger opponent (39% vs 51%
+  against DamageFirstAI). Three generations of runs (M3 × 2, M3.2 × 1) agree.
+
+### Decision
+**Retire the transformer as the policy architecture. M4 (MCTS) and M5
+(opponent modeling) build on the M2 MLP-PPO baseline** (`models/ppo/`,
+structured obs). The transformer remains useful as a BC study; revisit only
+with a fundamentally different recipe (e.g. much larger BC dataset, or
+AlphaZero-style value targets from M4 self-play rather than PPO).
 **Goals:** Treat the actual failure mode M3 uncovered. Hypothesis: BC
 pretraining (`models/bc_pretrain.py`) trains the **policy head only** — the
 value head is random at warm-start, and PPO's value loss backpropagates
@@ -382,7 +414,7 @@ fit the value function. This matches the observed pattern exactly (peaks
 at/near the BC starting point, then decays). None of the standard mitigations
 were tried in M3.
 
-### What to Build
+### What Was Built (all three fixes, verified)
 1. **Real action masks in PPO updates** — store per-step `valid_mask` in
    `TrajectoryBuffer` and use it in `evaluate_actions()` during `update()`.
    Today updates use an all-ones mask, so entropy and log-probs are computed
@@ -399,43 +431,58 @@ were tried in M3.
    M3.1), sweep checkpoints, compare against the 51% MLP baseline.
 
 ### Success Criteria
-- Warm-started transformer PPO **improves** on its BC starting point instead
-  of decaying, and beats the 51% MLP-PPO baseline
-- If it still fails with these fixes: the transformer is retired, and M4+
-  proceeds on the MLP-PPO architecture — that decision is this milestone's
-  deliverable either way
+- ❌ Warm-started transformer PPO **improves** on its BC starting point instead
+  of decaying, and beats the 51% MLP-PPO baseline — best confirmed 53%
+  (parity), 39% vs DamageFirstAI (behind), late-run decay returns as the
+  anchor anneals
+- ✅ "If it still fails with these fixes: the transformer is retired, and M4+
+  proceeds on the MLP-PPO architecture" — **decided: MLP-PPO is the project
+  architecture going forward**
 
 ### Unblocks
-The M4/M5 architecture decision; M3.3
+M4/M5 (on the MLP-PPO architecture); M3.3 comparison runs
 
 ---
 
-## M3.3: Self-Play + Opponent Pool ⬜ AFTER M3.2
+## M3.3: Self-Play + Opponent Pool 🟨 CODE COMPLETE
 
-**Status:** ⬜ Not Started
-**Goals:** Fix the degenerate-opponent problem. Everything so far trains and
-evaluates against `RandomPlayerAI`, which never voluntarily switches
+**Status:** 🟨 Code complete and verified (2026-07-14) — the comparison training
+runs (self-play-trained vs fixed-opponent-trained) remain to be executed.
+**Goals:** Fix the degenerate-opponent problem. Everything before this trained
+and evaluated against `RandomPlayerAI`, which never voluntarily switches
 (`move: 1.0`) — a weak opponent giving a weak, exploitable learning signal.
-This is the chess-engine-style ingredient the pipeline is missing: AlphaZero's
+This is the chess-engine-style ingredient the pipeline was missing: AlphaZero's
 strength comes from self-play against improving copies, not a fixed random
 opponent. (MCTS, the other chess ingredient, is already planned as M4.)
 
-### What to Build (design-level; detail when the milestone starts)
-1. **Heuristic opponent first (cheap):** port a DamageFirst-style attacker
-   (reference implementation in `simulate.js`) into `sim/tools/` as a
-   `RandomPlayerAI` subclass; add an `opponent` option to `PokemonGymEnv` +
-   bridge flag + `GymClient`/`VecGymClient` param; `--opponent` on trainers
-   and `evaluate.py`. Fixes evaluation meaningfulness immediately.
-2. **Self-play:** extend `PokemonGymEnv`/bridge with a dual-seat mode — each
-   step returns p2's obs/mask too and accepts both actions; Python runs
-   opponent inference from a frozen checkpoint pool (sample a past checkpoint
-   per episode, league-style).
+### What Was Built
+1. **Heuristic opponent:** `sim/tools/damage-first-ai.ts` (`DamageFirstAI`,
+   always picks the highest-base-power legal move; ported from the
+   `simulate.js` reference). Wired as `opponent: 'damagefirst'` through
+   `PokemonGymEnv`, `gym_bridge.js --opponent`, `GymClient`/`VecGymClient`,
+   both trainers, and `evaluate.py --opponent`. Baseline recorded: the M2
+   MLP checkpoint scores **51% (101/200)** vs DamageFirstAI.
+2. **Self-play (dual-seat mode):** `PokemonGymEnv` `opponent: 'self'` +
+   `resetDual()`/`stepDual()` — each call advances to the next decision point
+   and returns both seats' obs/mask/needsAction (force-switches are
+   single-seat decision points; request freshness is counter-tracked). The
+   reveal tracker runs for both sides, so each seat sees only revealed
+   opponent info. Bridge `--selfplay` dual protocol; `VecGymClient`
+   `reset_all_dual()`/`step_dual()` (pipelined, auto-reset).
+3. **Trainer integration (both trainers):** `--opponent selfplay` samples one
+   frozen opponent per rollout from `--selfplay-pool` (default: the run's own
+   checkpoint dir) — 50% newest / 50% uniform league mix; a frozen copy of
+   the current policy until the first checkpoint exists. Training remains
+   p1-only; rewards from opponent-only decision points accumulate into p1's
+   open transition (pending-transition collection).
 
-### Success Criteria
-- Agent trained against the pool beats the fixed-opponent-trained agent
-  head-to-head, and beats the heuristic attacker at a rate the
-  RandomPlayerAI-trained agent cannot match
-- Win rate vs RandomPlayerAI does not regress (sanity floor)
+### Success Criteria (pending the comparison runs)
+- ✅ Dual-seat battles run to completion with no illegal moves or hangs
+  (TS + Python + trainer smokes, both trainers)
+- ⬜ Agent trained against the pool beats the fixed-opponent-trained agent
+  head-to-head, and beats DamageFirstAI at a rate the RandomPlayerAI-trained
+  agent cannot match
+- ⬜ Win rate vs RandomPlayerAI does not regress (sanity floor)
 
 ### Unblocks
 Meaningful M4/M5 evaluation opponents; higher-quality training signal for
@@ -443,11 +490,16 @@ whichever architecture M3.2 selects
 
 ---
 
-## M4: MCTS Integration ⬜ AFTER M3.2
+## M4: MCTS Integration ⬜ AFTER M3.3 COMPARISON RUNS
 
 **Status:** ⬜ Not Started
+**Architecture note (2026-07-14):** per the M3.2 decision, M4 builds on the
+**MLP-PPO** policy/value network (`models/ppo/`, structured obs), not the
+transformer. References to the transformer below predate that decision; the
+MCTS design is architecture-agnostic (it needs P(a|s) and V(s), which the MLP
+provides).
 **Goals:** Layer UCT-based Monte Carlo Tree Search on top of the trained PPO
-transformer. Use the learned value network for leaf evaluation instead of random
+policy. Use the learned value network for leaf evaluation instead of random
 rollouts. Start with inference-time MCTS; add AlphaZero-style fine-tuning later.
 
 ### Design
@@ -492,10 +544,12 @@ Self-play with MCTS policy (generates higher-quality training data for future fi
 
 ---
 
-## M5: Opponent Modeling Head ⬜ AFTER M3.2
+## M5: Opponent Modeling Head ⬜ AFTER M4
 
 **Status:** ⬜ Not Started
-**Goals:** Add an auxiliary head to the transformer that predicts the opponent's
+**Architecture note (2026-07-14):** per the M3.2 decision, the auxiliary head
+attaches to the MLP-PPO trunk's 128-dim features, not the transformer's.
+**Goals:** Add an auxiliary head to the policy network that predicts the opponent's
 next action. Train with a multi-task loss (PPO + opponent prediction). Use to
 improve the policy's anticipation of opposing moves.
 
@@ -601,8 +655,8 @@ Best action
 | M2.5: BC Pretraining | ✅ | Human-replay warm start (Metamon) | M3 |
 | M3: Transformer + PPO | ✅ | Negative result — transformer (peak 46%) never beat the MLP baseline (51%) | M3.1–M3.3 |
 | M3.1: Parallel Training | ✅ | Vectorized envs + batched inference (`--num-envs`) | M3.2, M3.3 |
-| M3.2: BC→PPO Fix | ⬜ | Value warmup + KL-anchor + real masks; decides transformer vs MLP | M4, M5 |
-| M3.3: Self-Play + Opponents | ⬜ | Heuristic opponent, checkpoint-pool self-play | M4, M5 |
+| M3.2: BC→PPO Fix | ✅ | Fixes verified; transformer still ≤ baseline → **retired; M4+ proceeds on MLP-PPO** | M4, M5 |
+| M3.3: Self-Play + Opponents | 🟨 | Heuristic opponent + checkpoint-pool self-play — code complete, comparison runs pending | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |

@@ -24,6 +24,8 @@ Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs 
 
 **Parallelism (M3.1):** the PPO/transformer trainers and `evaluate.py` run `--num-envs` parallel simulations (default 8, ~5x throughput) via `VecGymClient`; `--num-envs 1` reproduces the serial path. `--device {cpu,mps,cuda}` overrides device auto-detection; checkpoints never store the device and are portable Mac↔CUDA. See `docs/ML-TRAINING.md` → **Parallel Training** for benchmarks and the CUDA-machine setup note.
 
+**Opponents & self-play (M3.3):** both trainers and `evaluate.py` take `--opponent` — `random` (legacy `RandomPlayerAI`, never voluntarily switches), `damagefirst` (highest-base-power heuristic, `sim/tools/damage-first-ai.ts`), or (trainers only) `selfplay`. Self-play runs the bridge in dual-seat mode (`gym_bridge.js --selfplay`): each rollout samples a frozen opponent from `--selfplay-pool` (default: the run's own checkpoint dir; 50% newest / 50% uniform; a frozen copy of the current policy until the first checkpoint exists). Reward and training remain p1-only. Baseline: the M2 MLP checkpoint scores 51% vs DamageFirstAI (101/200).
+
 ## Quick-Start Training
 
 ```bash
@@ -58,7 +60,19 @@ python models/transformer/train.py --steps 2600000 --rollout-steps 512 --checkpo
 python models/transformer/train.py --steps 2600000 --rollout-steps 512 --checkpoint-every 250000 --num-envs 8 \
     --pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt
 
+# Transformer PPO with the M3.2 fixes (value warmup + BC anchor) — the M3.2 decision-run recipe
+python models/transformer/train.py --steps 5000000 --checkpoint-every 250000 --num-envs 8 \
+    --pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt \
+    --bc-anchor models/checkpoints/bc_pretrain_gen1ou.pt --value-warmup-steps 200000 \
+    --checkpoint-dir models/transformer/checkpoints/m32
+
+# Self-play training (M3.3) — opponent pool = the run's own checkpoints.
+# MLP-PPO is the project architecture per the M3.2 decision (transformer retired).
+python models/ppo/train.py --structured --steps 5000000 --checkpoint-every 250000 --num-envs 8 \
+    --opponent selfplay --checkpoint-dir models/ppo/checkpoints/selfplay
+
 # Evaluate a checkpoint (--num-envs 8 parallel battles by default; --num-envs 1 = legacy serial)
+# Add --opponent damagefirst to evaluate against the heuristic attacker instead of RandomPlayerAI
 python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200
 python models/evaluate.py --model q_learning --checkpoint models/q_learning/qtable.pkl --battles 200
 python models/evaluate.py --model ppo --checkpoint models/ppo/checkpoints/ppo_step_100000.pt --battles 200

@@ -6,7 +6,10 @@ Last updated: 2026-07-14
 
 ## Current Work
 
-**Milestone:** M3.1 (Parallel Training Infrastructure) — **complete (2026-07-14).** Post-M3 direction decided: rather than shipping the MLP or adding token complexity, the roadmap now runs M3.1 (parallelize training/eval) → M3.2 (fix the diagnosed BC→PPO degradation: untrained value head backprops through the shared encoder and scrambles BC features — value warmup + KL-anchor-to-BC + real action masks in updates) → M3.3 (self-play + opponent pool, replacing the degenerate never-switching `RandomPlayerAI` as sole opponent). M4/M5 resume after M3.2 decides transformer-vs-MLP. Full specs in `MILESTONES.md`.
+**Milestones M3.1, M3.2, M3.3 — all landed 2026-07-14.**
+- **M3.1 (parallel training):** ✅ complete — `--num-envs` vectorized envs + batched inference on both trainers and `evaluate.py` (~5x throughput).
+- **M3.2 (BC→PPO degradation fix):** ✅ complete, **architecture decided: transformer retired, M4+ proceeds on MLP-PPO.** All three fixes (real action masks, value-head warmup, BC KL-anchor) implemented and verified. The 5M-step decision run proved the diagnosis right (no more collapse; the policy holds its BC plateau for 3.5M steps, and decay resumes exactly as the anchor anneals away) but the transformer still tops out at parity with the 51% MLP baseline vs Random (best confirmed 53%, 263/500) and clearly behind it vs DamageFirstAI (39% vs 51%). Full trail in `MILESTONES.md` → M3.2.
+- **M3.3 (self-play + opponent pool):** 🟨 code complete and smoke-verified — `--opponent {random,damagefirst,selfplay}` on both trainers, DamageFirstAI in `sim/tools/`, dual-seat gym/bridge self-play with frozen checkpoint pools. The comparison training runs (self-play-trained vs fixed-opponent-trained) are the remaining deliverable — the first self-play MLP run is the immediate next action.
 
 ### Active Tasks (M3.1) — all resolved
 - [x] `models/vec_gym_client.py` — `VecGymClient(n_envs, structured)`: N parallel `gym_bridge.js` subprocesses, pipelined write-all/read-all stepping, auto-reset on done, per-env errors reset in place and surface as `infos[i]["error"]`
@@ -87,6 +90,18 @@ M2 is fully complete (see below).
 ---
 
 ## Recently Completed
+
+✅ **M3.2: BC→PPO degradation fix — transformer retired, MLP-PPO is the architecture** (2026-07-14)
+- Implemented all three fixes: per-step `valid_mask` stored in `TrajectoryBuffer` and used in both agents' `update()` (updates previously pretended all 9 actions were legal); `--value-warmup-steps` (freeze embed/encoder/policy_head so the random value head fits the BC policy before full PPO gradients hit the shared encoder); `--bc-anchor`/`--bc-anchor-coef` (frozen BC policy as an annealed KL anchor). Plus `--checkpoint-dir` on both trainers so new runs can't overwrite old checkpoints. Verified freeze semantics (policy tensors bit-identical through a frozen update), anchor annealing, and a live warmup→unfreeze transition
+- Fixed an MPS blocker found en route: `TransformerPolicy`'s encoder now uses `enable_nested_tensor=False` (the eval-mode fast path used aten ops unimplemented on MPS; numerically identical, checkpoint-compatible)
+- **Decision run:** 5M steps warm-started with all fixes (`models/transformer/checkpoints/m32/`), 20-checkpoint sweep + 500-battle confirmations. The diagnosis was right — no collapse, the policy holds 44–55% for 3.5M steps, and decay resumes exactly as the anchor anneals to zero (35%→25% over the last 1.25M steps): unconstrained PPO erodes the BC policy at any LR. But the ceiling is the BC policy itself: best confirmed **53% (263/500) vs Random** (parity with MLP's 51%) and **39% (77/200) vs DamageFirstAI** (MLP: 51%)
+- **Per the milestone's pre-registered criterion: transformer retired; M4 (MCTS) and M5 (opponent modeling) proceed on the M2 MLP-PPO baseline**
+
+✅ **M3.3 code: DamageFirst opponent + dual-seat self-play** (2026-07-14)
+- `sim/tools/damage-first-ai.ts` (`DamageFirstAI`, highest-base-power move) wired as `--opponent damagefirst` through gym → bridge → `GymClient`/`VecGymClient` → both trainers → `evaluate.py`. New baseline: M2 MLP scores **51% (101/200) vs DamageFirstAI**
+- Dual-seat self-play: `PokemonGymEnv` `opponent: 'self'` + `resetDual()`/`stepDual()` (both seats' obs/mask/needsAction per decision point; freshness-counted requests; force-switches are single-seat decision points; reveal tracker runs for both sides so each seat sees only revealed info; reward stays p1-perspective). Bridge `--selfplay` dual protocol; `VecGymClient.reset_all_dual()/step_dual()` pipelined with auto-reset
+- Both trainers: `--opponent selfplay` samples one frozen opponent per rollout from `--selfplay-pool` (default: own checkpoint dir; 50% newest / 50% uniform; frozen copy of the current policy until a first checkpoint exists). Pending-transition collection credits rewards from opponent-only steps to p1's open transition
+- Smoke-verified at every layer: TS (episodes complete, force-switch points, no illegal moves), Python bridge, and short self-play training runs on both trainers. Comparison training runs remain (see Next Steps)
 
 ✅ **M3.1: Parallel training infrastructure** (2026-07-14)
 - Root-caused training slowness: fully serial pipeline (one bridge subprocess, one battle at a time, batch-1 inference every step — GPU mostly idle). Built `models/vec_gym_client.py` (`VecGymClient`): N parallel `gym_bridge.js` subprocesses with pipelined stepping (write all N commands, then read all N responses — Python waits only for the slowest env) and auto-reset on episode end
@@ -249,20 +264,21 @@ None. All components verified and working.
 ### M3 — Transformer + PPO
 ✅ **Complete — negative result (2026-07-13).** Two full training runs (from-scratch 2.6M steps, warm-started up to 7.6M steps, plus a stability-fixed warm-started retrain to 5M steps) and ~40 evaluated checkpoints all agree: transformer PPO tops out at **46%** win rate vs RandomPlayerAI, never beating (or sustainably matching) the M2 MLP-PPO baseline's **51%**. Continued PPO fine-tuning degrades performance from its early/BC-pretrained peak rather than improving it. See "Recently Completed" for the full diagnostic trail. Nothing left to run here — this is the final M3 result.
 
-### M3.1 — Parallel Training
-✅ Complete (2026-07-14). `--num-envs 8` is the new default on both trainers and `evaluate.py`.
+### M3.1 / M3.2 — Complete
+✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
 
-### Immediate (M3.2 — BC→PPO degradation fix)
-Direction was decided 2026-07-14 (root-cause the degradation rather than ship the MLP or add token complexity). Implement per `MILESTONES.md` → M3.2:
-1. Store per-step `valid_mask` in `TrajectoryBuffer`; use real masks in both agents' `update()`
-2. `--value-warmup-steps` (freeze embed/encoder/policy_head; value head only)
-3. `--bc-anchor` + `--bc-anchor-coef` (KL to frozen BC policy, annealed)
-4. Full warm-started decision run + checkpoint sweep vs the 51% MLP baseline — **this run decides transformer vs MLP for M4+**
+### Immediate (M3.3 comparison runs)
+Run self-play training on the MLP and compare against the fixed-opponent baseline per `MILESTONES.md` → M3.3 success criteria:
+```bash
+python models/ppo/train.py --structured --steps 5000000 --checkpoint-every 250000 --num-envs 8 \
+    --opponent selfplay --checkpoint-dir models/ppo/checkpoints/selfplay
+```
+Then evaluate the best self-play checkpoint vs `--opponent random` and `--opponent damagefirst`, against the M2 baseline's 51%/51%.
 
-### Then (M3.3 — self-play + opponent pool)
-Heuristic DamageFirst-style opponent through gym/bridge/CLI first; dual-seat self-play with a frozen checkpoint pool second. Spec in `MILESTONES.md` → M3.3.
+### Then
+M4 (MCTS on the MLP-PPO policy/value net) once the M3.3 comparison establishes the stronger training opponent.
 
-### Stretch (deprioritized until M3.2/M3.3 conclude)
+### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention
 - Start scoping MCTS determinizer (opponent team sampling from gen1 usage data)
 

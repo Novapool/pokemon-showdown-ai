@@ -82,3 +82,4 @@ output/
 # Metamon (M2.5 BC pretraining) — vendored install + downloaded dataset
 vendor/
 data/metamon_cache/
+models/transformer/checkpoints/m32/train.log

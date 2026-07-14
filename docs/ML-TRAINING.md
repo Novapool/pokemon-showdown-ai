@@ -128,6 +128,25 @@ At 8 envs, a 2.6M-step training run drops from ~2.6 hours to ~30 minutes. Evalua
 - **Apple Neural Engine:** not usable. Apple exposes the ANE only through CoreML, which cannot train and which PyTorch does not target. MPS (the GPU) is the correct Mac backend and is what auto-detection picks on Apple Silicon.
 - For these small models at small batch sizes, `--device cpu` can outperform MPS due to per-op dispatch overhead; the gap narrows as `--num-envs` (and thus inference batch size) grows. Benchmark a short run before committing to a long one.
 
+## Opponents & Self-Play (M3.3)
+
+Both trainers and `evaluate.py` accept `--opponent`:
+
+- **`random`** (default) — `RandomPlayerAI`. Note its `move: 1.0` default means it never voluntarily switches; it presses a random attack every turn.
+- **`damagefirst`** — `DamageFirstAI` (`sim/tools/damage-first-ai.ts`): always picks the legal move with the highest base power. A strictly stronger fixed benchmark. The M2 MLP baseline scores 51% (101/200) against it.
+- **`selfplay`** (trainers only) — the p2 seat is a frozen past checkpoint of the agent itself, league-style.
+
+Self-play runs the gym in dual-seat mode (`PokemonGymEnv` `opponent: 'self'`, bridge `--selfplay`): each `stepDual()` advances the battle to the next decision point and reports both seats' observations, masks, and a `needsAction` flag (only one seat acts during force-switches). The learner trains on the p1 seat only; rewards from opponent-only decision points accumulate into p1's open transition. Each rollout samples one frozen opponent from `--selfplay-pool` (default: the run's own checkpoint directory) — the newest checkpoint 50% of the time, otherwise uniform over the pool; until a first checkpoint exists the opponent is a frozen copy of the current policy. Both seats see only revealed information (the reveal tracker runs for both sides).
+
+```bash
+python models/transformer/train.py --steps 5000000 --num-envs 8 --opponent selfplay \
+    --checkpoint-dir models/transformer/checkpoints/selfplay \
+    --pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt \
+    --bc-anchor models/checkpoints/bc_pretrain_gen1ou.pt --value-warmup-steps 200000
+
+python models/evaluate.py --model transformer --checkpoint <ckpt> --battles 500 --opponent damagefirst
+```
+
 ## The Training Loop (Manual — if not using the gym)
 
 ```

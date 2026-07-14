@@ -1,8 +1,9 @@
 """
 evaluate.py — Standalone evaluation script for trained Pokemon Showdown RL agents.
 
-Runs N greedy battles against RandomPlayerAI (the default gym opponent) and
-reports win rate to stdout.
+Runs N battles against RandomPlayerAI (default) or DamageFirstAI
+(--opponent damagefirst) and reports win rate to stdout. Battles run across
+--num-envs parallel envs (default 8).
 
 Usage:
     python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200

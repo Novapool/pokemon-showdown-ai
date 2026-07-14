@@ -1,63 +1,41 @@
-# M2 Model Comparison
+# Model Comparison — Results Ledger
 
-## Overview
+Running record of every evaluated model/run in this project. Evaluation is
+`models/evaluate.py` (sampled policy) unless noted; opponents are
+`RandomPlayerAI` ("Random"; never voluntarily switches) and `DamageFirstAI`
+("DamageFirst"; always picks the highest-base-power move, M3.3).
 
-Milestone 2 (M2) explores three reinforcement learning architectures for learning to play Pokemon Showdown Gen 1 battles. Each model is trained against `RandomPlayerAI` (the default gym opponent) and evaluated on win rate, training time, and qualitative behavior. The goal is to identify one winning architecture to carry forward into M3 large-scale training.
+## Headline results
 
----
+| Model / run | Steps | vs Random | vs DamageFirst | Status |
+|---|---|---|---|---|
+| Q-Learning (tabular, flat obs) | — | never fully trained | — | Archived in M1 — tabular limitation assumed confirmed by design |
+| DQN (flat obs) | — | never fully trained | — | Regression baseline only |
+| **MLP-PPO, structured obs (M2 baseline)** | 2.6M | **51% (254/500)** | **51% (101/200)** | ✅ The baseline to beat (`models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`) |
+| Transformer PPO, from scratch (M3) | 2.6M | 32% (158/500) | — | ❌ Negative result |
+| Transformer PPO, BC warm-started, run 1 (M3) | 2.6M–7.6M | 41% @ 2.6M; peak 46% @ 2.5M; collapsed to 0–13% by 3.6–5.6M | — | ❌ Violent collapse (unconstrained PPO updates) |
+| Transformer PPO, warm-started, run 2 (+KL early-stop, +LR anneal) (M3) | 5.0M | peak 45% @ 500k, decayed to 27% @ 5.0M | — | ❌ Collapse fixed, decay remained |
+| Transformer PPO, warm-started, M3.2 fixes (value warmup + BC KL-anchor + real masks) | 5.0M | holds 44–55% through 3.5M (no collapse); best confirmed **53% (263/500)** @ 500k; decays to 25% by 5M as the anchor anneals away | **39% (77/200)** @ 500k | ❌ Parity vs Random at best, behind vs DamageFirst → **transformer retired (M3.2 decision); M4+ proceeds on MLP-PPO** |
 
-## Models Evaluated
+## Reference points
 
-### Q-Learning (Tabular)
+- Uniform-random-over-valid-actions policy: 0–3% vs Random (untrained
+  policies lose almost every game because ~5/9 actions are switches and
+  RandomPlayerAI never stops attacking).
+- BC-pretrained transformer (`models/checkpoints/bc_pretrain_gen1ou.pt`,
+  50.5% top-1 accuracy on human gen1ou): ~45% vs Random at PPO step ~0
+  (inferred from early warm-started checkpoints).
 
-A classic tabular Q-learning agent with epsilon-greedy exploration. The 100-feature observation vector is discretized into a compact 5-element state tuple (own HP bucket, active type, switch mask, opponent HP bucket, number of valid moves), enabling a lookup-table Q-function. Simple to implement and interpret, but state coverage is inherently limited by the coarse discretization — expected to plateau below DQN and PPO.
+## Interpretation notes
 
-### DQN (Deep Q-Network)
-
-A two-hidden-layer MLP (100 → 128 → 128 → 9) approximating the Q-function directly from the raw 100-feature observation vector. Trained with experience replay (buffer size 10k) and a periodically-synced target network (sync every 1000 steps). Handles the full continuous state space and is expected to generalize significantly better than the tabular approach.
-
-### PPO (Proximal Policy Optimization)
-
-An Actor-Critic agent with a shared trunk (100 → 128 → 128) feeding into separate policy (128 → 9) and value (128 → 1) heads. Trained with rollout-based advantage estimation (GAE), clipped surrogate objective, and entropy regularization. On-policy learning is more sample-inefficient than DQN but often more stable; PPO is the primary candidate for M3.
-
----
-
-## Results
-
-| Model | Win Rate vs RandomPlayerAI | Training Time | Notes |
-|---|---|---|---|
-| Q-Learning | TBD — fill after training run | TBD | TBD |
-| DQN | TBD — fill after training run | TBD | TBD |
-| PPO | TBD — fill after training run | TBD | TBD |
-
-> All result cells are placeholders. Run each model's `train.py`, then evaluate with `models/evaluate.py --battles 200` and record results here.
-
----
-
-## Analysis
-
-TBD — fill after all training runs complete.
-
-Expected hypothesis: DQN and PPO both significantly outperform Q-Learning due to continuous state representation. PPO may show more stable convergence curves while DQN may reach competitive performance faster given sample-efficient off-policy learning.
-
----
-
-## Winner Selection
-
-TBD — will be updated once results are in. Winner advances to M3 scale training.
-
-The winning model will be selected based on win rate vs `RandomPlayerAI`, stability of the learning curve, and wall-clock training time. The checkpoint from the best run will serve as the starting point for M3.
-
----
-
-## Next Steps
-
-Once a winner is selected, proceed to **M3: Scale Training**. M3 trains the winning model for 1M+ steps with additional evaluation against stronger baselines. See the M3 section of [MILESTONES.md](../MILESTONES.md) for the full scope.
-
-To run evaluation for a trained model:
-
-```bash
-python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200
-python models/evaluate.py --model ppo --checkpoint models/ppo/checkpoints/ppo_step_100000.pt --battles 200
-python models/evaluate.py --model q_learning --checkpoint models/q_learning/qtable.pkl --battles 200
-```
+- 150-battle evals carry roughly ±8pp noise; 500-battle evals ±4.5pp. Treat
+  single-checkpoint differences under that as ties.
+- The M3.2 run confirmed the M3 conclusion with the untrained-value-head
+  problem treated: the fixes eliminated the collapse/decay mechanism (the
+  policy holds at its BC plateau for 3.5M steps, and decay resumes exactly as
+  the KL-anchor coefficient anneals to zero), but the transformer's ceiling
+  is the BC policy itself — PPO never improves on it. Full trail in
+  `MILESTONES.md` → M3.2, sweep data in
+  `models/transformer/checkpoints/m32/train.log`.
+- vs-DamageFirst numbers only exist from M3.3 onward (the opponent was built
+  then). Backfill for older checkpoints if a comparison is ever needed.
