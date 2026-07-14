@@ -65,8 +65,13 @@ class GymClient:
             sys.stderr.write("[bridge] " + line.decode(errors="replace"))
             sys.stderr.flush()
 
-    def _send(self, cmd: dict) -> dict:
-        """Send one command and return the parsed response."""
+    def _write(self, cmd: dict) -> None:
+        """Write one command line without waiting for the response.
+
+        Split out from _send so VecGymClient can pipeline: write commands to
+        all N bridge processes first, then read all N responses — the sims
+        run concurrently while Python waits.
+        """
         if DEBUG:
             print(f"  [send] {cmd}", flush=True)
 
@@ -77,6 +82,8 @@ class GymClient:
         self._proc.stdin.write(line.encode())
         self._proc.stdin.flush()
 
+    def _read(self) -> dict:
+        """Read and parse one response line; raises on bridge errors."""
         raw = self._proc.stdout.readline()
 
         if not raw:
@@ -89,6 +96,11 @@ class GymClient:
         if "error" in response:
             raise RuntimeError(response["error"])
         return response
+
+    def _send(self, cmd: dict) -> dict:
+        """Send one command and return the parsed response."""
+        self._write(cmd)
+        return self._read()
 
     # ------------------------------------------------------------------
     # Public interface

@@ -27,9 +27,10 @@ _MODELS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_MODELS_DIR))
 
 from gym_client import GymClient  # noqa: E402 (after sys.path patch)
+from vec_gym_client import VecGymClient  # noqa: E402
 
 
-def _load_agent(model: str, checkpoint: str):
+def _load_agent(model: str, checkpoint: str, device: str | None = None):
     """Load and return the appropriate agent from checkpoint."""
     if model == "q_learning":
         sys.path.insert(0, str(_MODELS_DIR / "q_learning"))
@@ -51,7 +52,7 @@ def _load_agent(model: str, checkpoint: str):
         sys.path.insert(0, str(_MODELS_DIR / "ppo"))
         from ppo_agent import PPOAgent
 
-        agent = PPOAgent.load(checkpoint)
+        agent = PPOAgent.load(checkpoint, device=device)
         return agent
 
     elif model == "transformer":
@@ -61,11 +62,71 @@ def _load_agent(model: str, checkpoint: str):
         sys.path.insert(0, str(_MODELS_DIR / "transformer"))
         from transformer_agent import TransformerAgent
 
-        agent = TransformerAgent.load(checkpoint)
+        agent = TransformerAgent.load(checkpoint, device=device)
         return agent
 
     else:
         raise ValueError(f"Unknown model type: {model!r}")
+
+
+def _run_battles_vec(
+    agent, n_battles: int, num_envs: int, structured: bool, flatten: bool
+) -> tuple:
+    """Run n_battles episodes across num_envs parallel envs; return (wins, total).
+
+    Each env gets a fixed battle quota (n_battles split as evenly as possible)
+    so the count is exact and unbiased by battle length. Envs that hit their
+    quota keep being stepped (VecGymClient auto-resets) but their further
+    episodes aren't counted; the leftover work is bounded by one battle/env.
+
+    Agents with act_batch() (PPO/transformer) get batched inference; the
+    q_learning/dqn agents fall back to per-env act() calls — the parallel
+    simulation is the speedup either way.
+    """
+    num_envs = max(1, min(num_envs, n_battles))
+    env = VecGymClient(num_envs, structured=structured)
+    quotas = [n_battles // num_envs] * num_envs
+    for i in range(n_battles % num_envs):
+        quotas[i] += 1
+
+    completed = [0] * num_envs
+    wins = 0
+    done_total = 0
+    log_every = min(50, max(1, n_battles // 10))
+    batched = hasattr(agent, "act_batch")
+
+    def _prep(obs):
+        return obs.reshape(num_envs, -1) if (structured and flatten) else obs
+
+    try:
+        obs, masks = env.reset_all()
+        obs = _prep(obs)
+        while any(completed[i] < quotas[i] for i in range(num_envs)):
+            if batched:
+                actions = agent.act_batch(obs, masks)[0]
+            else:
+                actions = [agent.act(obs[i], masks[i].tolist()) for i in range(num_envs)]
+            obs, _rewards, dones, infos, masks = env.step(actions)
+            obs = _prep(obs)
+            for i in range(num_envs):
+                if "error" in infos[i]:
+                    print(f"  [env {i}] error ({infos[i]['error']}) — battle not counted", flush=True)
+                    continue
+                if dones[i] and completed[i] < quotas[i]:
+                    completed[i] += 1
+                    done_total += 1
+                    if infos[i].get("winner") == "Gym":
+                        wins += 1
+                    if done_total % log_every == 0 or done_total == n_battles:
+                        print(
+                            f"Battle {done_total}/{n_battles} | running win rate: "
+                            f"{wins / done_total:.2f} ({wins}/{done_total})",
+                            flush=True,
+                        )
+    finally:
+        env.close()
+
+    return wins, n_battles
 
 
 def _run_battles(agent, n_battles: int, structured: bool = False, flatten: bool = True) -> tuple:
@@ -135,6 +196,18 @@ def main():
         action="store_true",
         help="Evaluate a PPO checkpoint trained with train.py --structured (M2 verification).",
     )
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=8,
+        help="Number of parallel battle environments (default: 8; 1 = legacy serial path).",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "mps", "cuda"],
+        default=None,
+        help="Torch device override for ppo/transformer (default: auto-detect).",
+    )
     args = parser.parse_args()
 
     if args.structured and args.model != "ppo":
@@ -143,11 +216,18 @@ def main():
             "(transformer always uses structured, unflattened observations; no flag needed)"
         )
 
-    agent = _load_agent(args.model, args.checkpoint)
+    agent = _load_agent(args.model, args.checkpoint, device=args.device)
     if args.model == "transformer":
-        wins, total = _run_battles(agent, args.battles, structured=True, flatten=False)
+        structured, flatten = True, False
     else:
-        wins, total = _run_battles(agent, args.battles, structured=args.structured, flatten=True)
+        structured, flatten = args.structured, True
+
+    if args.num_envs > 1:
+        wins, total = _run_battles_vec(
+            agent, args.battles, args.num_envs, structured=structured, flatten=flatten
+        )
+    else:
+        wins, total = _run_battles(agent, args.battles, structured=structured, flatten=flatten)
     win_rate = wins / total if total > 0 else 0.0
 
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")

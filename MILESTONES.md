@@ -328,11 +328,122 @@ rollout_steps=512, ppo_epochs=4, batch_size=64
 **Conclusion:** the transformer's ceiling (~46%) is below the MLP baseline (51%) regardless of warm-starting, training budget (2.6M–7.6M steps tested), or PPO stability fixes. This is a genuine negative result, not an artifact of insufficient training or an unresolved bug.
 
 ### Unblocks
-M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head) — **both on hold** pending a decision on whether to revisit the transformer architecture or proceed on the M2 MLP-PPO baseline instead.
+M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head) — **both on hold** pending M3.2, which decides whether the transformer is revisited or retired in favor of the M2 MLP-PPO baseline. Direction decided 2026-07-14: run M3.1 (parallel training) → M3.2 (BC→PPO degradation fix) → M3.3 (self-play + opponent pool) before touching M4+.
 
 ---
 
-## M4: MCTS Integration ⬜ AFTER M3
+## M3.1: Parallel Training Infrastructure ✅ COMPLETE
+
+**Status:** ✅ Complete (2026-07-14)
+**Goals:** Remove the serial-training bottleneck. The M2/M3 loops ran one
+`gym_bridge.js` subprocess, one battle at a time, with batch-size-1 inference
+per step — the GPU sat idle waiting on a single Node event loop. Parallelize
+the simulation and batch the inference so long runs stop taking days.
+
+### What Was Built
+| File | Contents |
+|------|----------|
+| `models/vec_gym_client.py` | `VecGymClient(n_envs, structured)` — N `gym_bridge.js` subprocesses (one Node event loop/CPU core each); pipelined step (write all N commands, then read all N responses); auto-reset on done; per-env errors reset in place and surface as `infos[i]["error"]` |
+| `models/gym_client.py` | `_send()` split into `_write()`/`_read()` so the vec client can pipeline round trips |
+| `models/ppo/trajectory_buffer.py` | `compute_advantages(normalize=...)` + module-level `merge_buffers()` — per-env buffers (GAE never crosses env streams), advantages normalized globally over the combined batch |
+| `models/{ppo,transformer}/*_agent.py` | `act_batch()` batched inference; `update()` accepts a merged tensor dict; `device=` override kwarg + `load(path, device=...)` — device deliberately excluded from checkpoint hparams so checkpoints stay portable Mac↔CUDA |
+| `models/{ppo,transformer}/train.py` | `--num-envs` (default 8) and `--device` flags; vectorized rollout collection with per-env buffers; checkpointing/`--resume`/LR-annealing unchanged (all keyed off `total_steps`) |
+| `models/evaluate.py` | `--num-envs` (default 8) and `--device`; per-env battle quotas keep the count exact; q/dqn fall back to per-env `act()` |
+
+### Device Notes (recorded so this isn't relitigated)
+- `_pick_device()` auto-detects CUDA → MPS → CPU. The RTX 3080 machine needs
+  no code changes: clone, `./build`, install CUDA PyTorch, same commands.
+- The Apple Neural Engine is **not** usable from PyTorch (CoreML-only,
+  inference-only). MPS (the GPU) is the right Mac backend and is what's used.
+- For small models at small batch sizes, `--device cpu` can beat MPS
+  (per-op dispatch overhead); benchmark before long runs.
+
+### Success Criteria
+- ✅ Old checkpoints unchanged/compatible: the M2 51% MLP checkpoint evaluates
+  at 49% (49/100) through the parallel path
+- ✅ Single-env path still works (`--num-envs 1`, same code path)
+- ✅ Training throughput ≥ 5x at 8 envs vs serial (see benchmark table in
+  `docs/ML-TRAINING.md`)
+- ✅ Evaluation: 100 transformer battles 20.2s → 5.6s at 8 envs (3.6x)
+
+### Unblocks
+M3.2 (fast retraining runs), M3.3 (parallel self-play)
+
+---
+
+## M3.2: BC→PPO Degradation Fix ⬜ NEXT
+
+**Status:** ⬜ Not Started
+**Goals:** Treat the actual failure mode M3 uncovered. Hypothesis: BC
+pretraining (`models/bc_pretrain.py`) trains the **policy head only** — the
+value head is random at warm-start, and PPO's value loss backpropagates
+through the shared transformer encoder, scrambling the BC-learned features to
+fit the value function. This matches the observed pattern exactly (peaks
+at/near the BC starting point, then decays). None of the standard mitigations
+were tried in M3.
+
+### What to Build
+1. **Real action masks in PPO updates** — store per-step `valid_mask` in
+   `TrajectoryBuffer` and use it in `evaluate_actions()` during `update()`.
+   Today updates use an all-ones mask, so entropy and log-probs are computed
+   over illegal actions. Applies to both agents.
+2. **Value-head warmup** — `--value-warmup-steps N`: freeze `embed`/`encoder`/
+   `policy_head` (`requires_grad=False`) for the first N steps and train only
+   the value head, so the value function fits the BC policy *before* full PPO
+   gradients flow through the encoder.
+3. **KL-anchor to BC** — `--bc-anchor <checkpoint> --bc-anchor-coef 0.05`:
+   keep a frozen copy of the BC policy; add `coef × KL(π_θ ‖ π_BC)` to the
+   loss so PPO can't drift far from human-cloned play. Anneal the coefficient
+   with the existing LR schedule.
+4. **Decision run** — retrain warm-started with all three fixes (fast now, per
+   M3.1), sweep checkpoints, compare against the 51% MLP baseline.
+
+### Success Criteria
+- Warm-started transformer PPO **improves** on its BC starting point instead
+  of decaying, and beats the 51% MLP-PPO baseline
+- If it still fails with these fixes: the transformer is retired, and M4+
+  proceeds on the MLP-PPO architecture — that decision is this milestone's
+  deliverable either way
+
+### Unblocks
+The M4/M5 architecture decision; M3.3
+
+---
+
+## M3.3: Self-Play + Opponent Pool ⬜ AFTER M3.2
+
+**Status:** ⬜ Not Started
+**Goals:** Fix the degenerate-opponent problem. Everything so far trains and
+evaluates against `RandomPlayerAI`, which never voluntarily switches
+(`move: 1.0`) — a weak opponent giving a weak, exploitable learning signal.
+This is the chess-engine-style ingredient the pipeline is missing: AlphaZero's
+strength comes from self-play against improving copies, not a fixed random
+opponent. (MCTS, the other chess ingredient, is already planned as M4.)
+
+### What to Build (design-level; detail when the milestone starts)
+1. **Heuristic opponent first (cheap):** port a DamageFirst-style attacker
+   (reference implementation in `simulate.js`) into `sim/tools/` as a
+   `RandomPlayerAI` subclass; add an `opponent` option to `PokemonGymEnv` +
+   bridge flag + `GymClient`/`VecGymClient` param; `--opponent` on trainers
+   and `evaluate.py`. Fixes evaluation meaningfulness immediately.
+2. **Self-play:** extend `PokemonGymEnv`/bridge with a dual-seat mode — each
+   step returns p2's obs/mask too and accepts both actions; Python runs
+   opponent inference from a frozen checkpoint pool (sample a past checkpoint
+   per episode, league-style).
+
+### Success Criteria
+- Agent trained against the pool beats the fixed-opponent-trained agent
+  head-to-head, and beats the heuristic attacker at a rate the
+  RandomPlayerAI-trained agent cannot match
+- Win rate vs RandomPlayerAI does not regress (sanity floor)
+
+### Unblocks
+Meaningful M4/M5 evaluation opponents; higher-quality training signal for
+whichever architecture M3.2 selects
+
+---
+
+## M4: MCTS Integration ⬜ AFTER M3.2
 
 **Status:** ⬜ Not Started
 **Goals:** Layer UCT-based Monte Carlo Tree Search on top of the trained PPO
@@ -381,7 +492,7 @@ Self-play with MCTS policy (generates higher-quality training data for future fi
 
 ---
 
-## M5: Opponent Modeling Head ⬜ AFTER M3
+## M5: Opponent Modeling Head ⬜ AFTER M3.2
 
 **Status:** ⬜ Not Started
 **Goals:** Add an auxiliary head to the transformer that predicts the opponent's
@@ -488,7 +599,10 @@ Best action
 | M1: Env + Baselines | ✅ | Gym, PPO, DQN, Q-learning | — |
 | M2: Structured State | ✅ | Per-Pokémon token obs (12×65) — verified 51% win rate vs RandomPlayerAI | M3 |
 | M2.5: BC Pretraining | ✅ | Human-replay warm start (Metamon) | M3 |
-| M3: Transformer + PPO | ⬜ | Transformer encoder baseline | M4, M5 |
+| M3: Transformer + PPO | ✅ | Negative result — transformer (peak 46%) never beat the MLP baseline (51%) | M3.1–M3.3 |
+| M3.1: Parallel Training | ✅ | Vectorized envs + batched inference (`--num-envs`) | M3.2, M3.3 |
+| M3.2: BC→PPO Fix | ⬜ | Value warmup + KL-anchor + real masks; decides transformer vs MLP | M4, M5 |
+| M3.3: Self-Play + Opponents | ⬜ | Heuristic opponent, checkpoint-pool self-play | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |

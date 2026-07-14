@@ -12,8 +12,6 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
-from trajectory_buffer import TrajectoryBuffer
-
 
 def _pick_device() -> torch.device:
     if torch.cuda.is_available():
@@ -37,6 +35,7 @@ class PPOAgent(nn.Module):
         max_grad_norm: float = 0.5,
         ppo_epochs: int = 4,
         batch_size: int = 64,
+        device: str | None = None,
     ):
         super().__init__()
 
@@ -61,7 +60,10 @@ class PPOAgent(nn.Module):
         # Value head
         self.value_head = nn.Linear(128, 1)
 
-        self.device = _pick_device()
+        # device is a runtime choice, not a model hyperparameter — it is
+        # deliberately excluded from _hparams so checkpoints stay portable
+        # across machines (Mac/MPS ↔ CUDA box).
+        self.device = torch.device(device) if device else _pick_device()
         self.to(self.device)
 
         # Single optimizer over all parameters
@@ -117,6 +119,39 @@ class PPOAgent(nn.Module):
             float(value.item()),
         )
 
+    @torch.no_grad()
+    def act_batch(
+        self, obs_batch: np.ndarray, valid_masks: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample actions for a batch of observations (one per parallel env).
+
+        Args:
+            obs_batch:   float32 array, shape (N, obs_size).
+            valid_masks: bool array, shape (N, 9). True = action is legal.
+
+        Returns:
+            (actions, log_probs, values) — numpy arrays of shape (N,), dtypes
+            int64/float32/float32.
+        """
+        obs_t = torch.as_tensor(obs_batch, dtype=torch.float32).to(self.device)
+        mask_t = torch.as_tensor(np.asarray(valid_masks, dtype=bool)).to(self.device)
+
+        features = self.trunk(obs_t)
+        logits = self.policy_head(features)
+        values = self.value_head(features).squeeze(-1)
+
+        logits = logits.masked_fill(~mask_t, -1e9)
+
+        dist = Categorical(logits=logits)
+        actions = dist.sample()
+        log_probs = dist.log_prob(actions)
+
+        return (
+            actions.cpu().numpy(),
+            log_probs.cpu().numpy().astype(np.float32),
+            values.cpu().numpy().astype(np.float32),
+        )
+
     # ------------------------------------------------------------------
     # Training helpers
     # ------------------------------------------------------------------
@@ -156,16 +191,19 @@ class PPOAgent(nn.Module):
     # Update
     # ------------------------------------------------------------------
 
-    def update(self, buffer: TrajectoryBuffer) -> float:
-        """Run PPO_EPOCHS passes of minibatch updates over the rollout buffer.
+    def update(self, data) -> float:
+        """Run PPO_EPOCHS passes of minibatch updates over one rollout batch.
 
         Args:
-            buffer: A TrajectoryBuffer with compute_advantages() already called.
+            data: Either a tensor dict as produced by
+                  TrajectoryBuffer.get_tensors() / merge_buffers(), or a
+                  TrajectoryBuffer with compute_advantages() already called.
 
         Returns:
             Mean total loss (float) across all minibatch updates.
         """
-        data = buffer.get_tensors()
+        if hasattr(data, "get_tensors"):
+            data = data.get_tensors()
         obs = data["obs"].to(self.device)
         actions = data["actions"].to(self.device)
         returns = data["returns"].to(self.device)
@@ -246,18 +284,20 @@ class PPOAgent(nn.Module):
         )
 
     @classmethod
-    def load(cls, path: str) -> "PPOAgent":
+    def load(cls, path: str, device: str | None = None) -> "PPOAgent":
         """Reconstruct an agent from a checkpoint file.
 
         Args:
-            path: Path to a .pt file written by save().
+            path:   Path to a .pt file written by save().
+            device: Optional device override ("cpu"/"mps"/"cuda"); auto-detected
+                    when omitted.
 
         Returns:
             Fully restored PPOAgent instance.
         """
         checkpoint = torch.load(path, map_location="cpu")
         hparams = checkpoint["hparams"]
-        agent = cls(**hparams)  # device auto-detected in __init__
+        agent = cls(**hparams, device=device)  # device auto-detected when None
         agent.trunk.load_state_dict(checkpoint["trunk"])
         agent.policy_head.load_state_dict(checkpoint["policy_head"])
         agent.value_head.load_state_dict(checkpoint["value_head"])

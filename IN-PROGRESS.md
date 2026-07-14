@@ -1,15 +1,24 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 ---
 
 ## Current Work
 
-**Milestone:** M3 (Transformer Encoder + PPO, BC warm-start) — **concluded, negative result.** The transformer does not beat the 51% MLP-PPO baseline at any point across two full training runs (~90 total checkpoints evaluated), and PPO training on this architecture does not improve monotonically with more steps — it peaks early (near the BC-pretrained starting point) and then degrades, either violently (uncontrolled run) or gradually (stability-fixed run). Per `MILESTONES.md`'s own stated M3 recommendation, **M4 (MCTS) and M5 (opponent modeling) should not proceed on top of this architecture** until/unless this is revisited.
-**Phase:** Done. See "Recently Completed" for the full experimental trail (from-scratch, warm-started, extended warm-started with a mid-run checkpoint sweep revealing collapse, and a stability-fix retrain with KL early-stopping + LR annealing that changed the failure mode but not the outcome).
+**Milestone:** M3.1 (Parallel Training Infrastructure) — **complete (2026-07-14).** Post-M3 direction decided: rather than shipping the MLP or adding token complexity, the roadmap now runs M3.1 (parallelize training/eval) → M3.2 (fix the diagnosed BC→PPO degradation: untrained value head backprops through the shared encoder and scrambles BC features — value warmup + KL-anchor-to-BC + real action masks in updates) → M3.3 (self-play + opponent pool, replacing the degenerate never-switching `RandomPlayerAI` as sole opponent). M4/M5 resume after M3.2 decides transformer-vs-MLP. Full specs in `MILESTONES.md`.
 
-### Active Tasks (M3) — all resolved
+### Active Tasks (M3.1) — all resolved
+- [x] `models/vec_gym_client.py` — `VecGymClient(n_envs, structured)`: N parallel `gym_bridge.js` subprocesses, pipelined write-all/read-all stepping, auto-reset on done, per-env errors reset in place and surface as `infos[i]["error"]`
+- [x] `models/gym_client.py` — `_send()` split into `_write()`/`_read()` for pipelining
+- [x] `models/{ppo,transformer}` agents — `act_batch()` batched inference; `update()` accepts merged tensor dict; `device=` override (excluded from checkpoint hparams so checkpoints stay Mac↔CUDA portable); `load(path, device=...)`
+- [x] `models/ppo/trajectory_buffer.py` — `compute_advantages(normalize=...)` + `merge_buffers()` (per-env GAE, global advantage normalization)
+- [x] Both trainers — `--num-envs` (default 8) + `--device`; vectorized rollout collection; checkpointing/`--resume`/LR-annealing unchanged (keyed off `total_steps`)
+- [x] `models/evaluate.py` — `--num-envs` + `--device`; per-env battle quotas keep counts exact; q/dqn fall back to per-env `act()`
+- [x] Verified: vec smoke (4 envs, 800 steps, auto-reset), 600-step train smokes (transformer + PPO both obs modes), checkpoint load round-trips, `--resume` continues at step 600 with LR intact, **M2 51% checkpoint evaluates 49% (49/100) through the parallel path in 4.8s**
+- [x] Benchmarks: transformer eval 100 battles 20.2s → 5.6s at 8 envs (3.6x); training throughput table in `docs/ML-TRAINING.md`
+
+### Active Tasks (M3, concluded) — all resolved
 - [x] `models/transformer/transformer_agent.py` — `TransformerAgent(nn.Module)`, PPO wrapper composing `TransformerPolicy` as `self.policy` (composition, not subclassing, so BC checkpoint keys stay unprefixed and loadable). Later extended with `target_kl` approx-KL early-stopping (see below)
 - [x] `models/transformer/train.py` — rollout/GAE/checkpoint training loop mirroring `models/ppo/train.py`; always structured `(12,65)` unflattened; `--pretrain_checkpoint` flag calls `load_pretrain_checkpoint(agent.policy, path)` before PPO starts; checkpoints split into `checkpoints/{scratch,pretrained}/`; `--resume <checkpoint>` restores full agent+optimizer state and parses the starting step count from the filename. Later extended with linear LR annealing toward 0 over `--steps` (see below)
 - [x] `models/evaluate.py` — added `--model transformer`; split the old single `structured` bool in `_run_battles` into `structured`/`flatten` so the transformer gets raw `(12,65)` while PPO-structured still gets flattened `(780,)`
@@ -49,7 +58,13 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 
 ## Active Plan
 
-**M3 Execution Plan — code phase complete, training phase in progress:**
+**Post-M3 roadmap (decided 2026-07-14): M3.1 → M3.2 → M3.3, then resume M4+**
+
+1. ~~**M3.1 Parallel training infrastructure**~~ ✅ Done (see Active Tasks above)
+2. **M3.2 BC→PPO degradation fix** — next up. Store real action masks in the buffer and use them in `update()`; `--value-warmup-steps` (freeze embed/encoder/policy_head, train value head only); `--bc-anchor`/`--bc-anchor-coef` (KL to frozen BC policy); then a full warm-started decision run vs the 51% MLP baseline. Full spec in `MILESTONES.md` → M3.2.
+3. **M3.3 Self-play + opponent pool** — heuristic DamageFirst-style opponent wired through gym/bridge/trainers/eval first, then dual-seat self-play against a frozen checkpoint pool. Full spec in `MILESTONES.md` → M3.3.
+
+**M3 Execution Plan — concluded (negative result):**
 
 1. ~~**`TransformerAgent`** (composes `TransformerPolicy`, PPO wrapper)~~ ✅ Done
 2. ~~**`models/transformer/train.py`** (rollout PPO loop, `--pretrain_checkpoint` warm-start, `--resume`)~~ ✅ Done
@@ -72,6 +87,14 @@ M2 is fully complete (see below).
 ---
 
 ## Recently Completed
+
+✅ **M3.1: Parallel training infrastructure** (2026-07-14)
+- Root-caused training slowness: fully serial pipeline (one bridge subprocess, one battle at a time, batch-1 inference every step — GPU mostly idle). Built `models/vec_gym_client.py` (`VecGymClient`): N parallel `gym_bridge.js` subprocesses with pipelined stepping (write all N commands, then read all N responses — Python waits only for the slowest env) and auto-reset on episode end
+- Batched inference (`act_batch()`) on both `PPOAgent` and `TransformerAgent`; per-env `TrajectoryBuffer`s with `merge_buffers()` doing global advantage normalization (GAE never crosses env streams); `--num-envs` (default 8) + `--device` on both trainers and `evaluate.py`
+- Device facts recorded in `docs/ML-TRAINING.md`: CUDA auto-detected already (RTX 3080 box = clone + build + CUDA torch, zero code changes; checkpoints portable both directions); Apple Neural Engine is unreachable from PyTorch (CoreML-only) — MPS is the Mac backend and was already in use
+- Verified end-to-end: vec smoke, train smokes (both trainers, both PPO obs modes), checkpoint round-trips, `--resume`, and the M2 51% MLP checkpoint reads 49% (49/100) through the parallel path — old checkpoints fully compatible
+- Measured: transformer eval 100 battles 20.2s → 5.6s (8 envs); training throughput table in `docs/ML-TRAINING.md`
+- Roadmap updated: new M3.1/M3.2/M3.3 milestones in `MILESTONES.md`; M4/M5 resume after M3.2's architecture decision
 
 ✅ **M3 concluded: stability-fix retrain confirms negative result** (2026-07-13)
 - Extended the 2.6M-step warm-started run to 7.6M steps via `--resume`, then swept all 21 intermediate checkpoints (150 battles each) to see the full trajectory rather than just two data points. Result: the run peaked at **46% win rate** around 2.5M–3.1M steps, then **collapsed violently** — 0–13% win rate between 3.6M and 5.6M steps, a partial recovery to 32% at 6.1M, then drifting to 24% by 7.6M. This is a much more severe finding than the earlier two-point (41%→24%) comparison suggested: it's not gradual drift, it's repeated near-total collapse and partial recovery, consistent with an unconstrained PPO update occasionally wrecking the policy's learned move-vs-switch balance (any policy that over-favors switching loses almost every game to `RandomPlayerAI`, which never voluntarily switches)
@@ -226,13 +249,20 @@ None. All components verified and working.
 ### M3 — Transformer + PPO
 ✅ **Complete — negative result (2026-07-13).** Two full training runs (from-scratch 2.6M steps, warm-started up to 7.6M steps, plus a stability-fixed warm-started retrain to 5M steps) and ~40 evaluated checkpoints all agree: transformer PPO tops out at **46%** win rate vs RandomPlayerAI, never beating (or sustainably matching) the M2 MLP-PPO baseline's **51%**. Continued PPO fine-tuning degrades performance from its early/BC-pretrained peak rather than improving it. See "Recently Completed" for the full diagnostic trail. Nothing left to run here — this is the final M3 result.
 
-### Immediate (post-M3 decision needed)
-- **M4 (MCTS) / M5 (opponent modeling) / M6 (server) are on hold**, per `MILESTONES.md`'s own M3 recommendation — none of them should be built on top of an architecture that lost to the simpler MLP baseline. This needs a human decision on direction, options include:
-  - Ship the M2 MLP-PPO checkpoint (51%) as the project's baseline model and proceed to M4/M5/M6 with that architecture instead of the transformer
-  - Root-cause *why* PPO fine-tuning degrades the BC-pretrained transformer (e.g. try a much lower LR from step 1, explicit KL-to-BC-init regularization, or simply freezing at an early checkpoint) before deciding whether the transformer is worth continuing to invest in
-  - Treat M3 as closed and move on
+### M3.1 — Parallel Training
+✅ Complete (2026-07-14). `--num-envs 8` is the new default on both trainers and `evaluate.py`.
 
-### Stretch (deprioritized until the above is decided)
+### Immediate (M3.2 — BC→PPO degradation fix)
+Direction was decided 2026-07-14 (root-cause the degradation rather than ship the MLP or add token complexity). Implement per `MILESTONES.md` → M3.2:
+1. Store per-step `valid_mask` in `TrajectoryBuffer`; use real masks in both agents' `update()`
+2. `--value-warmup-steps` (freeze embed/encoder/policy_head; value head only)
+3. `--bc-anchor` + `--bc-anchor-coef` (KL to frozen BC policy, annealed)
+4. Full warm-started decision run + checkpoint sweep vs the 51% MLP baseline — **this run decides transformer vs MLP for M4+**
+
+### Then (M3.3 — self-play + opponent pool)
+Heuristic DamageFirst-style opponent through gym/bridge/CLI first; dual-seat self-play with a frozen checkpoint pool second. Spec in `MILESTONES.md` → M3.3.
+
+### Stretch (deprioritized until M3.2/M3.3 conclude)
 - Attention weight visualization to confirm non-uniform attention
 - Start scoping MCTS determinizer (opponent team sampling from gen1 usage data)
 

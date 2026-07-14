@@ -100,6 +100,34 @@ Always call `reset()` before starting a training episode.
 - **Python hangs on readline** — `gym_bridge.js` writes all unhandled exceptions to stdout as `{"error":"..."}`, so a hang usually means the Node process crashed before writing any response. Check `self._proc.stderr` for Node startup errors (stderr is captured via `subprocess.PIPE`).
 - **Bridge stderr** — available via `self._proc.stderr` for debugging Node.js startup failures such as missing modules or syntax errors.
 
+## Parallel Training (M3.1)
+
+Training and evaluation run `--num-envs` parallel battle simulations (default 8). `models/vec_gym_client.py`'s `VecGymClient` manages N `gym_bridge.js` subprocesses — one Node event loop (and CPU core) per env — and pipelines each step: all N commands are written before any response is read, so Python waits only for the slowest env. Finished episodes auto-reset; the trainer never calls `reset()` after startup. Inference is batched over all envs' observations (`act_batch()` on `PPOAgent`/`TransformerAgent`), and each env keeps its own `TrajectoryBuffer` so GAE never crosses episode streams (`merge_buffers()` combines them and normalizes advantages globally before each PPO update).
+
+```bash
+python models/transformer/train.py --steps 2600000 --num-envs 8
+python models/ppo/train.py --structured --steps 2600000 --num-envs 8
+python models/evaluate.py --model transformer --checkpoint <ckpt> --battles 500 --num-envs 8
+```
+
+`--num-envs 1` uses the same code path and reproduces the old serial behavior.
+
+### Measured throughput (Apple Silicon Mac, MPS, transformer PPO, 16,384 steps, rollout 512)
+
+| num_envs | Wall time | Steps/sec | Speedup |
+|---|---|---|---|
+| 1 (old serial) | 58.5s | ~280 | 1x |
+| 8 | 11.6s | ~1,410 | 5.0x (≈6x steady-state after ~2.5s process startup) |
+
+At 8 envs, a 2.6M-step training run drops from ~2.6 hours to ~30 minutes. Evaluation: 100 transformer battles went from 20.2s to 5.6s. Gains flatten past 8 envs on this machine (16 envs measured only marginally faster); benchmark before assuming more envs helps.
+
+### Devices: CUDA, MPS, and the Neural Engine
+
+- `--device {cpu,mps,cuda}` overrides auto-detection (CUDA → MPS → CPU) on both trainers and `evaluate.py`. Device is a runtime choice, deliberately **not** stored in checkpoints — they are portable across machines in both directions (`torch.load(..., map_location="cpu")`).
+- **Training on a CUDA machine (e.g. RTX 3080):** no code changes needed. Clone the repo, run `./build`, install a CUDA build of PyTorch (`pip install torch --index-url https://download.pytorch.org/whl/cu121`), and run the same commands — CUDA is auto-detected. Copy checkpoints back and forth freely.
+- **Apple Neural Engine:** not usable. Apple exposes the ANE only through CoreML, which cannot train and which PyTorch does not target. MPS (the GPU) is the correct Mac backend and is what auto-detection picks on Apple Silicon.
+- For these small models at small batch sizes, `--device cpu` can outperform MPS due to per-op dispatch overhead; the gap narrows as `--num-envs` (and thus inference batch size) grows. Benchmark a short run before committing to a long one.
+
 ## The Training Loop (Manual — if not using the gym)
 
 ```

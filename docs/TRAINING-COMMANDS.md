@@ -51,6 +51,8 @@ python models/ppo/train.py
 | `--rollout-steps N` | 512 | How many steps to collect before doing a weight update. Larger = more stable but slower to update. |
 | `--checkpoint-every N` | 25000 | Save weights every N steps. |
 | `--structured` | off | Train on the M2 (12,65)->780 flattened structured observation instead of the legacy flat 100-dim vector. Checkpoints go to `checkpoints/structured/`. |
+| `--num-envs N` | 8 | Parallel battle simulations (M3.1, ~5x throughput at 8). `1` = old serial behavior. |
+| `--device D` | auto | Force `cpu`, `mps`, or `cuda` (default auto-detects cuda > mps > cpu). |
 
 **Example — short run:**
 ```bash
@@ -58,6 +60,14 @@ python models/ppo/train.py --steps 5000 --rollout-steps 256 --checkpoint-every 1
 ```
 
 Saves checkpoints to `models/ppo/checkpoints/ppo_step_XXXXX.pt`.
+
+---
+
+### Model D — Transformer PPO (M3)
+```bash
+python models/transformer/train.py --steps 2600000 --checkpoint-every 250000 --num-envs 8
+```
+Same flags as PPO (minus `--structured` — the transformer always consumes the raw `(12,65)` tokens), plus `--pretrain_checkpoint` (BC warm-start) and `--resume`. See `models/CLAUDE.md` for the full quick-start block. Note: M3 concluded with this architecture **losing** to the MLP-PPO baseline (46% vs 51%); retraining it is gated on the M3.2 fixes in `MILESTONES.md`.
 
 ---
 
@@ -69,10 +79,12 @@ python models/evaluate.py --model MODEL --checkpoint PATH
 
 | Flag | Required? | What it does |
 |---|---|---|
-| `--model` | Yes | Which model type: `q_learning`, `dqn`, or `ppo` |
-| `--checkpoint` | Yes | Path to the saved file (`.pkl` for Q-learning, `.pt` for DQN/PPO) |
+| `--model` | Yes | Which model type: `q_learning`, `dqn`, `ppo`, or `transformer` |
+| `--checkpoint` | Yes | Path to the saved file (`.pkl` for Q-learning, `.pt` for the rest) |
 | `--battles N` | No (default 200) | How many test battles to run. More = more accurate win rate. |
 | `--structured` | No | Evaluate a PPO checkpoint trained with `train.py --structured` (M2 verification). |
+| `--num-envs N` | No (default 8) | Parallel battle simulations. `1` = old serial behavior. |
+| `--device D` | No (default auto) | Force `cpu`/`mps`/`cuda` for ppo/transformer inference. |
 
 **Examples:**
 ```bash

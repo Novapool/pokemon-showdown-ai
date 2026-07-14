@@ -43,6 +43,7 @@ class TransformerAgent(nn.Module):
         ppo_epochs: int = 4,
         batch_size: int = 64,
         target_kl: float = 0.02,
+        device: str | None = None,
     ):
         super().__init__()
 
@@ -65,7 +66,10 @@ class TransformerAgent(nn.Module):
             dropout=dropout,
         )
 
-        self.device = _pick_device()
+        # device is a runtime choice, not a model hyperparameter — it is
+        # deliberately excluded from _hparams so checkpoints stay portable
+        # across machines (Mac/MPS ↔ CUDA box).
+        self.device = torch.device(device) if device else _pick_device()
         self.to(self.device)
 
         # Single optimizer over all parameters
@@ -125,6 +129,36 @@ class TransformerAgent(nn.Module):
             float(value.item()),
         )
 
+    @torch.no_grad()
+    def act_batch(
+        self, obs_batch: np.ndarray, valid_masks: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Sample actions for a batch of observations (one per parallel env).
+
+        Args:
+            obs_batch:   float32 array, shape (N, 12, 65).
+            valid_masks: bool array, shape (N, 9). True = action is legal.
+
+        Returns:
+            (actions, log_probs, values) — numpy arrays of shape (N,), dtypes
+            int64/float32/float32.
+        """
+        obs_t = torch.as_tensor(obs_batch, dtype=torch.float32).to(self.device)
+        mask_t = torch.as_tensor(np.asarray(valid_masks, dtype=bool)).to(self.device)
+
+        logits, values = self.policy(obs_t)
+        logits = logits.masked_fill(~mask_t, -1e9)
+
+        dist = Categorical(logits=logits)
+        actions = dist.sample()
+        log_probs = dist.log_prob(actions)
+
+        return (
+            actions.cpu().numpy(),
+            log_probs.cpu().numpy().astype(np.float32),
+            values.cpu().numpy().astype(np.float32),
+        )
+
     # ------------------------------------------------------------------
     # Training helpers
     # ------------------------------------------------------------------
@@ -161,19 +195,23 @@ class TransformerAgent(nn.Module):
     # Update
     # ------------------------------------------------------------------
 
-    def update(self, buffer) -> tuple[float, bool]:
-        """Run PPO_EPOCHS passes of minibatch updates over the rollout buffer.
+    def update(self, data) -> tuple[float, bool]:
+        """Run PPO_EPOCHS passes of minibatch updates over one rollout batch.
 
         Args:
-            buffer: A TrajectoryBuffer (models/ppo/trajectory_buffer.py) with
-                    compute_advantages() already called. obs tensors here are
-                    (T, 12, 65) rather than (T, obs_size), but evaluate_actions()
-                    already handles that shape via TransformerPolicy.forward().
+            data: Either a tensor dict as produced by
+                  TrajectoryBuffer.get_tensors() / merge_buffers()
+                  (models/ppo/trajectory_buffer.py), or a TrajectoryBuffer
+                  with compute_advantages() already called. obs tensors here
+                  are (T, 12, 65) rather than (T, obs_size), but
+                  evaluate_actions() already handles that shape via
+                  TransformerPolicy.forward().
 
         Returns:
             (mean total loss, whether the approx-KL early-stop triggered).
         """
-        data = buffer.get_tensors()
+        if hasattr(data, "get_tensors"):
+            data = data.get_tensors()
         obs = data["obs"].to(self.device)
         actions = data["actions"].to(self.device)
         returns = data["returns"].to(self.device)
@@ -270,18 +308,20 @@ class TransformerAgent(nn.Module):
         )
 
     @classmethod
-    def load(cls, path: str) -> "TransformerAgent":
+    def load(cls, path: str, device: str | None = None) -> "TransformerAgent":
         """Reconstruct an agent from a checkpoint file.
 
         Args:
-            path: Path to a .pt file written by save().
+            path:   Path to a .pt file written by save().
+            device: Optional device override ("cpu"/"mps"/"cuda"); auto-detected
+                    when omitted.
 
         Returns:
             Fully restored TransformerAgent instance.
         """
         checkpoint = torch.load(path, map_location="cpu")
         hparams = checkpoint["hparams"]
-        agent = cls(**hparams)  # device auto-detected in __init__
+        agent = cls(**hparams, device=device)  # device auto-detected when None
         agent.policy.load_state_dict(checkpoint["policy"])
         agent.optimizer.load_state_dict(checkpoint["optimizer"])
         return agent

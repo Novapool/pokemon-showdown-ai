@@ -22,6 +22,10 @@ Unlike models/ppo/train.py, this loop always uses the M2 structured (12, 65)
 observation un-flattened — there is no --structured flag, since the
 transformer consumes per-token structure directly and has no other obs mode.
 
+Rollouts are collected from --num-envs parallel battle simulations (M3.1):
+each env is its own gym_bridge.js subprocess, and inference runs batched over
+all envs' observations. --num-envs 1 uses the same code path.
+
 Note: --steps counts environment steps, not battles (~50 steps/battle at the
 M2 baseline). See models/ppo/train.py's docstring for the same caveat.
 """
@@ -31,14 +35,14 @@ import re
 import sys
 from pathlib import Path
 
-# Resolve models/ directory so gym_client is importable
+# Resolve models/ directory so vec_gym_client is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from gym_client import GymClient  # noqa: E402
+from vec_gym_client import VecGymClient  # noqa: E402
 
 # trajectory_buffer lives in models/ppo/; transformer_agent.py imports it too,
 # so this path must be inserted before transformer_agent is imported below.
 sys.path.insert(0, str(Path(__file__).parent.parent / "ppo"))
-from trajectory_buffer import TrajectoryBuffer  # noqa: E402
+from trajectory_buffer import TrajectoryBuffer, merge_buffers  # noqa: E402
 
 # transformer_agent and transformer_policy live alongside this script
 sys.path.insert(0, str(Path(__file__).parent))
@@ -89,6 +93,18 @@ def parse_args() -> argparse.Namespace:
             "the original run started from)."
         ),
     )
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=8,
+        help="Number of parallel battle environments (default: 8)",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "mps", "cuda"],
+        default=None,
+        help="Torch device override (default: auto-detect cuda > mps > cpu)",
+    )
     return parser.parse_args()
 
 
@@ -103,17 +119,20 @@ def main() -> None:
     total_budget = args.steps
     rollout_steps = args.rollout_steps
     checkpoint_every = args.checkpoint_every
+    num_envs = args.num_envs
 
-    buffer = TrajectoryBuffer()
-    env = GymClient(structured=True)  # transformer always takes raw (12, 65) tokens
+    # One buffer per env — GAE must never cross env streams. merge_buffers()
+    # combines them (and normalizes advantages globally) before each update.
+    buffers = [TrajectoryBuffer() for _ in range(num_envs)]
+    env = VecGymClient(num_envs, structured=True)  # transformer always takes raw (12, 65) tokens
 
-    obs, valid_mask = env.reset()
+    obs_batch, masks = env.reset_all()
 
     if args.resume:
         # Same directory as the checkpoint being resumed, so this run keeps
         # appending to whichever scratch/pretrained sequence it came from.
         checkpoint_dir = Path(args.resume).parent
-        agent = TransformerAgent.load(args.resume)
+        agent = TransformerAgent.load(args.resume, device=args.device)
         match = re.search(r"step_(\d+)", Path(args.resume).stem)
         if not match:
             raise ValueError(f"Cannot parse step count from --resume filename: {args.resume}")
@@ -124,7 +143,7 @@ def main() -> None:
         # never overwrite each other's checkpoints at the same step count.
         run_mode = "pretrained" if args.pretrain_checkpoint else "scratch"
         checkpoint_dir = Path(__file__).parent / "checkpoints" / run_mode
-        agent = TransformerAgent()
+        agent = TransformerAgent(device=args.device)
         if args.pretrain_checkpoint:
             # Must load into agent.policy, not agent — TransformerAgent composes
             # TransformerPolicy as self.policy, so agent.state_dict() keys are
@@ -139,6 +158,7 @@ def main() -> None:
     print(
         f"Starting Transformer PPO training: {total_budget} steps | "
         f"obs_mode=structured (12,65) | rollout={rollout_steps} steps | "
+        f"num_envs={num_envs} | device={agent.device} | "
         f"checkpoint every {checkpoint_every} steps | "
         f"pretrain={args.pretrain_checkpoint or 'none (from scratch)'} | "
         f"resumed_from={args.resume or 'none'} (starting at step {total_steps})",
@@ -150,40 +170,43 @@ def main() -> None:
     rollout_episodes = 0
 
     try:
-        done = False
-
         while total_steps < total_budget:
             # ----------------------------------------------------------------
-            # Collect one rollout
+            # Collect one rollout across all envs
             # ----------------------------------------------------------------
             rollout_wins = 0
             rollout_episodes = 0
+            steps_this_rollout = 0
 
-            for _ in range(rollout_steps):
-                if total_steps >= total_budget:
-                    break
+            while steps_this_rollout < rollout_steps and total_steps < total_budget:
+                actions, log_probs, values = agent.act_batch(obs_batch, masks)
+                next_obs, rewards, dones, infos, masks = env.step(actions)
 
-                action, log_prob, value = agent.act(obs, valid_mask)
-                try:
-                    next_obs, reward, done, info, valid_mask = env.step(action)
-                except RuntimeError as e:
-                    print(f"  [step {total_steps}] step error ({e}) — resetting", flush=True)
-                    obs, valid_mask = env.reset()
-                    done = False
-                    continue
+                for i in range(num_envs):
+                    if "error" in infos[i]:
+                        # Env was reset in place by VecGymClient; drop this slot's
+                        # transition (same reset-and-continue handling as before).
+                        print(
+                            f"  [step {total_steps}] env {i} error ({infos[i]['error']}) — reset",
+                            flush=True,
+                        )
+                        continue
+                    buffers[i].push(
+                        obs_batch[i],
+                        int(actions[i]),
+                        float(rewards[i]),
+                        bool(dones[i]),
+                        float(values[i]),
+                        float(log_probs[i]),
+                    )
+                    if dones[i]:
+                        rollout_episodes += 1
+                        if infos[i].get("winner") == "Gym":
+                            rollout_wins += 1
 
-                buffer.push(obs, action, reward, done, value, log_prob)
-
-                obs = next_obs
-                total_steps += 1
-
-                if done:
-                    rollout_episodes += 1
-                    if info.get("winner") == "Gym":
-                        rollout_wins += 1
-                    # Start a new episode immediately
-                    obs, valid_mask = env.reset()
-                    done = False
+                obs_batch = next_obs
+                total_steps += num_envs
+                steps_this_rollout += num_envs
 
                 # Checkpoint on step boundary
                 if total_steps - last_checkpoint_step >= checkpoint_every:
@@ -195,17 +218,22 @@ def main() -> None:
             # ----------------------------------------------------------------
             # Compute advantages and update
             # ----------------------------------------------------------------
-            if len(buffer) == 0:
+            if all(len(b) == 0 for b in buffers):
                 break
 
-            if done:
-                last_value = 0.0
-            else:
-                _, _, last_value = agent.act(obs, valid_mask)
+            # Bootstrap each env from the value of its current obs. Where an
+            # env's last stored transition was terminal, GAE's not_done factor
+            # zeroes the bootstrap, so passing the fresh-episode value is safe.
+            _, _, last_values = agent.act_batch(obs_batch, masks)
+            for i in range(num_envs):
+                if len(buffers[i]) > 0:
+                    buffers[i].compute_advantages(
+                        last_value=float(last_values[i]), normalize=False
+                    )
 
-            buffer.compute_advantages(last_value=last_value)
-            loss, kl_early_stop = agent.update(buffer)
-            buffer.clear()
+            loss, kl_early_stop = agent.update(merge_buffers(buffers))
+            for b in buffers:
+                b.clear()
 
             # Linear LR annealing toward 0 over the training budget — late-run
             # updates on a mostly-converged policy shouldn't be as aggressive

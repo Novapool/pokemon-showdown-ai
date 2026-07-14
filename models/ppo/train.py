@@ -12,7 +12,11 @@ Usage:
 
 The loop collects rollout_steps environment steps per update cycle regardless
 of episode boundaries.  When a 'done' signal arrives mid-rollout, the
-environment is reset immediately so collection continues seamlessly.
+environment is auto-reset so collection continues seamlessly.
+
+Rollouts are collected from --num-envs parallel battle simulations (M3.1):
+each env is its own gym_bridge.js subprocess, and inference runs batched over
+all envs' observations. --num-envs 1 uses the same code path.
 
 Note: --steps counts steps, not battles. At ~50 steps/battle, hitting a
 target battle count (e.g. the M2/M3 milestone success criteria, which are
@@ -24,17 +28,15 @@ import argparse
 import sys
 from pathlib import Path
 
-import numpy as np
-
-# Resolve models/ directory so gym_client and ppo modules are importable
+# Resolve models/ directory so vec_gym_client and ppo modules are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from gym_client import GymClient          # noqa: E402
+from vec_gym_client import VecGymClient   # noqa: E402
 
 # ppo_agent and trajectory_buffer live alongside this script
 sys.path.insert(0, str(Path(__file__).parent))
 from ppo_agent import PPOAgent            # noqa: E402
-from trajectory_buffer import TrajectoryBuffer  # noqa: E402
+from trajectory_buffer import TrajectoryBuffer, merge_buffers  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,6 +68,18 @@ def parse_args() -> argparse.Namespace:
             "checkpoints/structured/ to avoid colliding with the M1 baseline."
         ),
     )
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=8,
+        help="Number of parallel battle environments (default: 8)",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["cpu", "mps", "cuda"],
+        default=None,
+        help="Torch device override (default: auto-detect cuda > mps > cpu)",
+    )
     return parser.parse_args()
 
 
@@ -74,31 +88,33 @@ def main() -> None:
     total_budget = args.steps
     rollout_steps = args.rollout_steps
     checkpoint_every = args.checkpoint_every
+    num_envs = args.num_envs
 
     checkpoint_dir = Path(__file__).parent / "checkpoints" / ("structured" if args.structured else ".")
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    buffer = TrajectoryBuffer()
-    env = GymClient(structured=args.structured)
+    # One buffer per env — GAE must never cross env streams. merge_buffers()
+    # combines them (and normalizes advantages globally) before each update.
+    buffers = [TrajectoryBuffer() for _ in range(num_envs)]
+    env = VecGymClient(num_envs, structured=args.structured)
 
-    def _reset():
-        o, mask = env.reset()
-        return (o.reshape(-1) if args.structured else o), mask
+    def _flatten(o):
+        # The MLP consumes flat vectors: (N, 12, 65) -> (N, 780) in structured
+        # mode; flat mode is already (N, 100).
+        return o.reshape(num_envs, -1) if args.structured else o
 
-    def _step(action):
-        o, r, d, info, mask = env.step(action)
-        return (o.reshape(-1) if args.structured else o), r, d, info, mask
-
-    obs, valid_mask = _reset()
+    obs_batch, masks = env.reset_all()
+    obs_batch = _flatten(obs_batch)
     # obs_size is derived from the actual observation rather than hardcoded,
     # so this loop works for both the M1 flat vector (100) and the M2
     # structured flatten (780) without duplicating the PPOAgent class.
-    agent = PPOAgent(obs_size=obs.shape[0])
+    agent = PPOAgent(obs_size=obs_batch.shape[1], device=args.device)
 
     print(
         f"Starting PPO training: {total_budget} steps | "
-        f"obs_mode={'structured' if args.structured else 'flat'} (obs_size={obs.shape[0]}) | "
+        f"obs_mode={'structured' if args.structured else 'flat'} (obs_size={obs_batch.shape[1]}) | "
         f"rollout={rollout_steps} steps | "
+        f"num_envs={num_envs} | device={agent.device} | "
         f"checkpoint every {checkpoint_every} steps",
         flush=True,
     )
@@ -111,40 +127,44 @@ def main() -> None:
     rollout_episodes = 0
 
     try:
-        done = False
-
         while total_steps < total_budget:
             # ----------------------------------------------------------------
-            # Collect one rollout
+            # Collect one rollout across all envs
             # ----------------------------------------------------------------
             rollout_wins = 0
             rollout_episodes = 0
+            steps_this_rollout = 0
 
-            for _ in range(rollout_steps):
-                if total_steps >= total_budget:
-                    break
+            while steps_this_rollout < rollout_steps and total_steps < total_budget:
+                actions, log_probs, values = agent.act_batch(obs_batch, masks)
+                next_obs, rewards, dones, infos, masks = env.step(actions)
+                next_obs = _flatten(next_obs)
 
-                action, log_prob, value = agent.act(obs, valid_mask)
-                try:
-                    next_obs, reward, done, info, valid_mask = _step(action)
-                except RuntimeError as e:
-                    print(f"  [step {total_steps}] step error ({e}) — resetting", flush=True)
-                    obs, valid_mask = _reset()
-                    done = False
-                    continue
+                for i in range(num_envs):
+                    if "error" in infos[i]:
+                        # Env was reset in place by VecGymClient; drop this slot's
+                        # transition (same reset-and-continue handling as before).
+                        print(
+                            f"  [step {total_steps}] env {i} error ({infos[i]['error']}) — reset",
+                            flush=True,
+                        )
+                        continue
+                    buffers[i].push(
+                        obs_batch[i],
+                        int(actions[i]),
+                        float(rewards[i]),
+                        bool(dones[i]),
+                        float(values[i]),
+                        float(log_probs[i]),
+                    )
+                    if dones[i]:
+                        rollout_episodes += 1
+                        if infos[i].get("winner") == "Gym":
+                            rollout_wins += 1
 
-                buffer.push(obs, action, reward, done, value, log_prob)
-
-                obs = next_obs
-                total_steps += 1
-
-                if done:
-                    rollout_episodes += 1
-                    if info.get("winner") == "Gym":
-                        rollout_wins += 1
-                    # Start a new episode immediately
-                    obs, valid_mask = _reset()
-                    done = False
+                obs_batch = next_obs
+                total_steps += num_envs
+                steps_this_rollout += num_envs
 
                 # Checkpoint on step boundary
                 if total_steps - last_checkpoint_step >= checkpoint_every:
@@ -156,17 +176,22 @@ def main() -> None:
             # ----------------------------------------------------------------
             # Compute advantages and update
             # ----------------------------------------------------------------
-            if len(buffer) == 0:
+            if all(len(b) == 0 for b in buffers):
                 break
 
-            if done:
-                last_value = 0.0
-            else:
-                _, _, last_value = agent.act(obs, valid_mask)
+            # Bootstrap each env from the value of its current obs. Where an
+            # env's last stored transition was terminal, GAE's not_done factor
+            # zeroes the bootstrap, so passing the fresh-episode value is safe.
+            _, _, last_values = agent.act_batch(obs_batch, masks)
+            for i in range(num_envs):
+                if len(buffers[i]) > 0:
+                    buffers[i].compute_advantages(
+                        last_value=float(last_values[i]), normalize=False
+                    )
 
-            buffer.compute_advantages(last_value=last_value)
-            loss = agent.update(buffer)
-            buffer.clear()
+            loss = agent.update(merge_buffers(buffers))
+            for b in buffers:
+                b.clear()
 
             # ----------------------------------------------------------------
             # Log rollout summary

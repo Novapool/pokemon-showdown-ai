@@ -51,13 +51,18 @@ class TrajectoryBuffer:
     # Advantage computation
     # ------------------------------------------------------------------
 
-    def compute_advantages(self, last_value: float) -> None:
+    def compute_advantages(self, last_value: float, normalize: bool = True) -> None:
         """Compute GAE advantages and discounted returns.
 
         Args:
             last_value: Bootstrap value for the state after the final step in
                         the rollout.  Pass 0.0 if the rollout ended on a
                         terminal state.
+            normalize:  Whether to normalize advantages in place. Pass False
+                        when this buffer is one of several per-env buffers
+                        that will be combined with merge_buffers(), which
+                        normalizes globally — normalizing each small per-env
+                        buffer separately skews the update.
         """
         n = len(self._rewards)
         advantages = np.zeros(n, dtype=np.float32)
@@ -78,10 +83,10 @@ class TrajectoryBuffer:
             returns[t] = advantages[t] + self._values[t]
             next_value = self._values[t]
 
-        # Normalize advantages
-        adv_mean = advantages.mean()
-        adv_std = advantages.std()
-        advantages = (advantages - adv_mean) / (adv_std + 1e-8)
+        if normalize:
+            adv_mean = advantages.mean()
+            adv_std = advantages.std()
+            advantages = (advantages - adv_mean) / (adv_std + 1e-8)
 
         self.advantages = torch.tensor(advantages, dtype=torch.float32)
         self.returns = torch.tensor(returns, dtype=torch.float32)
@@ -137,3 +142,26 @@ class TrajectoryBuffer:
 
     def __len__(self) -> int:
         return len(self._rewards)
+
+
+def merge_buffers(buffers: list) -> dict:
+    """Combine per-env TrajectoryBuffers into one update batch.
+
+    Each buffer must have had compute_advantages(..., normalize=False) called
+    already (per-env, with that env's own bootstrap value — GAE never crosses
+    env streams). Advantages are normalized here, globally over the combined
+    batch. Empty buffers are skipped.
+
+    Returns:
+        The same tensor dict shape as TrajectoryBuffer.get_tensors().
+    """
+    buffers = [b for b in buffers if len(b) > 0]
+    if not buffers:
+        raise RuntimeError("merge_buffers() called with no non-empty buffers")
+
+    parts = [b.get_tensors() for b in buffers]
+    merged = {key: torch.cat([p[key] for p in parts], dim=0) for key in parts[0]}
+
+    adv = merged["advantages"]
+    merged["advantages"] = (adv - adv.mean()) / (adv.std() + 1e-8)
+    return merged
