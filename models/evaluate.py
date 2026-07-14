@@ -70,7 +70,8 @@ def _load_agent(model: str, checkpoint: str, device: str | None = None):
 
 
 def _run_battles_vec(
-    agent, n_battles: int, num_envs: int, structured: bool, flatten: bool
+    agent, n_battles: int, num_envs: int, structured: bool, flatten: bool,
+    opponent: str = "random",
 ) -> tuple:
     """Run n_battles episodes across num_envs parallel envs; return (wins, total).
 
@@ -84,7 +85,7 @@ def _run_battles_vec(
     simulation is the speedup either way.
     """
     num_envs = max(1, min(num_envs, n_battles))
-    env = VecGymClient(num_envs, structured=structured)
+    env = VecGymClient(num_envs, structured=structured, opponent=opponent)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -129,7 +130,10 @@ def _run_battles_vec(
     return wins, n_battles
 
 
-def _run_battles(agent, n_battles: int, structured: bool = False, flatten: bool = True) -> tuple:
+def _run_battles(
+    agent, n_battles: int, structured: bool = False, flatten: bool = True,
+    opponent: str = "random",
+) -> tuple:
     """Run n_battles greedy episodes; return (wins, total).
 
     structured=True makes GymClient return the (12, 65) M2 observation
@@ -138,7 +142,7 @@ def _run_battles(agent, n_battles: int, structured: bool = False, flatten: bool 
     train.py --structured. The transformer consumes the (12, 65) observation
     directly, so its caller passes structured=True, flatten=False.
     """
-    env = GymClient(structured=structured)
+    env = GymClient(structured=structured, opponent=opponent)
     wins = 0
     # Auto-scale so short smoke-test runs still produce output (same
     # approach as the train.py scripts' log_every).
@@ -208,6 +212,12 @@ def main():
         default=None,
         help="Torch device override for ppo/transformer (default: auto-detect).",
     )
+    parser.add_argument(
+        "--opponent",
+        choices=["random", "damagefirst"],
+        default="random",
+        help="Evaluation opponent (M3.3): RandomPlayerAI or the DamageFirst heuristic.",
+    )
     args = parser.parse_args()
 
     if args.structured and args.model != "ppo":
@@ -224,15 +234,20 @@ def main():
 
     if args.num_envs > 1:
         wins, total = _run_battles_vec(
-            agent, args.battles, args.num_envs, structured=structured, flatten=flatten
+            agent, args.battles, args.num_envs, structured=structured, flatten=flatten,
+            opponent=args.opponent,
         )
     else:
-        wins, total = _run_battles(agent, args.battles, structured=structured, flatten=flatten)
+        wins, total = _run_battles(
+            agent, args.battles, structured=structured, flatten=flatten,
+            opponent=args.opponent,
+        )
     win_rate = wins / total if total > 0 else 0.0
 
+    opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")
     print(f"Battles: {total}")
-    print(f"Win rate vs RandomPlayerAI: {win_rate:.2f} ({wins}/{total})")
+    print(f"Win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
 
 
 if __name__ == "__main__":

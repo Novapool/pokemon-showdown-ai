@@ -33,12 +33,22 @@ N_ACTIONS = 9
 class VecGymClient:
     """N parallel PokemonGymEnv bridges with a batched Gym-like interface."""
 
-    def __init__(self, n_envs: int, structured: bool = True):
+    def __init__(
+        self,
+        n_envs: int,
+        structured: bool = True,
+        opponent: str = "random",
+        selfplay: bool = False,
+    ):
         if n_envs < 1:
             raise ValueError(f"n_envs must be >= 1, got {n_envs}")
         self.n_envs = n_envs
         self._structured = structured
-        self._clients = [GymClient(structured=structured) for _ in range(n_envs)]
+        self._selfplay = selfplay
+        self._clients = [
+            GymClient(structured=structured, opponent=opponent, selfplay=selfplay)
+            for _ in range(n_envs)
+        ]
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -125,6 +135,77 @@ class VecGymClient:
                 mask_list[i] = mask
 
         return np.stack(obs_list), rewards, dones, infos, np.stack(mask_list)
+
+    # ------------------------------------------------------------------
+    # Dual-seat (self-play) interface — requires selfplay=True
+    # ------------------------------------------------------------------
+
+    def _stack_seats(self, seats: list) -> dict:
+        """[{obs, mask, needs} × N] -> {"obs": (N,...), "mask": (N,9), "needs": (N,)}."""
+        return {
+            "obs": np.stack([s["obs"] for s in seats]),
+            "mask": np.stack([s["mask"] for s in seats]),
+            "needs": np.array([s["needs"] for s in seats], dtype=bool),
+        }
+
+    def reset_all_dual(self) -> tuple:
+        """Reset every env in dual-seat mode. Returns (p1, p2) stacked dicts."""
+        for client in self._clients:
+            client._write({"cmd": "reset"})
+        responses = [client._read() for client in self._clients]
+        p1 = [self._clients[i]._parse_seat(responses[i]["p1"]) for i in range(self.n_envs)]
+        p2 = [self._clients[i]._parse_seat(responses[i]["p2"]) for i in range(self.n_envs)]
+        return self._stack_seats(p1), self._stack_seats(p2)
+
+    def step_dual(self, actions, opp_actions) -> tuple:
+        """Step every env with per-seat actions (None where a seat doesn't act).
+
+        Auto-resets finished/errored envs like step(). Returns
+        (p1, p2, rewards, dones, infos) where p1/p2 are stacked seat dicts
+        holding fresh-episode state in slots where dones is True, rewards are
+        from p1's perspective, and errored slots carry infos[i]["error"].
+        """
+        if len(actions) != self.n_envs or len(opp_actions) != self.n_envs:
+            raise ValueError(f"expected {self.n_envs} actions for each seat")
+
+        for client, a1, a2 in zip(self._clients, actions, opp_actions):
+            client._write({
+                "cmd": "step",
+                "action": None if a1 is None else int(a1),
+                "opp_action": None if a2 is None else int(a2),
+            })
+
+        p1_seats = [None] * self.n_envs
+        p2_seats = [None] * self.n_envs
+        rewards = np.zeros(self.n_envs, dtype=np.float32)
+        dones = np.zeros(self.n_envs, dtype=bool)
+        infos = [None] * self.n_envs
+        needs_reset = []
+
+        for i, client in enumerate(self._clients):
+            try:
+                response = client._read()
+            except RuntimeError as e:
+                infos[i] = {"error": str(e)}
+                needs_reset.append(i)
+                continue
+            p1_seats[i] = client._parse_seat(response["p1"])
+            p2_seats[i] = client._parse_seat(response["p2"])
+            rewards[i] = float(response["reward"])
+            dones[i] = bool(response["done"])
+            infos[i] = response["info"]
+            if dones[i]:
+                needs_reset.append(i)
+
+        if needs_reset:
+            for i in needs_reset:
+                self._clients[i]._write({"cmd": "reset"})
+            for i in needs_reset:
+                response = self._clients[i]._read()
+                p1_seats[i] = self._clients[i]._parse_seat(response["p1"])
+                p2_seats[i] = self._clients[i]._parse_seat(response["p2"])
+
+        return self._stack_seats(p1_seats), self._stack_seats(p2_seats), rewards, dones, infos
 
     def close(self) -> None:
         for client in self._clients:

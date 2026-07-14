@@ -32,14 +32,28 @@ DEBUG = False
 class GymClient:
     """Spawns gym_bridge.js and exposes a Gym-like interface over stdio JSON."""
 
-    def __init__(self, bridge_path: str = None, structured: bool = True):
+    def __init__(
+        self,
+        bridge_path: str = None,
+        structured: bool = True,
+        opponent: str = "random",
+        selfplay: bool = False,
+    ):
+        """opponent: 'random' (legacy default) or 'damagefirst' (M3.3 heuristic).
+        selfplay=True runs the bridge in dual-seat mode (opponent seat driven
+        externally) — use reset_dual()/step_dual() instead of reset()/step()."""
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
         self._bridge_path = bridge_path
         self._structured = structured
+        self._selfplay = selfplay
         args = ["node", bridge_path]
         if not structured:
             args.append("--flat")
+        if selfplay:
+            args.append("--selfplay")
+        elif opponent != "random":
+            args.extend(["--opponent", opponent])
         self._proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,
@@ -141,6 +155,42 @@ class GymClient:
         info = response["info"]
         mask = list(response["mask"])
         return obs, reward, done, info, mask
+
+    # ------------------------------------------------------------------
+    # Dual-seat (self-play) interface — requires selfplay=True
+    # ------------------------------------------------------------------
+
+    def _parse_seat(self, seat: dict) -> dict:
+        return {
+            "obs": self._reshape(np.array(seat["obs"], dtype=np.float32)),
+            "mask": np.array(seat["mask"], dtype=bool),
+            "needs": bool(seat["needs"]),
+        }
+
+    def reset_dual(self) -> tuple:
+        """Reset in dual-seat mode. Returns (p1_state, p2_state) dicts, each
+        {"obs": ndarray, "mask": (9,) bool ndarray, "needs": bool}."""
+        response = self._send({"cmd": "reset"})
+        return self._parse_seat(response["p1"]), self._parse_seat(response["p2"])
+
+    def step_dual(self, action, opp_action) -> tuple:
+        """Step both seats. Pass an int for exactly the seats whose "needs"
+        was True in the previous state, None otherwise.
+
+        Returns (p1_state, p2_state, reward, done, info) — reward is from
+        p1's perspective (self-play trains the p1 seat only)."""
+        response = self._send({
+            "cmd": "step",
+            "action": None if action is None else int(action),
+            "opp_action": None if opp_action is None else int(opp_action),
+        })
+        return (
+            self._parse_seat(response["p1"]),
+            self._parse_seat(response["p2"]),
+            float(response["reward"]),
+            bool(response["done"]),
+            response["info"],
+        )
 
     def valid_actions(self) -> list:
         """Return a mask of valid actions.

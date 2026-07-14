@@ -16,12 +16,39 @@
  * By default obs is the M2 structured (12, 65) token observation flattened
  * to 780 floats. Pass --flat on the command line to fall back to the legacy
  * 100-dim extractFeatures() vector (M1 MLP baseline regression checks).
+ *
+ * Opponent selection (M3.3):
+ *   --opponent random|damagefirst   picks the built-in p2 AI (default random)
+ *   --selfplay                      dual-seat mode: p2 is a second externally
+ *                                   driven seat. reset/step use the dual
+ *                                   protocol:
+ *     {"cmd":"reset"} → {"p1":{"obs":[...],"mask":[...],"needs":bool},
+ *                        "p2":{"obs":[...],"mask":[...],"needs":bool}}
+ *     {"cmd":"step","action":<int|null>,"opp_action":<int|null>}
+ *       → {"p1":{...},"p2":{...},"reward":<float>,"done":<bool>,"info":{}}
+ *   Pass an action for exactly the seats whose "needs" was true; reward is
+ *   always from p1's perspective (self-play trains the p1 seat).
  */
 
 const readline = require('readline');
 const { PokemonGymEnv } = require('../dist/sim/tools/pokemon-gym');
 
 const obsMode = process.argv.includes('--flat') ? 'flat' : 'structured';
+const selfplay = process.argv.includes('--selfplay');
+const opponentArgIdx = process.argv.indexOf('--opponent');
+const opponent = selfplay
+	? 'self'
+	: (opponentArgIdx !== -1 ? process.argv[opponentArgIdx + 1] : 'random');
+
+if (!['random', 'damagefirst', 'self'].includes(opponent)) {
+	process.stdout.write(JSON.stringify({ error: `unknown --opponent: ${opponent}` }) + '\n');
+	process.exit(1);
+}
+
+/** Serialize one DualSeatState for the wire. */
+function seatToJSON(seat) {
+	return { obs: Array.from(seat.obs), mask: seat.mask, needs: seat.needsAction };
+}
 
 // Env is recreated on every reset() to avoid stream/worker accumulation.
 let env = null;
@@ -46,14 +73,33 @@ async function processCommand(command) {
 
 	if (cmd === 'reset') {
 		if (env) env.destroy();
-		env = new PokemonGymEnv({ obsMode });
-		const obsFloat32 = await env.reset();
-		initialized = true;
-		respond({ obs: Array.from(obsFloat32), mask: env.validActions() });
+		env = new PokemonGymEnv({ obsMode, opponent });
+		if (selfplay) {
+			const result = await env.resetDual();
+			initialized = true;
+			respond({ p1: seatToJSON(result.p1), p2: seatToJSON(result.p2) });
+		} else {
+			const obsFloat32 = await env.reset();
+			initialized = true;
+			respond({ obs: Array.from(obsFloat32), mask: env.validActions() });
+		}
 
 	} else if (cmd === 'step') {
 		if (!initialized) {
 			respond({ error: 'not initialized' });
+			return;
+		}
+		if (selfplay) {
+			const action = command.action ?? null;
+			const oppAction = command.opp_action ?? null;
+			const result = await env.stepDual(action, oppAction);
+			respond({
+				p1: seatToJSON(result.p1),
+				p2: seatToJSON(result.p2),
+				reward: result.reward,
+				done: result.done,
+				info: result.info,
+			});
 			return;
 		}
 		const action = command.action;

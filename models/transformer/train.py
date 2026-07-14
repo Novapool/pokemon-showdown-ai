@@ -35,6 +35,8 @@ import re
 import sys
 from pathlib import Path
 
+import numpy as np
+
 # Resolve models/ directory so vec_gym_client is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from vec_gym_client import VecGymClient  # noqa: E402
@@ -111,6 +113,28 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--opponent",
+        choices=["random", "damagefirst", "selfplay"],
+        default="random",
+        help=(
+            "M3.3: who sits in the p2 seat. 'random' = RandomPlayerAI (legacy), "
+            "'damagefirst' = highest-base-power heuristic, 'selfplay' = frozen "
+            "past checkpoints of this agent (see --selfplay-pool)."
+        ),
+    )
+    parser.add_argument(
+        "--selfplay-pool",
+        type=str,
+        default=None,
+        help=(
+            "Directory of .pt checkpoints to sample self-play opponents from "
+            "(default: this run's own checkpoint directory). Each rollout picks "
+            "the newest checkpoint 50%% of the time, else uniform over the pool; "
+            "until any checkpoint exists the opponent is a frozen copy of the "
+            "current policy."
+        ),
+    )
+    parser.add_argument(
         "--value-warmup-steps",
         type=int,
         default=0,
@@ -145,6 +169,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _checkpoint_step(path: Path) -> int:
+    match = re.search(r"step_(\d+)", path.stem)
+    return int(match.group(1)) if match else -1
+
+
+def _sample_opponent(pool_dir: Path, agent: TransformerAgent, device, rng) -> TransformerAgent:
+    """Pick a frozen self-play opponent for one rollout.
+
+    50% the newest pool checkpoint, 50% uniform over the whole pool — a light
+    league mix that keeps the opponent mostly current while retaining
+    diversity. Before any checkpoint exists, a frozen copy of the current
+    policy is used (pure mirror self-play).
+    """
+    checkpoints = sorted(pool_dir.glob("transformer_step_*.pt"), key=_checkpoint_step)
+    if checkpoints:
+        path = checkpoints[-1] if rng.random() < 0.5 else rng.choice(checkpoints)
+        opponent = TransformerAgent.load(str(path), device=device)
+        opponent.pool_source = str(path)
+    else:
+        opponent = TransformerAgent(device=device)
+        opponent.policy.load_state_dict(agent.policy.state_dict())
+        opponent.pool_source = "current policy (empty pool)"
+    opponent.eval()  # frozen: no dropout, and act_batch is already no_grad
+    return opponent
+
+
+def _push_pending(buffer: TrajectoryBuffer, pending: dict, done: bool) -> None:
+    buffer.push(
+        pending["obs"],
+        pending["action"],
+        pending["reward"],
+        done,
+        pending["value"],
+        pending["log_prob"],
+        valid_mask=pending["mask"],
+    )
+
+
 def main() -> None:
     args = parse_args()
     if args.resume and args.pretrain_checkpoint:
@@ -158,12 +220,27 @@ def main() -> None:
     checkpoint_every = args.checkpoint_every
     num_envs = args.num_envs
 
+    selfplay = args.opponent == "selfplay"
+
     # One buffer per env — GAE must never cross env streams. merge_buffers()
     # combines them (and normalizes advantages globally) before each update.
     buffers = [TrajectoryBuffer() for _ in range(num_envs)]
-    env = VecGymClient(num_envs, structured=True)  # transformer always takes raw (12, 65) tokens
+    env = VecGymClient(
+        num_envs,
+        structured=True,  # transformer always takes raw (12, 65) tokens
+        opponent="random" if selfplay else args.opponent,
+        selfplay=selfplay,
+    )
 
-    obs_batch, masks = env.reset_all()
+    if selfplay:
+        p1_state, p2_state = env.reset_all_dual()
+        # Open p1 transitions, one per env: a transition closes at p1's NEXT
+        # decision point (or terminal), accumulating rewards from any
+        # opponent-only steps (e.g. p2 force-switches) in between.
+        pending: list = [None] * num_envs
+        selfplay_rng = np.random.default_rng()
+    else:
+        obs_batch, masks = env.reset_all()
 
     if args.resume:
         # Same directory as the checkpoint being resumed, so this run keeps
@@ -195,6 +272,9 @@ def main() -> None:
         last_checkpoint_step = 0
 
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    # Self-play opponents come from this run's own checkpoints unless a pool
+    # is given explicitly (e.g. to seed from a previous run's checkpoints).
+    pool_dir = Path(args.selfplay_pool) if args.selfplay_pool else checkpoint_dir
 
     # M3.2: BC KL-anchor (never persisted in checkpoints, so re-attach on
     # every run, resumed or not) and value-head warmup (keyed off absolute
@@ -211,6 +291,9 @@ def main() -> None:
         f"num_envs={num_envs} | device={agent.device} | "
         f"checkpoint every {checkpoint_every} steps | "
         f"pretrain={args.pretrain_checkpoint or 'none (from scratch)'} | "
+        f"opponent={args.opponent}"
+        + (f" (pool: {pool_dir})" if selfplay else "")
+        + " | "
         f"value_warmup={args.value_warmup_steps or 'off'} | "
         f"bc_anchor={args.bc_anchor or 'off'}"
         + (f" (coef {args.bc_anchor_coef})" if args.bc_anchor else "")
@@ -231,46 +314,126 @@ def main() -> None:
             rollout_episodes = 0
             steps_this_rollout = 0
 
-            while steps_this_rollout < rollout_steps and total_steps < total_budget:
-                actions, log_probs, values = agent.act_batch(obs_batch, masks)
-                # The masks in force when the actions were chosen — stored per
-                # step so PPO updates re-mask with real legality (M3.2).
-                step_masks = masks
-                next_obs, rewards, dones, infos, masks = env.step(actions)
+            if selfplay:
+                # One frozen opponent per rollout, shared by all envs so its
+                # inference stays batched. Re-sampled every rollout.
+                opponent_agent = _sample_opponent(pool_dir, agent, args.device, selfplay_rng)
 
-                for i in range(num_envs):
-                    if "error" in infos[i]:
-                        # Env was reset in place by VecGymClient; drop this slot's
-                        # transition (same reset-and-continue handling as before).
-                        print(
-                            f"  [step {total_steps}] env {i} error ({infos[i]['error']}) — reset",
-                            flush=True,
+                while steps_this_rollout < rollout_steps and total_steps < total_budget:
+                    # p1 (the learner): act wherever a decision is needed. A
+                    # new p1 decision point closes the previous pending
+                    # transition — its reward has accumulated any opponent-only
+                    # steps since (e.g. p2 force-switches).
+                    a1: list = [None] * num_envs
+                    p1_idx = np.flatnonzero(p1_state["needs"])
+                    if len(p1_idx):
+                        acts, lps, vals = agent.act_batch(
+                            p1_state["obs"][p1_idx], p1_state["mask"][p1_idx]
                         )
-                        continue
-                    buffers[i].push(
-                        obs_batch[i],
-                        int(actions[i]),
-                        float(rewards[i]),
-                        bool(dones[i]),
-                        float(values[i]),
-                        float(log_probs[i]),
-                        valid_mask=step_masks[i],
-                    )
-                    if dones[i]:
-                        rollout_episodes += 1
-                        if infos[i].get("winner") == "Gym":
-                            rollout_wins += 1
+                        for k, i in enumerate(p1_idx):
+                            if pending[i] is not None:
+                                _push_pending(buffers[i], pending[i], done=False)
+                            pending[i] = {
+                                "obs": p1_state["obs"][i].copy(),
+                                "action": int(acts[k]),
+                                "log_prob": float(lps[k]),
+                                "value": float(vals[k]),
+                                "mask": p1_state["mask"][i].copy(),
+                                "reward": 0.0,
+                            }
+                            a1[i] = int(acts[k])
+                        total_steps += len(p1_idx)
+                        steps_this_rollout += len(p1_idx)
 
-                obs_batch = next_obs
-                total_steps += num_envs
-                steps_this_rollout += num_envs
+                    # p2 (frozen opponent): act wherever its seat must move
+                    a2: list = [None] * num_envs
+                    p2_idx = np.flatnonzero(p2_state["needs"])
+                    if len(p2_idx):
+                        opp_acts, _, _ = opponent_agent.act_batch(
+                            p2_state["obs"][p2_idx], p2_state["mask"][p2_idx]
+                        )
+                        for k, i in enumerate(p2_idx):
+                            a2[i] = int(opp_acts[k])
 
-                # Checkpoint on step boundary
-                if total_steps - last_checkpoint_step >= checkpoint_every:
-                    ckpt_path = checkpoint_dir / f"transformer_step_{total_steps}.pt"
-                    agent.save(str(ckpt_path))
-                    last_checkpoint_step = total_steps
-                    print(f"[checkpoint] Saved {ckpt_path}")
+                    p1_state, p2_state, rewards, dones, infos = env.step_dual(a1, a2)
+
+                    for i in range(num_envs):
+                        if "error" in infos[i]:
+                            # Env auto-reset; the open transition is unusable
+                            print(
+                                f"  [step {total_steps}] env {i} error ({infos[i]['error']}) — reset",
+                                flush=True,
+                            )
+                            pending[i] = None
+                            continue
+                        if pending[i] is not None:
+                            pending[i]["reward"] += float(rewards[i])
+                        if dones[i]:
+                            if pending[i] is not None:
+                                _push_pending(buffers[i], pending[i], done=True)
+                                pending[i] = None
+                            rollout_episodes += 1
+                            if infos[i].get("winner") == "Gym":
+                                rollout_wins += 1
+
+                    # Checkpoint on step boundary
+                    if total_steps - last_checkpoint_step >= checkpoint_every:
+                        ckpt_path = checkpoint_dir / f"transformer_step_{total_steps}.pt"
+                        agent.save(str(ckpt_path))
+                        last_checkpoint_step = total_steps
+                        print(f"[checkpoint] Saved {ckpt_path}")
+
+                # Close any still-open transitions so the buffers are complete;
+                # their bootstrap comes from the current obs below.
+                for i in range(num_envs):
+                    if pending[i] is not None:
+                        _push_pending(buffers[i], pending[i], done=False)
+                        pending[i] = None
+                bootstrap_obs, bootstrap_masks = p1_state["obs"], p1_state["mask"]
+
+            else:
+                while steps_this_rollout < rollout_steps and total_steps < total_budget:
+                    actions, log_probs, values = agent.act_batch(obs_batch, masks)
+                    # The masks in force when the actions were chosen — stored per
+                    # step so PPO updates re-mask with real legality (M3.2).
+                    step_masks = masks
+                    next_obs, rewards, dones, infos, masks = env.step(actions)
+
+                    for i in range(num_envs):
+                        if "error" in infos[i]:
+                            # Env was reset in place by VecGymClient; drop this slot's
+                            # transition (same reset-and-continue handling as before).
+                            print(
+                                f"  [step {total_steps}] env {i} error ({infos[i]['error']}) — reset",
+                                flush=True,
+                            )
+                            continue
+                        buffers[i].push(
+                            obs_batch[i],
+                            int(actions[i]),
+                            float(rewards[i]),
+                            bool(dones[i]),
+                            float(values[i]),
+                            float(log_probs[i]),
+                            valid_mask=step_masks[i],
+                        )
+                        if dones[i]:
+                            rollout_episodes += 1
+                            if infos[i].get("winner") == "Gym":
+                                rollout_wins += 1
+
+                    obs_batch = next_obs
+                    total_steps += num_envs
+                    steps_this_rollout += num_envs
+
+                    # Checkpoint on step boundary
+                    if total_steps - last_checkpoint_step >= checkpoint_every:
+                        ckpt_path = checkpoint_dir / f"transformer_step_{total_steps}.pt"
+                        agent.save(str(ckpt_path))
+                        last_checkpoint_step = total_steps
+                        print(f"[checkpoint] Saved {ckpt_path}")
+
+                bootstrap_obs, bootstrap_masks = obs_batch, masks
 
             # ----------------------------------------------------------------
             # Compute advantages and update
@@ -281,7 +444,9 @@ def main() -> None:
             # Bootstrap each env from the value of its current obs. Where an
             # env's last stored transition was terminal, GAE's not_done factor
             # zeroes the bootstrap, so passing the fresh-episode value is safe.
-            _, _, last_values = agent.act_batch(obs_batch, masks)
+            # (All-false masks — a seat with no pending decision — still yield
+            # a usable value; only the value output is consumed here.)
+            _, _, last_values = agent.act_batch(bootstrap_obs, bootstrap_masks)
             for i in range(num_envs):
                 if len(buffers[i]) > 0:
                     buffers[i].compute_advantages(

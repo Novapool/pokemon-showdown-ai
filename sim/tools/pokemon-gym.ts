@@ -13,6 +13,7 @@ import { PRNG } from '../prng';
 import type { PRNGSeed } from '../prng';
 import { toID } from '../dex-data';
 import { RandomPlayerAI } from './random-player-ai';
+import { DamageFirstAI } from './damage-first-ai';
 import { extractFeatures, extractFeaturesStructured } from './feature-extractor';
 import type { OpponentPokemonInfo } from './feature-extractor';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
@@ -29,8 +30,34 @@ import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
  */
 export type ObsMode = 'flat' | 'structured';
 
+/**
+ * Who sits in the p2 seat (M3.3):
+ *   'random'      — RandomPlayerAI (legacy default; never voluntarily switches)
+ *   'damagefirst' — DamageFirstAI heuristic (always picks the highest-base-power move)
+ *   'self'        — a second GymPlayer seat, driven externally via the dual-seat
+ *                   API (resetDual/stepDual) for self-play training
+ */
+export type OpponentKind = 'random' | 'damagefirst' | 'self';
+
 export interface GymStepResult {
 	obs: Float32Array;
+	reward: number;
+	done: boolean;
+	info: { winner?: string; turns?: number; illegalMove?: boolean };
+}
+
+/** Per-seat state returned by the dual-seat (self-play) API. */
+export interface DualSeatState {
+	obs: Float32Array;
+	mask: boolean[];
+	/** True if this seat must supply an action on the next stepDual call. */
+	needsAction: boolean;
+}
+
+export interface DualStepResult {
+	p1: DualSeatState;
+	p2: DualSeatState;
+	/** Reward from p1's perspective — self-play trains the p1 seat only. */
 	reward: number;
 	done: boolean;
 	info: { winner?: string; turns?: number; illegalMove?: boolean };
@@ -53,6 +80,16 @@ class GymPlayer extends BattlePlayer {
 	private _requestPromise: Promise<ChoiceRequest | null> | null = null;
 
 	_currentRequest: ChoiceRequest | null = null;
+
+	/**
+	 * Count of actionable (non-wait) requests received. The dual-seat
+	 * self-play mode compares this against a consumed-count to tell fresh
+	 * requests (seat must act) from stale ones (already acted on).
+	 */
+	requestCount = 0;
+
+	/** Last actionable request — unlike _currentRequest, never a wait request. */
+	_lastActionable: ChoiceRequest | null = null;
 
 	constructor(playerStream: import('../../lib/streams').ObjectReadWriteStream<string>) {
 		super(playerStream, false);
@@ -85,6 +122,8 @@ class GymPlayer extends BattlePlayer {
 		this._currentRequest = request;
 		// Skip WaitRequests — keep the promise pending until a real request arrives
 		if ('wait' in request && request.wait) return;
+		this.requestCount++;
+		this._lastActionable = request;
 		if (this._requestResolve) {
 			const resolve = this._requestResolve;
 			this._requestResolve = null;
@@ -113,7 +152,12 @@ export class PokemonGymEnv {
 	private _battleStream!: BattleStream;
 	private _streams!: ReturnType<typeof getPlayerStreams>;
 	private _gymPlayer!: GymPlayer;
-	private _randomOpponent!: RandomPlayerAI;
+	private _opponentPlayer: RandomPlayerAI | null = null;
+	/** Second gym seat, only in opponent: 'self' (dual-seat self-play) mode. */
+	private _p2Player: GymPlayer | null = null;
+	private readonly _opponent: OpponentKind;
+	/** requestCount high-water marks already acted on, per seat (dual mode). */
+	private _consumedCount = { p1: 0, p2: 0 };
 
 	private _turnCount = 0;
 	private _done = false;
@@ -130,15 +174,20 @@ export class PokemonGymEnv {
 	private _winResolve: ((winner: string) => void) | null = null;
 	private _winPromise: Promise<string> | null = null;
 
-	// Opponent-reveal tracker (structured obs mode) — reconstructed purely
-	// from battle-log lines a real player could see, never omniscient state.
-	private _opponentOrder: string[] = [];
-	private _opponentRecords: Map<string, OpponentRecord> = new Map();
+	// Reveal trackers (structured obs mode) — reconstructed purely from
+	// battle-log lines a real player could see, never omniscient state.
+	// Both sides are tracked: p2's records feed p1's opponent tokens, and
+	// (in self-play mode) p1's records feed p2's opponent tokens.
+	private _revealOrder: { p1: string[], p2: string[] } = { p1: [], p2: [] };
+	private _revealRecords: { p1: Map<string, OpponentRecord>, p2: Map<string, OpponentRecord> } = {
+		p1: new Map(), p2: new Map(),
+	};
 
-	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode } = {}) {
+	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind } = {}) {
 		this._format = options.format ?? 'gen1randombattle';
 		this._seed = options.seed;
 		this._obsMode = options.obsMode ?? 'structured';
+		this._opponent = options.opponent ?? 'random';
 	}
 
 	// -------------------------------------------------------------------------
@@ -152,9 +201,21 @@ export class PokemonGymEnv {
 		this._streams = getPlayerStreams(this._battleStream);
 
 		this._gymPlayer = new GymPlayer(this._streams.p1);
-		this._randomOpponent = new RandomPlayerAI(this._streams.p2, {
-			seed: this._seed,
-		});
+		this._opponentPlayer = null;
+		this._p2Player = null;
+		if (this._opponent === 'self') {
+			this._p2Player = new GymPlayer(this._streams.p2);
+		} else if (this._opponent === 'damagefirst') {
+			this._opponentPlayer = new DamageFirstAI(this._streams.p2, {
+				seed: this._seed,
+				format: this._format,
+			});
+		} else {
+			this._opponentPlayer = new RandomPlayerAI(this._streams.p2, {
+				seed: this._seed,
+			});
+		}
+		this._consumedCount = { p1: 0, p2: 0 };
 
 		// Reset background reader state
 		this._omniscientLines = [];
@@ -164,13 +225,17 @@ export class PokemonGymEnv {
 		this._winResolve = null;
 		this._winPromise = null;
 
-		// Reset opponent-reveal tracker
-		this._opponentOrder = [];
-		this._opponentRecords = new Map();
+		// Reset reveal trackers
+		this._revealOrder = { p1: [], p2: [] };
+		this._revealRecords = { p1: new Map(), p2: new Map() };
 
 		// Start players (they loop reading their streams)
 		void this._gymPlayer.start();
-		void this._randomOpponent.start();
+		if (this._p2Player) {
+			void this._p2Player.start();
+		} else {
+			void this._opponentPlayer!.start();
+		}
 
 		// Start background omniscient reader
 		this._omniscientTask = this._runOmniscientReader();
@@ -256,31 +321,8 @@ export class PokemonGymEnv {
 		const newLines = this._omniscientLines.slice(linesBefore);
 
 		// Parse reward from omniscient lines
-		let reward = 0;
-		let winner: string | undefined;
-		let done = false;
-
-		for (const line of newLines) {
-			if (line.startsWith('|faint|p2a:') || line.startsWith('|faint|p2b:')) {
-				reward += 0.01;
-			} else if (line.startsWith('|faint|p1a:') || line.startsWith('|faint|p1b:')) {
-				reward -= 0.01;
-			} else if (line.startsWith('|-status|p2')) {
-				reward += 0.0001;
-			} else if (line.startsWith('|win|Gym')) {
-				reward += 1.0;
-				done = true;
-				winner = 'Gym';
-			} else if (line.startsWith('|win|Opponent')) {
-				reward -= 1.0;
-				done = true;
-				winner = 'Opponent';
-			} else if (line.startsWith('|turn|')) {
-				const turnStr = line.slice('|turn|'.length).trim();
-				const turnNum = parseInt(turnStr, 10);
-				if (!isNaN(turnNum)) this._turnCount = turnNum;
-			}
-		}
+		const parsed = this._parseProgressLines(newLines);
+		let { reward, winner, done } = parsed;
 
 		// Capture win from race result
 		if (result.type === 'win' && !done) {
@@ -334,6 +376,167 @@ export class PokemonGymEnv {
 	}
 
 	// -------------------------------------------------------------------------
+	// Dual-seat (self-play) API — requires opponent: 'self'
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Reset in dual-seat mode. Both seats' first requests arrive in the same
+	 * engine batch; a microtask flush after the p1 request guarantees p2's has
+	 * been delivered too.
+	 */
+	async resetDual(): Promise<DualStepResult> {
+		if (this._opponent !== 'self') {
+			throw new Error("resetDual() requires opponent: 'self'");
+		}
+		await this.reset();
+		await new Promise<void>(resolve => setImmediate(resolve));
+		return {
+			p1: this._seatState('p1'),
+			p2: this._seatState('p2'),
+			reward: 0,
+			done: false,
+			info: { turns: this._turnCount },
+		};
+	}
+
+	/**
+	 * Advance the battle to the next decision point. The caller must pass an
+	 * action for exactly the seats whose needsAction flag was true in the
+	 * previous result (both on turn 1; only one during force-switches), and
+	 * null for the others. Reward is from p1's perspective — self-play trains
+	 * the p1 seat, the p2 seat runs a frozen opponent.
+	 */
+	async stepDual(p1Action: number | null, p2Action: number | null): Promise<DualStepResult> {
+		if (!this._p2Player) {
+			throw new Error("stepDual() requires opponent: 'self'");
+		}
+		if (this._done) {
+			throw new Error('Battle already done; call resetDual()');
+		}
+
+		const p1Needs = this._needsAction('p1');
+		const p2Needs = this._needsAction('p2');
+		if (p1Needs !== (p1Action !== null) || p2Needs !== (p2Action !== null)) {
+			throw new Error(
+				`stepDual action/seat mismatch: needsAction=(${p1Needs},${p2Needs}) ` +
+				`but got actions=(${p1Action},${p2Action})`
+			);
+		}
+
+		// Validate both actions BEFORE submitting either, so an illegal action
+		// never leaves one seat half-committed.
+		const illegal =
+			(p1Action !== null && (p1Action < 0 || p1Action > 8 || !this._validActionsFor('p1')[p1Action])) ||
+			(p2Action !== null && (p2Action < 0 || p2Action > 8 || !this._validActionsFor('p2')[p2Action]));
+		if (illegal) {
+			return {
+				p1: this._seatState('p1'),
+				p2: this._seatState('p2'),
+				reward: -0.01,
+				done: false,
+				info: { illegalMove: true, turns: this._turnCount },
+			};
+		}
+
+		let cursor = this._omniscientLines.length;
+		let reward = 0;
+		let done = false;
+		let winner: string | undefined;
+
+		// Register waiters before submitting so request events can't be missed
+		let p1Wait = this._gymPlayer.waitForRequest();
+		let p2Wait = this._p2Player.waitForRequest();
+
+		if (p1Action !== null) {
+			this._consumedCount.p1 = this._gymPlayer.requestCount;
+			this._gymPlayer.submitChoice(actionToChoice(p1Action));
+		}
+		if (p2Action !== null) {
+			this._consumedCount.p2 = this._p2Player.requestCount;
+			this._p2Player.submitChoice(actionToChoice(p2Action));
+		}
+
+		type SeatEvent = { type: 'request', request: ChoiceRequest | null };
+		type WinEvent = { type: 'win', winner: string };
+
+		// Wait until the battle ends or at least one seat has a fresh
+		// actionable request. Usually one race iteration; the loop guards
+		// against wake-ups where the other seat's request hasn't landed yet.
+		for (;;) {
+			const result = await Promise.race<SeatEvent | WinEvent>([
+				p1Wait.then(r => ({ type: 'request' as const, request: r })),
+				p2Wait.then(r => ({ type: 'request' as const, request: r })),
+				this._waitForWin().then(w => ({ type: 'win' as const, winner: w })),
+			]);
+
+			// Let the omniscient reader and any sibling request callbacks flush
+			await new Promise<void>(resolve => setImmediate(resolve));
+
+			const parsed = this._parseProgressLines(this._omniscientLines.slice(cursor));
+			cursor = this._omniscientLines.length;
+			reward += parsed.reward;
+			if (parsed.done) {
+				done = true;
+				winner = parsed.winner;
+			}
+			if (!done && result.type === 'win') {
+				done = true;
+				winner = result.winner;
+				reward += (winner === 'Gym') ? 1.0 : -1.0;
+			}
+			if (!done && this._winResult !== null) {
+				done = true;
+				winner = this._winResult;
+				reward += (winner === 'Gym') ? 1.0 : -1.0;
+			}
+			// A null request means a player stream closed — battle over
+			if (!done && result.type === 'request' && result.request === null) {
+				done = true;
+				winner = this._winResult ?? undefined;
+			}
+
+			if (done || this._needsAction('p1') || this._needsAction('p2')) break;
+
+			// Spurious wake-up (e.g. stale waiter) — re-arm and wait again
+			p1Wait = this._gymPlayer.waitForRequest();
+			p2Wait = this._p2Player.waitForRequest();
+		}
+
+		if (done) {
+			reward -= 0.001 * this._turnCount;
+			this._done = true;
+		}
+		reward = Math.max(-1, Math.min(1, reward));
+
+		return {
+			p1: this._seatState('p1'),
+			p2: this._seatState('p2'),
+			reward,
+			done,
+			info: { winner, turns: this._turnCount },
+		};
+	}
+
+	private _needsAction(seat: 'p1' | 'p2'): boolean {
+		const player = seat === 'p1' ? this._gymPlayer : this._p2Player;
+		return !!player && player.requestCount > this._consumedCount[seat];
+	}
+
+	private _validActionsFor(seat: 'p1' | 'p2'): boolean[] {
+		const player = seat === 'p1' ? this._gymPlayer : this._p2Player;
+		return validActionsForRequest(player?._lastActionable ?? null);
+	}
+
+	private _seatState(seat: 'p1' | 'p2'): DualSeatState {
+		const needsAction = !this._done && this._needsAction(seat);
+		return {
+			obs: this._extractObsFor(seat),
+			mask: needsAction ? this._validActionsFor(seat) : new Array(9).fill(false),
+			needsAction,
+		};
+	}
+
+	// -------------------------------------------------------------------------
 	// validActions
 	// -------------------------------------------------------------------------
 
@@ -342,52 +545,7 @@ export class PokemonGymEnv {
 	 *   [move0, move1, move2, move3, switch1, switch2, switch3, switch4, switch5]
 	 */
 	validActions(): boolean[] {
-		const result: boolean[] = new Array(9).fill(false);
-
-		const request = this._currentRequest;
-		if (!request || request.wait || request.teamPreview) {
-			return result;
-		}
-
-		if (isMoveRequest(request)) {
-			// Moves 0-3
-			const activeSlot = request.active[0];
-			if (activeSlot) {
-				for (let i = 0; i < 4; i++) {
-					const move = activeSlot.moves[i];
-					if (move && !move.disabled) {
-						result[i] = true;
-					}
-				}
-			}
-
-			// Switches 4-8 — blocked when the active Pokemon is trapped
-			if (!activeSlot?.trapped) {
-				const pokemon = request.side.pokemon;
-				for (let slot = 1; slot <= 5; slot++) {
-					const poke = pokemon[slot];
-					if (!poke) continue;
-					const isFainted = poke.condition.endsWith(' fnt') || poke.condition === '0 fnt';
-					const isActive = poke.active === true;
-					if (!isFainted && !isActive) {
-						result[slot + 3] = true; // slot 1 -> index 4, slot 5 -> index 8
-					}
-				}
-			}
-		} else if (isSwitchRequest(request)) {
-			// Force-switch: only switches are available
-			const pokemon = request.side.pokemon;
-			for (let slot = 1; slot <= 5; slot++) {
-				const poke = pokemon[slot];
-				if (!poke) continue;
-				const isFainted = poke.condition.endsWith(' fnt') || poke.condition === '0 fnt';
-				if (!isFainted) {
-					result[slot + 3] = true;
-				}
-			}
-		}
-
-		return result;
+		return validActionsForRequest(this._currentRequest);
 	}
 
 	// -------------------------------------------------------------------------
@@ -426,12 +584,28 @@ export class PokemonGymEnv {
 		if (this._obsMode === 'flat') {
 			return extractFeatures(this._currentRequest!, null);
 		}
-		return extractFeaturesStructured(this._currentRequest!, this._getOpponentInfo());
+		return extractFeaturesStructured(this._currentRequest!, this._getOpponentInfo('p1'));
 	}
 
-	private _getOpponentInfo(): OpponentPokemonInfo[] {
-		return this._opponentOrder.map(nickname => {
-			const record = this._opponentRecords.get(nickname)!;
+	/** Obs for a specific seat (dual-seat self-play mode). */
+	private _extractObsFor(seat: 'p1' | 'p2'): Float32Array {
+		const player = seat === 'p1' ? this._gymPlayer : this._p2Player!;
+		const request = player._lastActionable ?? player._currentRequest;
+		if (!request) {
+			// Stream closed before any actionable request — terminal filler
+			return new Float32Array(this._obsMode === 'flat' ? 100 : 780);
+		}
+		if (this._obsMode === 'flat') {
+			return extractFeatures(request, null);
+		}
+		return extractFeaturesStructured(request, this._getOpponentInfo(seat));
+	}
+
+	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */
+	private _getOpponentInfo(viewer: 'p1' | 'p2'): OpponentPokemonInfo[] {
+		const side = viewer === 'p1' ? 'p2' : 'p1';
+		return this._revealOrder[side].map(nickname => {
+			const record = this._revealRecords[side].get(nickname)!;
 			return {
 				details: record.details,
 				condition: record.condition,
@@ -442,56 +616,92 @@ export class PokemonGymEnv {
 	}
 
 	/**
-	 * Update the opponent-reveal tracker from one battle-log line. Only p2
-	 * events are consumed — this reconstructs exactly what a real player
-	 * would learn from watching the battle, not omniscient state.
+	 * Update the reveal trackers from one battle-log line. Both sides are
+	 * tracked (p2 records feed p1's opponent tokens and vice versa), but only
+	 * from lines a real player could see — never omniscient state.
 	 */
-	private _processOpponentLine(line: string): void {
+	private _processRevealLine(line: string): void {
 		const parts = line.split('|');
 		const type = parts[1];
 		const ident = parts[2] ?? '';
-		if (!ident.startsWith('p2')) return;
+		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
+		if (!side) return;
+		const records = this._revealRecords[side];
 		const nickname = extractNickname(ident);
 
 		if (type === 'switch' || type === 'drag') {
-			for (const record of this._opponentRecords.values()) record.active = false;
+			for (const record of records.values()) record.active = false;
 
 			const details = parts[3] ?? '';
 			const condition = parts[4] ?? '';
-			const existing = this._opponentRecords.get(nickname);
+			const existing = records.get(nickname);
 			if (existing) {
 				existing.details = details;
 				existing.condition = condition;
 				existing.active = true;
 			} else {
-				this._opponentRecords.set(nickname, { details, condition, active: true, moves: [] });
-				this._opponentOrder.push(nickname);
+				records.set(nickname, { details, condition, active: true, moves: [] });
+				this._revealOrder[side].push(nickname);
 			}
 		} else if (type === '-damage' || type === '-heal') {
-			const record = this._opponentRecords.get(nickname);
+			const record = records.get(nickname);
 			if (record) record.condition = parts[3] ?? record.condition;
 		} else if (type === '-status') {
-			const record = this._opponentRecords.get(nickname);
+			const record = records.get(nickname);
 			if (record) {
 				const statusToken = parts[3] ?? '';
 				record.condition = `${hpFraction(record.condition)} ${statusToken}`.trim();
 			}
 		} else if (type === '-curestatus') {
-			const record = this._opponentRecords.get(nickname);
+			const record = records.get(nickname);
 			if (record) record.condition = hpFraction(record.condition);
 		} else if (type === 'faint') {
-			const record = this._opponentRecords.get(nickname);
+			const record = records.get(nickname);
 			if (record) {
 				record.condition = '0 fnt';
 				record.active = false;
 			}
 		} else if (type === 'move') {
-			const record = this._opponentRecords.get(nickname);
+			const record = records.get(nickname);
 			if (record && record.moves.length < 4) {
 				const moveId = toID(parts[3] ?? '');
 				if (moveId && !record.moves.includes(moveId)) record.moves.push(moveId);
 			}
 		}
+	}
+
+	/**
+	 * Parse a batch of new omniscient lines into (reward, done, winner),
+	 * updating the turn counter as a side effect. Reward is always from p1's
+	 * perspective. Shared between step() and stepDual().
+	 */
+	private _parseProgressLines(lines: string[]): { reward: number, done: boolean, winner?: string } {
+		let reward = 0;
+		let winner: string | undefined;
+		let done = false;
+
+		for (const line of lines) {
+			if (line.startsWith('|faint|p2a:') || line.startsWith('|faint|p2b:')) {
+				reward += 0.01;
+			} else if (line.startsWith('|faint|p1a:') || line.startsWith('|faint|p1b:')) {
+				reward -= 0.01;
+			} else if (line.startsWith('|-status|p2')) {
+				reward += 0.0001;
+			} else if (line.startsWith('|win|Gym')) {
+				reward += 1.0;
+				done = true;
+				winner = 'Gym';
+			} else if (line.startsWith('|win|Opponent')) {
+				reward -= 1.0;
+				done = true;
+				winner = 'Opponent';
+			} else if (line.startsWith('|turn|')) {
+				const turnStr = line.slice('|turn|'.length).trim();
+				const turnNum = parseInt(turnStr, 10);
+				if (!isNaN(turnNum)) this._turnCount = turnNum;
+			}
+		}
+		return { reward, done, winner };
 	}
 
 	private async _runOmniscientReader(): Promise<void> {
@@ -500,7 +710,7 @@ export class PokemonGymEnv {
 				for (const line of chunk.split('\n')) {
 					if (!line) continue;
 					this._omniscientLines.push(line);
-					this._processOpponentLine(line);
+					this._processRevealLine(line);
 
 					// Notify any pending waiters that new data arrived
 					if (this._omniscientNotify) {
@@ -595,4 +805,56 @@ function actionToChoice(action: number): string {
 	}
 	// action 4 → switch 2 (bench slot 1 = pokemon index 1)
 	return `switch ${action - 2}`;
+}
+
+/**
+ * Compute the legal-action mask for a request:
+ *   [move0, move1, move2, move3, switch1, switch2, switch3, switch4, switch5]
+ */
+function validActionsForRequest(request: ChoiceRequest | null): boolean[] {
+	const result: boolean[] = new Array(9).fill(false);
+
+	if (!request || request.wait || request.teamPreview) {
+		return result;
+	}
+
+	if (isMoveRequest(request)) {
+		// Moves 0-3
+		const activeSlot = request.active[0];
+		if (activeSlot) {
+			for (let i = 0; i < 4; i++) {
+				const move = activeSlot.moves[i];
+				if (move && !move.disabled) {
+					result[i] = true;
+				}
+			}
+		}
+
+		// Switches 4-8 — blocked when the active Pokemon is trapped
+		if (!activeSlot?.trapped) {
+			const pokemon = request.side.pokemon;
+			for (let slot = 1; slot <= 5; slot++) {
+				const poke = pokemon[slot];
+				if (!poke) continue;
+				const isFainted = poke.condition.endsWith(' fnt') || poke.condition === '0 fnt';
+				const isActive = poke.active === true;
+				if (!isFainted && !isActive) {
+					result[slot + 3] = true; // slot 1 -> index 4, slot 5 -> index 8
+				}
+			}
+		}
+	} else if (isSwitchRequest(request)) {
+		// Force-switch: only switches are available
+		const pokemon = request.side.pokemon;
+		for (let slot = 1; slot <= 5; slot++) {
+			const poke = pokemon[slot];
+			if (!poke) continue;
+			const isFainted = poke.condition.endsWith(' fnt') || poke.condition === '0 fnt';
+			if (!isFainted) {
+				result[slot + 3] = true;
+			}
+		}
+	}
+
+	return result;
 }
