@@ -532,9 +532,68 @@ whichever architecture M3.2 selects
 
 ---
 
-## M3.4: Raise the Policy Ceiling 🟨 IN PROGRESS
+## M3.4: Raise the Policy Ceiling ✅ COMPLETE — NEGATIVE RESULT
 
-**Status:** 🟨 In progress (2026-07-15). **Code for both parts complete, smoke-verified end-to-end; the 5M-step decision run is training** (`models/ppo/checkpoints/v2/`, log in `train.log`). Evaluation battery pending.
+**Status:** ✅ Complete (2026-07-15). **Neither lever raised the ceiling.** The
+schema-v2 + mixed-opponent run trains stably (42–62% sweep band, no collapse)
+but confirms at **54% vs Random / 46% vs DamageFirst / 48% head-to-head vs the
+M3.3 best** — an M2/M3.3 peer, not an improvement. All three pre-registered
+criteria unmet. See Results below.
+
+### Decision Run (2026-07-15)
+
+`--obs-v2 --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"`, pool
+seeded with the M2 baseline + M3.3 best, 8 envs. The run was externally killed
+at 4.77M/5M steps (no crash; last checkpoint 4.75M — the last 5% doesn't
+affect the conclusion; 19 periodic checkpoints cover the trajectory).
+
+**19-checkpoint sweep (150 battles each vs Random):** stable 42–62% band, no
+collapse; apparent peaks 62% @ 3.25M and 61% @ 2.25M.
+
+**Full-battle confirmations** (peaks regress to the mean — the 60%+ sweep
+readings were 150-battle noise, ±8pp):
+
+| Checkpoint | vs Random (500) | vs DamageFirst (200) |
+|---|---|---|
+| M2 baseline (reference) | 51% (254/500) | 51% (101/200) |
+| M3.3 best (reference) | 57% (287/500) | 46% (91/200) |
+| v2 2.0M | 51% (256/500) | 42% (85/200) |
+| **v2 2.25M (best combined)** | **54% (272/500)** | **46% (92/200)** |
+| v2 3.25M | 53% (266/500) | 45% (89/200) |
+| v2 4.0M | 54% (269/500) | 41% (81/200) |
+
+**Head-to-head** (v2 2.25M vs M3.3 best, `--vs-checkpoint` cross-schema,
+seat-balanced): 45% as p1 (227/500), 51% as p2 (253/500) → **48.0% combined
+(480/1000)** — parity-to-slightly-worse, inside the ±3.1pp CI.
+
+### Success Criteria — ❌ NOT MET
+- ❌ ≥ 65% vs RandomPlayerAI (500 battles) — best confirmed **54%**
+- ❌ ≥ 60% vs DamageFirstAI (200+ battles) — best **46%**, still below the
+  M2 agent's 51%; the training signal again failed to transfer to the
+  held-out heuristic
+- ❌ Beats the M3.3 best head-to-head (≥ 55%, seat-balanced) — **48.0%**
+
+### Reading
+
+Richer observations (boosts/volatiles) and a fixed opponent distribution
+(seeded league + heuristic/random mixing) were the two hypothesized
+bottlenecks, and fixing both moved nothing outside noise. Four independent
+5M-step-class runs (M2 fixed-opponent, M3.2 transformer, M3.3 self-play,
+M3.4 v2+mix) now all land in the same 51–57%-vs-Random band. The remaining
+suspects are more fundamental: MLP capacity at 128 hidden units, PPO sample
+efficiency on this reward, and gen1randombattle team-luck variance capping
+how far any policy can get without lookahead. That last one is exactly what
+M4 (MCTS) attacks — and M4's criteria were already recalibrated (2026-07-14)
+to be relative to the base policy, so this result does not block it.
+
+### Recommendation for M4
+
+Proceed on the **M3.3 best checkpoint**
+(`models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`, v1 schema): it has
+the strongest confirmed vs-Random number (57%) and won the h2h marginally.
+The v2 2.25M checkpoint (`models/ppo/checkpoints/v2/ppo_step_2250032.pt`) is
+a statistical peer whose richer observation may matter more once a search is
+attached — worth an A/B once the MCTS harness exists.
 
 ### What Was Built (2026-07-15)
 - **Part A — schema v2:** `TOKEN_DIM_V2 = 77` in `sim/tools/feature-extractor.ts`.
@@ -613,15 +672,6 @@ One 5M-step run with schema v2 + seeded pool + opponent mix, 20-checkpoint
 sweep vs Random, confirmations vs Random (500) / DamageFirst (200) /
 head-to-head vs the M3.3 best (`evaluate.py --vs-checkpoint`, both seat
 orders).
-
-### Success Criteria (pre-registered)
-- ≥ 65% vs RandomPlayerAI (500 battles) — clearly above the M3.3 best's 57%
-- ≥ 60% vs DamageFirstAI (200+ battles) — beats both prior agents' ~51%,
-  i.e. the training signal finally transfers to a held-out opponent
-- Beats the M3.3 best checkpoint head-to-head (≥ 55% over 500+ battles,
-  seat-balanced)
-- If Part A alone or Part B alone must be cut for time, run Part B first
-  (zero-code pool seeding + one flag); Part A requires the retraining anyway
 
 ### Unblocks
 M4 starts from a policy/value net actually worth searching with; M4's
@@ -801,7 +851,7 @@ Best action
 | M3.1: Parallel Training | ✅ | Vectorized envs + batched inference (`--num-envs`) | M3.2, M3.3 |
 | M3.2: BC→PPO Fix | ✅ | Fixes verified; transformer still ≤ baseline → **retired; M4+ proceeds on MLP-PPO** | M4, M5 |
 | M3.3: Self-Play + Opponents | ✅ | Self-play fixed training stability; peer of M2 (52.4% h2h), no DamageFirst transfer | M3.4 |
-| M3.4: Policy Ceiling | 🟨 | Schema v2 (boosts/volatiles) + mixed-opponent training — code done, 5M-step run training | M4, M5 |
+| M3.4: Policy Ceiling | ✅ | Negative result — schema v2 + opponent mix trains stably but confirms as an M2/M3.3 peer (54%/46%/48% h2h) | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |

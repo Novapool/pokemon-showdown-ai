@@ -6,11 +6,10 @@ Last updated: 2026-07-15
 
 ## Current Work
 
-**M3.4 (raise the policy ceiling) — code complete 2026-07-15, 5M-step decision run TRAINING NOW.**
-- **Part A (obs schema v2):** ✅ implemented + smoke-verified. `TOKEN_DIM_V2 = 77` — 12 dims appended per token (v1 prefix byte-identical): 7 boost stages, Reflect/Light Screen/Substitute/Leech Seed flags, toxic counter; tracked in `pokemon-gym.ts` from public log lines, non-zero only on active tokens (gen1 resets on switch). Wired as obsMode `'structured-v2'` → bridge `--obs-v2` → `GymClient(obs_v2=True)` → `train.py`/`evaluate.py --obs-v2`.
-- **Part B (mixed-opponent training):** ✅ implemented + smoke-verified. `--opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"` samples one family per rollout; bridge takes a per-reset opponent override so envs switch families without respawning. Pool seeded with M2 + M3.3-best as `ppo_step_0_seed_*.pt`; v1 seeds act inside the v2 env via `slice_structured_obs()` (v2 tokens are v1-prefixed). Cross-schema head-to-head in `evaluate.py` works the same way.
-- **Decision run:** `python models/ppo/train.py --obs-v2 --steps 5000000 --checkpoint-every 250000 --num-envs 8 --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" --checkpoint-dir models/ppo/checkpoints/v2` — running in background since 2026-07-15 ~10:45, log at `models/ppo/checkpoints/v2/train.log` (~2h expected, per the M3.3 run).
-- **Then:** eval battery — 20-checkpoint sweep (150 vs Random each; **skip the `ppo_step_0_seed_*` pool-seed files**), 500 vs Random + 200 vs DamageFirst confirmations on top candidates, seat-balanced h2h vs `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`. Pre-registered targets: ≥65% vs Random, ≥60% vs DamageFirst, ≥55% h2h vs M3.3 best.
+**M3.4 — ✅ complete 2026-07-15, NEGATIVE RESULT. Next up: M4 (MCTS).**
+- Code for both parts (obs schema v2, mixed-opponent training) landed, smoke-verified, and committed (`7533e08d7`). The 5M-step decision run (externally killed at 4.77M steps — no crash; 19 checkpoints cover the trajectory) trained stably in a 42–62% sweep band with no collapse, but full-battle confirmations regress to an M2/M3.3 peer: best **54% (272/500) vs Random**, **46% (92/200) vs DamageFirst**, and **48.0% (480/1000) seat-balanced head-to-head vs the M3.3 best** — all three pre-registered criteria unmet. Full tables + reading in `MILESTONES.md` → M3.4.
+- Takeaway: four independent 5M-step-class runs (fixed-opponent, transformer, self-play, v2+mix) all land in the same 51–57%-vs-Random band — the bottleneck is not the observation or the opponent distribution. M4 (MCTS lookahead) attacks the most plausible remaining lever and its criteria were already recalibrated to be relative to the base policy.
+- **M4 base checkpoint (recommended):** `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt` (M3.3 best, v1); A/B against `models/ppo/checkpoints/v2/ppo_step_2250032.pt` (v2 peer, richer obs) once the MCTS harness exists.
 
 **Recently closed: M3.1 / M3.2 / M3.3 (2026-07-14)** — parallel training (~5x); transformer retired, MLP-PPO is the architecture; self-play fixed training stability but produced an M2 peer (57% vs Random / 46% vs DamageFirst / 52.4% h2h). Full trails in `MILESTONES.md`.
 
@@ -24,9 +23,9 @@ Last updated: 2026-07-15
 - [x] `models/evaluate.py` — `--obs-v2`; `_run_battles_h2h` slices per-seat obs to each agent's `obs_size` (v2-vs-v1 head-to-head)
 - [x] `test/tools/gym.test.js` — v2 shape (924), v1-prefix byte-equality, volatile-dim placement, full-battle v2 range/stability; 23/23 pass
 - [x] Smokes: v2 bridge single+dual seat, live opponent switching, 4k-step mixed-opponent training run with v1 seed opponent, all 4 eval paths, v1 selfplay trainer regression
-- [ ] **5M-step decision run** — training in background (started 2026-07-15, `models/ppo/checkpoints/v2/train.log`)
-- [ ] Eval battery: 20-checkpoint sweep (skip `ppo_step_0_seed_*`), 500 vs Random, 200 vs DamageFirst, seat-balanced h2h vs M3.3 best
-- [ ] Record results vs pre-registered criteria in `MILESTONES.md` → M3.4; update `docs/MODEL-COMPARISON.md` if the winner changes
+- [x] **5M-step decision run** — killed externally at 4.77M steps (no crash; last checkpoint 4.75M, 19 checkpoints total; `models/ppo/checkpoints/v2/train.log`)
+- [x] Eval battery: 19-checkpoint sweep (42–62% band, no collapse; `sweep_results.txt`), confirmations on top 4 (`confirm_results.txt`), seat-balanced h2h vs M3.3 best (`h2h_results.txt`)
+- [x] Results recorded vs pre-registered criteria in `MILESTONES.md` → M3.4 — **all three unmet** (54% vs Random / 46% vs DamageFirst / 48.0% h2h); winner unchanged, so `docs/MODEL-COMPARISON.md` needs no update
 
 ### Active Tasks (M3.1) — all resolved
 - [x] `models/vec_gym_client.py` — `VecGymClient(n_envs, structured)`: N parallel `gym_bridge.js` subprocesses, pipelined write-all/read-all stepping, auto-reset on done, per-env errors reset in place and surface as `infos[i]["error"]`
@@ -107,6 +106,13 @@ M2 is fully complete (see below).
 ---
 
 ## Recently Completed
+
+✅ **M3.4: obs schema v2 + mixed-opponent training — negative result, all criteria unmet** (2026-07-15)
+- **Part A:** `TOKEN_DIM_V2=77` — 7 boost stages + Reflect/Light Screen/Substitute/Leech Seed flags + toxic counter appended per token (v1 prefix byte-identical), tracked in `pokemon-gym.ts` from public log lines only, active tokens only; obsMode `'structured-v2'` wired through bridge (`--obs-v2`), clients (`obs_v2=`), trainer, and `evaluate.py`
+- **Part B:** `--opponent-mix` per-rollout family sampling (selfplay/damagefirst/random) with per-reset opponent switching in the bridge (no respawn); pool seeded with M2 + M3.3-best; cross-schema play via `slice_structured_obs()` (v1 checkpoints act inside v2 envs, and `--vs-checkpoint` pairs v2 vs v1 directly)
+- Verified: 23/23 gym tests, full smoke battery, v1 regressions; committed `7533e08d7`
+- **Decision run:** 4.77M/5M steps (externally killed, no crash), stable 42–62% sweep band, **no collapse**. Confirmations: best **54% (272/500) vs Random**, **46% (92/200) vs DamageFirst**, **48.0% (480/1000)** h2h vs the M3.3 best — an M2/M3.3 peer. All three pre-registered criteria ❌. Artifacts: `models/ppo/checkpoints/v2/{train.log,sweep_results.txt,confirm_results.txt,h2h_results.txt}`
+- **Reading:** 4 independent 5M-step-class runs now land in the same 51–57% band — observation richness and opponent distribution are ruled out as the bottleneck. M4 (MCTS) proceeds on the M3.3 best checkpoint with relative criteria
 
 ✅ **M3.3 closed (head-to-head eval) + M3.4 milestone defined + M4 criteria recalibrated** (2026-07-14)
 - Added `--vs-checkpoint` to `models/evaluate.py` — checkpoint-vs-checkpoint head-to-head through the dual-seat self-play bridge path (`_run_battles_h2h`; PPO-only, both checkpoints share the obs mode; wins counted from seat p1)
@@ -296,14 +302,12 @@ None. All components verified and working.
 ### M3.1 / M3.2 — Complete
 ✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
 
-### Immediate (M3.4)
-Parts A and B are **implemented and smoke-verified** (2026-07-15); the 5M-step decision run is training in the background (`models/ppo/checkpoints/v2/train.log`). Remaining:
-1. Wait for the run to finish (~2h from 2026-07-15 ~10:45)
-2. Eval battery: 20-checkpoint sweep at 150 battles vs Random (glob `ppo_step_*.pt` in `checkpoints/v2/` but **skip the two `ppo_step_0_seed_*` pool-seed files** — they're v1 checkpoints), then 500 vs Random + 200 vs DamageFirst on top candidates, then seat-balanced h2h vs `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt` (both seat orders, `--obs-v2 --vs-checkpoint` handles the cross-schema pairing)
-3. Judge against the pre-registered criteria (≥65% Random / ≥60% DamageFirst / ≥55% h2h) and record in `MILESTONES.md` → M3.4
-
-### Then
-M4 (MCTS on the MLP-PPO policy/value net), building on whichever checkpoint M3.4 produces. M4's criteria were recalibrated to be relative to the base policy (see `MILESTONES.md` → M4).
+### Immediate (M4 — MCTS)
+M3.4 is closed (negative result — see Current Work). M4 is next, per `MILESTONES.md` → M4:
+1. `models/mcts/mcts_agent.py` — `MCTSNode`, `MCTSAgent` (UCT selection with the PPO policy as prior, value head at leaves, N=100 sims/move)
+2. `models/mcts/determinizer.py` — sample plausible opponent teams conditioned on revealed info (gen1 usage priors)
+3. Base policy: `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt` (M3.3 best); A/B the v2 2.25M checkpoint later
+4. Success criteria (recalibrated, relative): MCTS ≥ +5pp vs DamageFirst and ≥ +10pp vs Random over the same checkpoint without search; < 500ms/move
 
 ### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention
