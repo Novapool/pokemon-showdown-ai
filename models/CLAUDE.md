@@ -14,6 +14,7 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `metamon_adapter.py` | Streams Metamon human-replay trajectories as `(obs (12,65), action, done)`; M2.5 |
 | `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays; saves to `checkpoints/bc_pretrain_gen1ou.pt` |
 | `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
+| `mcts/` | `mcts_agent.py` — inference-time determinized UCT over a PPO checkpoint (M4); `results/` — eval battery logs |
 | `checkpoints/` | BC pretraining checkpoints |
 
 ## Bridge Architecture
@@ -29,6 +30,8 @@ Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs 
 **Mixed-opponent training (M3.4):** `models/ppo/train.py --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"` samples one opponent family per rollout (weights normalized; mutually exclusive with `--opponent`). The bridge accepts a per-reset opponent override (`{"cmd":"reset","opponent":...}` — `VecGymClient.set_opponent()`/`reset_all(opponent=...)`), so envs switch family at rollout boundaries without respawning; in-flight episodes are abandoned and bootstrapped, the same truncation PPO applies at every rollout end. Seed the pool by copying checkpoints into the run's checkpoint dir named `ppo_step_0_<name>.pt` (step 0 ⇒ never "newest", sampled via the uniform half; skip `ppo_step_0_*` files when sweeping checkpoints for evaluation). v1 (780-dim) seeds work inside an `--obs-v2` run via per-token slicing.
 
 **Head-to-head (M3.3):** `evaluate.py --vs-checkpoint <path>` plays the `--checkpoint` agent (seat p1) directly against a second PPO checkpoint (seat p2) through the dual-seat bridge. PPO-only; both checkpoints must share the obs mode (`--structured` applies to both); mutually exclusive with `--opponent`. Seat bias exists (~3pp) — run both orientations and combine for a fair comparison.
+
+**MCTS (M4):** `evaluate.py --model mcts --checkpoint <ppo.pt>` wraps a structured PPO checkpoint in determinized UCT search at inference time (no training). Per decision it clones the live battle through the bridge's sim protocol (`sim_clone`/`sim_step`/`sim_fork` — `BattleSim` in `sim/tools/battle-sim.ts`), resamples the opponent's unrevealed Pokémon per determinization, and searches with the policy head as PUCT prior and the value head at leaves; the in-search opponent model samples the same policy on the opponent's reveal-tracked obs. Flags: `--sims` (default 100, split across `--determinizations`, default 4), `--c-puct` (1.5), `--no-determinize` (omniscient diagnostic), `--mcts-seat p1|p2` (with `--vs-checkpoint`, for seat-balanced h2h). Single-env by design (`--num-envs` ignored). ~88ms/decision at 100 sims on CPU.
 
 ## Quick-Start Training
 
@@ -92,6 +95,15 @@ python models/evaluate.py --model transformer --checkpoint models/transformer/ch
 python models/evaluate.py --model ppo --structured \
     --checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt \
     --vs-checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 500
+
+# MCTS (M4): determinized UCT over a PPO checkpoint — vs an AI opponent, and
+# seat-balanced head-to-head vs the same checkpoint without search
+python models/evaluate.py --model mcts --checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt \
+    --battles 500 --sims 100 --determinizations 4 --device cpu
+python models/evaluate.py --model mcts --checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt \
+    --vs-checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt --battles 500 --device cpu
+python models/evaluate.py --model mcts --checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt \
+    --vs-checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt --mcts-seat p2 --battles 500 --device cpu
 
 # Evaluate an --obs-v2 checkpoint; --vs-checkpoint may be a v1 checkpoint (cross-schema h2h)
 python models/evaluate.py --model ppo --obs-v2 --checkpoint models/ppo/checkpoints/v2/ppo_step_5000000_final.pt --battles 500

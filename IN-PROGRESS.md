@@ -6,34 +6,63 @@ Last updated: 2026-07-15
 
 ## Current Work
 
-**M4 — MCTS Integration (started 2026-07-15).**
-Layer determinized UCT search on top of the M3.3 best MLP-PPO checkpoint
-(`models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`, v1 schema): policy head
-as prior, value head at leaves, N=100 sims/move. Success criteria (recalibrated
-2026-07-14, relative to the same checkpoint without search): ≥ +10pp vs Random,
-≥ +5pp vs DamageFirst, ≥ +5pp head-to-head, < 500ms/move.
+**M4 — ✅ complete 2026-07-15, POSITIVE RESULT. Next up: M5 (opponent modeling)
+or search tuning.**
+- Determinized UCT over the M3.3 best checkpoint (100 sims, 4 determinizations,
+  88ms/move): **60.2% (602/1000)** seat-balanced h2h vs the same checkpoint
+  without search, **56% (113/200) vs DamageFirst** (raw: 46%) — the first
+  intervention since M2 that clearly improves play, and the first to move the
+  DamageFirst number. **66% (330/500) vs Random** (+8.6pp) narrowly missed the
+  pre-registered +10pp bar; 4 of 5 criteria met. Full tables + reading in
+  `MILESTONES.md` → M4; logs in `models/mcts/results/`.
+- Follow-ups worth considering before/alongside M5: search-knob sweep
+  (`--sims`, `--c-puct`, determinization count — all untuned defaults), the
+  pre-planned A/B on the v2 2.25M checkpoint (richer obs may matter more with
+  search attached), and M5's opponent-model head plugs directly into the
+  search's opponent-action sampler.
 
 ### Active Tasks (M4)
-- [ ] **Forward model** `sim/tools/battle-sim.ts` — clone the live gym battle via
-  `State.serializeBattle`/`deserializeBattle` (verified: 0.8ms round-trip, clone
-  steps independently and plays to terminal), snapshot the gym's reveal/volatile
-  tracker state alongside, step both seats directly on the clone with gym action
-  semantics, reproduce obs/mask/reward exactly. Snapshot API on `PokemonGymEnv`.
-- [ ] **Determinizer** (Node-side, inside battle-sim — deviation from the
-  original `models/mcts/determinizer.py` spec since team generation/legality
-  live in Node): replace *unrevealed* p2 slots in the clone with sets sampled
-  from the gen1randombattle generator; revealed Pokémon keep their tracked
-  state. Documented approximation: revealed Pokémon keep true full movesets.
-- [ ] TS tests: clone isolation, obs parity with the gym, determinization
-  correctness, terminal handling
-- [ ] Bridge/`GymClient` sim protocol: `sim_clone`/`sim_step`/`sim_fork`/`sim_free`
-- [ ] `models/mcts/mcts_agent.py` — root-parallel determinized UCT (PUCT with
-  policy prior; opponent actions sampled from the same policy on the p2 obs;
-  value head + shaped path rewards at leaves; visit counts aggregated across
-  determinizations)
-- [ ] `evaluate.py --model mcts` + latency benchmark (< 500ms/move @ 100 sims)
-- [ ] Eval battery: 500 vs Random, 200 vs DamageFirst, seat-balanced h2h vs the
-  raw checkpoint; record vs criteria in `MILESTONES.md` → M4
+- [x] **Forward model** `sim/tools/battle-sim.ts` — clones the live gym battle via
+  `State.serializeBattle`/`deserializeBattle` (0.8ms round-trip), snapshots the
+  gym's reveal/volatile tracker state alongside (`ObservationTrackers`, extracted
+  from `PokemonGymEnv` + new `snapshot()` API), steps both seats directly on the
+  clone with gym-identical obs/mask/reward semantics, `fork()` for tree branching.
+  **Key engine gotcha found and fixed:** a seat's choice can be auto-completed by
+  the engine (`side.isChoiceDone()` — sleep/recharge/multi-turn locks), so
+  `needsAction` must consult it; submitting a choice for an auto-done seat lands
+  one decision point ahead and desyncs the battle (mask-legal moves get rejected)
+- [x] **Determinizer** (Node-side, inside battle-sim — deviation from the original
+  `models/mcts/determinizer.py` spec since team generation/legality live in Node):
+  replaces the searcher's opponent's *unrevealed* slots with sets sampled from the
+  gen1randombattle generator (seeded, species-clause-safe); `perspective: 'p1'|'p2'`
+  so a p2-seated searcher determinizes p1. Documented approximation: revealed
+  Pokémon keep their true full movesets (only unrevealed *slots* are resampled)
+- [x] TS tests — `test/tools/battle-sim.test.js`, 13 tests: obs parity with the
+  live gym (v1 + v2 byte-equality), determinization invariants (both perspectives,
+  seed-reproducible, revealed mons survive), illegal-free playouts to terminal,
+  fork consistency, snapshot-throws-when-done. All pass; gym suite still green
+- [x] Bridge/`GymClient` sim protocol: `sim_clone` (determinize/seed/perspective),
+  `sim_step`, `sim_fork`, `sim_free`, `sim_free_all`; sims cleared on env reset;
+  measured 0.36ms/sim-step over the wire
+- [x] `models/mcts/mcts_agent.py` — root-parallel determinized PUCT: policy head
+  as prior, opponent actions sampled from the same policy on the opponent's
+  reveal-tracked obs, value head + shaped path rewards at leaves, visit counts
+  summed across determinizations, argmax-visits (Q tiebreak); `seat='p1'|'p2'`;
+  falls back to the raw policy when search can't run (locked-choice roots)
+- [x] `evaluate.py --model mcts` (`--sims/--determinizations/--c-puct/`
+  `--no-determinize/--mcts-seat`, h2h via `--vs-checkpoint`) + latency: **88ms
+  mean / 155ms max per searched decision @ 100 sims** — well under the 500ms
+  budget. Early signal: **73% (22/30) vs Random** (raw checkpoint: 57%)
+- [x] Code committed: `9da4d273a`
+- [x] **Eval battery** (2026-07-15, ~2h): 500 vs Random → **66.0% (330/500)**
+  (raw 57.4%, +8.6pp, criterion ❌ by 5 battles); 200 vs DamageFirst →
+  **56.5% (113/200)** (raw 45.5%, +11.0pp ✅); seat-balanced h2h vs the raw
+  checkpoint → **60.4% as p1 (302/500), 60.0% as p2 (300/500), 60.2%
+  combined ✅**; latency 84–88ms mean / ~102ms p95 ✅ (one 909ms outlier
+  across ~30k searched decisions). Logs: `models/mcts/results/*.log`
+- [x] Results + verdict recorded in `MILESTONES.md` → M4 (4 of 5 criteria met);
+  `docs/MODEL-COMPARISON.md` updated — **MCTS-wrapped M3.3 checkpoint is the
+  new best agent**; M3.3/M3.4 rows backfilled into the ledger
 
 **Previous: M3.4 — ✅ complete 2026-07-15, NEGATIVE RESULT.**
 - Code for both parts (obs schema v2, mixed-opponent training) landed, smoke-verified, and committed (`7533e08d7`). The 5M-step decision run (externally killed at 4.77M steps — no crash; 19 checkpoints cover the trajectory) trained stably in a 42–62% sweep band with no collapse, but full-battle confirmations regress to an M2/M3.3 peer: best **54% (272/500) vs Random**, **46% (92/200) vs DamageFirst**, and **48.0% (480/1000) seat-balanced head-to-head vs the M3.3 best** — all three pre-registered criteria unmet. Full tables + reading in `MILESTONES.md` → M3.4.
@@ -135,6 +164,25 @@ M2 is fully complete (see below).
 ---
 
 ## Recently Completed
+
+✅ **M4: MCTS Integration — positive result, search clearly improves play** (2026-07-15)
+- **Forward model** (`sim/tools/battle-sim.ts`): clones the live gym battle
+  (engine state + tracker state) in 0.8ms, steps both seats with gym-identical
+  obs/mask/reward semantics, forks for tree branching; determinizer resamples
+  the searcher's opponent's unrevealed slots from the format generator (either
+  perspective). Engine gotcha fixed: locked states auto-complete a seat's
+  choice (`side.isChoiceDone()`) — submitting anyway desyncs the battle
+- **Search** (`models/mcts/mcts_agent.py` + bridge `sim_*` protocol +
+  `evaluate.py --model mcts`): root-parallel determinized PUCT, policy prior +
+  value leaves, opponent modeled by the same policy on its reveal-tracked obs
+- **Results** (100 sims / 4 det, base = M3.3 best): 60.2% (602/1000)
+  seat-balanced h2h vs the raw checkpoint; 56% vs DamageFirst (raw 46%); 66%
+  vs Random (raw 57%, +8.6pp — the one criterion narrowly missed, bar was
+  +10pp); 84–88ms/move. 4 of 5 criteria ✅. Committed `9da4d273a` (code);
+  13 new TS tests. Full trail in `MILESTONES.md` → M4
+- **Reading:** confirms M3.4's hypothesis — lookahead was the binding
+  constraint, not observations or opponent distribution. Gains grow with
+  opponent strength (+8.6pp vs Random, +11pp vs DamageFirst, +10.2pp h2h)
 
 ✅ **M3.4: obs schema v2 + mixed-opponent training — negative result, all criteria unmet** (2026-07-15)
 - **Part A:** `TOKEN_DIM_V2=77` — 7 boost stages + Reflect/Light Screen/Substitute/Leech Seed flags + toxic counter appended per token (v1 prefix byte-identical), tracked in `pokemon-gym.ts` from public log lines only, active tokens only; obsMode `'structured-v2'` wired through bridge (`--obs-v2`), clients (`obs_v2=`), trainer, and `evaluate.py`
@@ -331,12 +379,21 @@ None. All components verified and working.
 ### M3.1 / M3.2 — Complete
 ✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
 
-### Immediate (M4 — MCTS)
-M3.4 is closed (negative result — see Current Work). M4 is next, per `MILESTONES.md` → M4:
-1. `models/mcts/mcts_agent.py` — `MCTSNode`, `MCTSAgent` (UCT selection with the PPO policy as prior, value head at leaves, N=100 sims/move)
-2. `models/mcts/determinizer.py` — sample plausible opponent teams conditioned on revealed info (gen1 usage priors)
-3. Base policy: `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt` (M3.3 best); A/B the v2 2.25M checkpoint later
-4. Success criteria (recalibrated, relative): MCTS ≥ +5pp vs DamageFirst and ≥ +10pp vs Random over the same checkpoint without search; < 500ms/move
+### Immediate (post-M4)
+M4 is closed (positive result — see Current Work). Candidate next steps, in
+rough order of value-per-effort:
+1. **Search-knob sweep** (cheap, hours): `--sims {50,100,200,400}`,
+   `--c-puct {0.5,1.0,1.5,2.5}`, determinizations {1,2,4,8} vs Random +
+   DamageFirst at 150–200 battles each; likely closes the vs-Random gap and
+   sets the operating point for M5/M6
+2. **v2-checkpoint A/B** (pre-planned in M3.4): same battery on
+   `models/ppo/checkpoints/v2/ppo_step_2250032.pt` — does the richer obs
+   matter more once search is attached?
+3. **M5 (opponent modeling)**: auxiliary head predicting the opponent's next
+   action; plugs directly into the search's opponent-action sampler (currently
+   the policy itself on the opponent's obs)
+4. Longer term: AlphaZero-style fine-tuning — retrain the value/policy net on
+   MCTS-played games (MILESTONES → M4 "Unblocks")
 
 ### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention

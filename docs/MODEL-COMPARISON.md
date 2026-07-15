@@ -16,6 +16,9 @@ Running record of every evaluated model/run in this project. Evaluation is
 | Transformer PPO, BC warm-started, run 1 (M3) | 2.6M–7.6M | 41% @ 2.6M; peak 46% @ 2.5M; collapsed to 0–13% by 3.6–5.6M | — | ❌ Violent collapse (unconstrained PPO updates) |
 | Transformer PPO, warm-started, run 2 (+KL early-stop, +LR anneal) (M3) | 5.0M | peak 45% @ 500k, decayed to 27% @ 5.0M | — | ❌ Collapse fixed, decay remained |
 | Transformer PPO, warm-started, M3.2 fixes (value warmup + BC KL-anchor + real masks) | 5.0M | holds 44–55% through 3.5M (no collapse); best confirmed **53% (263/500)** @ 500k; decays to 25% by 5M as the anchor anneals away | **39% (77/200)** @ 500k | ❌ Parity vs Random at best, behind vs DamageFirst → **transformer retired (M3.2 decision); M4+ proceeds on MLP-PPO** |
+| MLP-PPO self-play (M3.3 best) | 4.75M | **57% (287/500)** | 46% (91/200) | 🟨 First stable run; peer of M2 (52.4% h2h over 1000); no DamageFirst transfer (`models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`) |
+| MLP-PPO schema-v2 + opponent mix (M3.4 best) | 2.25M | 54% (272/500) | 46% (92/200) | ❌ M2/M3.3 peer (48.0% h2h vs M3.3 best); obs richness + opponent mix ruled out as bottleneck |
+| **MCTS over M3.3 best (M4)** — 100 sims, 4 determinizations | inference-time | **66% (330/500)** | **56% (113/200)** | ✅ **Current best agent.** Beats its own base checkpoint 60.2% (602/1000) seat-balanced h2h; 84–88ms/move. First clear improvement since M2 |
 
 ## Reference points
 
@@ -39,3 +42,7 @@ Running record of every evaluated model/run in this project. Evaluation is
   `models/transformer/checkpoints/m32/train.log`.
 - vs-DamageFirst numbers only exist from M3.3 onward (the opponent was built
   then). Backfill for older checkpoints if a comparison is ever needed.
+- The M4 MCTS row is not a new network — it is the M3.3 checkpoint with
+  determinized UCT search at inference time (`evaluate.py --model mcts`).
+  Search knobs (sims/c_puct/determinizations) are untuned defaults; eval
+  logs in `models/mcts/results/`.

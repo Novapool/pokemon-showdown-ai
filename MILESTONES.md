@@ -679,14 +679,84 @@ success criteria re-anchored to this milestone's result
 
 ---
 
-## M4: MCTS Integration ⬜ AFTER M3.4
+## M4: MCTS Integration ✅ COMPLETE — POSITIVE RESULT
 
-**Status:** ⬜ Not Started
+**Status:** ✅ Complete (2026-07-15). **Search works — the first intervention
+since M2 that clearly improves play.** MCTS (100 sims, 4 determinizations)
+over the M3.3 best checkpoint beats the same checkpoint without search
+**60.2% (602/1000)** seat-balanced head-to-head, improves DamageFirst
+transfer to **56% (113/200)** vs the raw policy's 46% — the number no
+M3.x training intervention could move — and runs at **84–88ms mean /
+~102ms p95** per decision. 3 of 4 pre-registered performance criteria met;
+vs-Random narrowly missed (+8.6pp vs the +10pp bar). Full results below.
 **Architecture note (2026-07-14):** per the M3.2 decision, M4 builds on the
 **MLP-PPO** policy/value network (`models/ppo/`, structured obs), not the
 transformer. References to the transformer below predate that decision; the
 MCTS design is architecture-agnostic (it needs P(a|s) and V(s), which the MLP
 provides).
+
+### Results (2026-07-15) — 100 sims / 4 determinizations, base = M3.3 best (`ppo_step_4750059.pt`), CPU
+
+| Test | MCTS | Raw checkpoint | Criterion | Verdict |
+|---|---|---|---|---|
+| vs RandomPlayerAI (500) | **66.0% (330/500)** | 57.4% (287/500) | ≥ +10pp | ❌ +8.6pp — narrow miss |
+| vs DamageFirstAI (200) | **56.5% (113/200)** | 45.5% (91/200) | ≥ +5pp | ✅ +11.0pp |
+| Head-to-head vs raw, seat p1 (500) | **60.4% (302/500)** | 50% by construction | ≥ +5pp seat-balanced | ✅ |
+| Head-to-head vs raw, seat p2 (500) | **60.0% (300/500)** | | | ✅ **60.2% (602/1000) combined** |
+| Decision latency | 84–88ms mean, ~102ms p95 | — | < 500ms | ✅ (one 909ms outlier across ~30k decisions) |
+| Determinizer team legality | tested (species clause, valid sets, full HP) | — | valid gen1randombattle teams | ✅ |
+
+Artifacts: `models/mcts/results/{vs_random,vs_damagefirst,h2h_seat_p1,h2h_seat_p2,battery}.log`.
+
+### Reading
+
+- The head-to-head is the cleanest causal measure — same network, same
+  battles, only the search differs — and it's a decisive 60/40 in both seat
+  orientations. Combined with the DamageFirst gain, this confirms the M3.4
+  hypothesis that *lookahead*, not observations or opponent distribution,
+  was the binding constraint on this policy.
+- The vs-Random criterion missed by 1.4pp (5 battles). Plausible reading:
+  Random's blunders make many positions winnable by the prior alone, so
+  search adds less there than against coherent opposition — the gain is
+  larger exactly where opponents are stronger (DamageFirst +11pp, h2h +10pp),
+  which is the direction that matters.
+- Untuned knobs left on the table: sim budget (100), c_puct (1.5),
+  determinization count (4), and the value head was trained under γ=0.99
+  shaped rewards while backups are undiscounted. A budget/constant sweep is
+  the cheapest path to closing the vs-Random gap; an A/B on the v2 2.25M
+  checkpoint (richer obs) is the other pre-planned follow-up.
+
+### What Was Built (2026-07-15, committed `9da4d273a`)
+
+- **Forward model** `sim/tools/battle-sim.ts` (`BattleSim`): clones the live
+  gym battle via `State.serializeBattle`/`deserializeBattle` (0.8ms
+  round-trip) plus the gym's tracker state (`ObservationTrackers`, extracted
+  from `PokemonGymEnv`; new `snapshot()` API), steps both seats directly on
+  the clone with gym-identical obs/mask/reward semantics, `fork()` for tree
+  branching. **Engine gotcha fixed:** locked states (sleep, recharge,
+  multi-turn moves) auto-complete a seat's choice (`side.isChoiceDone()`);
+  submitting for such a seat lands one decision point ahead and desyncs the
+  battle — `needsAction` now consults it (30/30 random playouts clean).
+- **Determinizer** (Node-side, inside `BattleSim` — deviation from the
+  original `models/mcts/determinizer.py` spec since team generation and
+  legality live in Node): replaces the searcher's opponent's *unrevealed*
+  slots with sets sampled from the gen1randombattle generator (seeded,
+  species-clause-safe); `perspective: 'p1'|'p2'` so a p2-seated searcher
+  determinizes p1. Documented approximation: revealed Pokémon keep their
+  true full movesets — only unrevealed slots are resampled.
+- **Bridge sim protocol**: `sim_clone`/`sim_step`/`sim_fork`/`sim_free`/
+  `sim_free_all` in `gym_bridge.js` + `GymClient` wrappers (0.36ms/step over
+  the wire); sims cleared on env reset.
+- **`models/mcts/mcts_agent.py`**: root-parallel determinized PUCT — policy
+  head as prior, opponent modeled by sampling the same policy on its
+  reveal-tracked obs, value head + shaped path rewards at leaves, visit
+  counts summed across determinizations, argmax-visits with Q tiebreak;
+  `seat='p1'|'p2'`; raw-policy fallback for locked-choice roots.
+- **`evaluate.py --model mcts`** with `--sims/--determinizations/--c-puct/`
+  `--no-determinize/--mcts-seat`; h2h via `--vs-checkpoint` in either seat.
+- **Tests**: `test/tools/battle-sim.test.js` (13) — obs parity with the live
+  gym (v1+v2 byte-equality), determinization invariants both perspectives,
+  illegal-free playouts, fork consistency; gym suite unaffected.
 **Goals:** Layer UCT-based Monte Carlo Tree Search on top of the trained PPO
 policy. Use the learned value network for leaf evaluation instead of random
 rollouts. Start with inference-time MCTS; add AlphaZero-style fine-tuning later.
@@ -722,19 +792,23 @@ more complex — defer unless determinization plateaus.
 | `models/mcts/mcts_agent.py` | `MCTSNode`, `MCTSAgent` with `search()`, `select()`, `expand()`, `backup()` |
 | `models/mcts/determinizer.py` | Samples plausible opponent teams given revealed Pokémon |
 
-### Success Criteria
+### Success Criteria — 4 of 5 MET (2026-07-15)
 Recalibrated 2026-07-14 — the original targets assumed a ≥90%-vs-Random base
 policy that never materialized; these anchor to whatever M3.4 produces.
-- MCTS(N=100) + MLP value beats the raw MLP-PPO policy (same checkpoint,
-  no search) by ≥ 5pp win rate vs DamageFirstAI
-- MCTS beats the raw policy head-to-head (`evaluate.py --vs-checkpoint`-style
-  dual-seat, seat-balanced) by ≥ 5pp
-- Decision latency < 500ms per move (100 sims, gen1 is fast)
-- Win rate vs RandomPlayerAI ≥ base policy + 10pp
-- Determinizer generates valid gen1randombattle-legal teams
+- ✅ MCTS(N=100) + MLP value beats the raw MLP-PPO policy (same checkpoint,
+  no search) by ≥ 5pp win rate vs DamageFirstAI — **+11.0pp (56.5% vs 45.5%)**
+- ✅ MCTS beats the raw policy head-to-head (`evaluate.py --vs-checkpoint`-style
+  dual-seat, seat-balanced) by ≥ 5pp — **+10.2pp (60.2% over 1000 battles)**
+- ✅ Decision latency < 500ms per move (100 sims, gen1 is fast) — **84–88ms mean**
+- ❌ Win rate vs RandomPlayerAI ≥ base policy + 10pp — **+8.6pp (66.0% vs
+  57.4%), 5 battles short of the bar; see Reading**
+- ✅ Determinizer generates valid gen1randombattle-legal teams
 
 ### Unblocks
-Self-play with MCTS policy (generates higher-quality training data for future fine-tuning)
+Self-play with MCTS policy (generates higher-quality training data for future
+fine-tuning); M5 (opponent modeling — a better opponent model plugs directly
+into the search's opponent-action sampler); M6 (the live bot should ship with
+search, it's 60/40 better than the raw policy at 88ms/move)
 
 ---
 
@@ -852,6 +926,6 @@ Best action
 | M3.2: BC→PPO Fix | ✅ | Fixes verified; transformer still ≤ baseline → **retired; M4+ proceeds on MLP-PPO** | M4, M5 |
 | M3.3: Self-Play + Opponents | ✅ | Self-play fixed training stability; peer of M2 (52.4% h2h), no DamageFirst transfer | M3.4 |
 | M3.4: Policy Ceiling | ✅ | Negative result — schema v2 + opponent mix trains stably but confirms as an M2/M3.3 peer (54%/46%/48% h2h) | M4, M5 |
-| M4: MCTS | ⬜ | UCT search over value network | M6 |
+| M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |
