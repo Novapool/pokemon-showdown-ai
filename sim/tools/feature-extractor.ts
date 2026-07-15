@@ -374,6 +374,56 @@ export function extractFeatures(
 export const TOKEN_DIM = 65;
 export const N_TOKENS = 12;
 
+// ---- Schema v2 (M3.4) -------------------------------------------------------
+//
+// The v1 65-dim token was frozen to match the Metamon BC checkpoint's input
+// projection. The M3.2 decision retired the transformer/BC path, so v2 is a
+// deliberate schema bump: 12 extra dims are APPENDED to every token (dims
+// 0–64 stay byte-identical to v1, so a v1 observation is exactly the first 65
+// dims of each v2 token). The new dims are only ever non-zero on the two
+// active-Pokémon tokens ([0] own active, [6] opponent active) — gen1 boosts
+// and volatiles all reset on switch, so bench tokens are correctly neutral.
+
+export const TOKEN_DIM_V2 = 77;
+
+const V_BOOSTS = 65;        // 7 dims: atk, def, spe, spa, accuracy, evasion, spd — each stage/6 in [-1, 1]
+const V_REFLECT = 72;
+const V_LIGHTSCREEN = 73;
+const V_SUBSTITUTE = 74;
+const V_LEECHSEED = 75;
+const V_TOXIC_COUNTER = 76; // poison damage ticks since status applied, min(n,16)/16
+
+/** Boost-slot order for ActiveVolatiles.boosts (gen1: spa/spd are both "special"). */
+export const BOOST_ORDER = ['atk', 'def', 'spe', 'spa', 'accuracy', 'evasion', 'spd'] as const;
+
+/**
+ * Boost stages and volatile conditions of one ACTIVE Pokémon, tracked by the
+ * gym from public battle-log lines (see pokemon-gym.ts). All of it resets on
+ * switch/faint, matching gen1 mechanics.
+ */
+export interface ActiveVolatiles {
+	/** 7 stages in BOOST_ORDER, each an integer in [-6, 6]. */
+	boosts: number[];
+	reflect: boolean;
+	lightScreen: boolean;
+	substitute: boolean;
+	leechSeed: boolean;
+	/** Poison/toxic damage ticks taken since the status was applied. */
+	toxicCounter: number;
+}
+
+function fillVolatileDims(obs: Float32Array, offset: number, vol: ActiveVolatiles): void {
+	for (let i = 0; i < 7; i++) {
+		const stage = vol.boosts[i] ?? 0;
+		obs[offset + V_BOOSTS + i] = Math.max(-1, Math.min(1, stage / 6));
+	}
+	obs[offset + V_REFLECT] = vol.reflect ? 1.0 : 0.0;
+	obs[offset + V_LIGHTSCREEN] = vol.lightScreen ? 1.0 : 0.0;
+	obs[offset + V_SUBSTITUTE] = vol.substitute ? 1.0 : 0.0;
+	obs[offset + V_LEECHSEED] = vol.leechSeed ? 1.0 : 0.0;
+	obs[offset + V_TOXIC_COUNTER] = Math.min(vol.toxicCounter, 16) / 16;
+}
+
 const T_HP = 0;
 const T_LEVEL = 1;
 const T_TYPE1 = 2;
@@ -498,8 +548,8 @@ function fillOpponentToken(obs: Float32Array, offset: number, info: OpponentPoke
 	fillPokemonToken(obs, offset, info.details, info.condition, info.active, moves);
 }
 
-function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[]): void {
-	const activeOffset = 6 * TOKEN_DIM;
+function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[], tokenDim: number): void {
+	const activeOffset = 6 * tokenDim;
 	const active = opponent.find(p => p.active);
 	if (active) {
 		fillOpponentToken(obs, activeOffset, active);
@@ -511,7 +561,7 @@ function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[]):
 
 	const bench = opponent.filter(p => !p.active);
 	for (let j = 0; j < 5; j++) {
-		const offset = (7 + j) * TOKEN_DIM;
+		const offset = (7 + j) * tokenDim;
 		if (j < bench.length) {
 			fillOpponentToken(obs, offset, bench[j]);
 		} else {
@@ -531,15 +581,22 @@ function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[]):
  *
  * `opponent` must be built from what a real player could observe (see the
  * opponent tracker in pokemon-gym.ts) — never from omniscient/hidden state.
+ *
+ * Passing `volatiles` (M3.4) switches to schema v2: 77-dim tokens whose first
+ * 65 dims are identical to v1, with boost stages and volatile-condition flags
+ * appended on the two active tokens ([0] own, [6] opponent).
  */
 export function extractFeaturesStructured(
 	request: ChoiceRequest,
 	opponent: OpponentPokemonInfo[],
+	volatiles?: { own: ActiveVolatiles, opp: ActiveVolatiles } | null,
 ): Float32Array {
-	const obs = new Float32Array(N_TOKENS * TOKEN_DIM);
+	const tokenDim = volatiles ? TOKEN_DIM_V2 : TOKEN_DIM;
+	const obs = new Float32Array(N_TOKENS * tokenDim);
 
 	if (request.wait || request.teamPreview) {
-		fillOpponentTokens(obs, opponent);
+		fillOpponentTokens(obs, opponent, tokenDim);
+		if (volatiles) fillVolatileDims(obs, 6 * tokenDim, volatiles.opp);
 		return obs;
 	}
 
@@ -561,7 +618,7 @@ export function extractFeaturesStructured(
 	}
 
 	for (let slot = 1; slot <= 5; slot++) {
-		const offset = slot * TOKEN_DIM;
+		const offset = slot * tokenDim;
 		const poke = pokemon[slot];
 		if (!poke) {
 			fillFaintedToken(obs, offset);
@@ -570,7 +627,12 @@ export function extractFeaturesStructured(
 		fillOwnBenchToken(obs, offset, poke);
 	}
 
-	fillOpponentTokens(obs, opponent);
+	fillOpponentTokens(obs, opponent, tokenDim);
+
+	if (volatiles) {
+		fillVolatileDims(obs, 0, volatiles.own);
+		fillVolatileDims(obs, 6 * tokenDim, volatiles.opp);
+	}
 
 	return obs;
 }

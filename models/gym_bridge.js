@@ -15,7 +15,9 @@
  *
  * By default obs is the M2 structured (12, 65) token observation flattened
  * to 780 floats. Pass --flat on the command line to fall back to the legacy
- * 100-dim extractFeatures() vector (M1 MLP baseline regression checks).
+ * 100-dim extractFeatures() vector (M1 MLP baseline regression checks), or
+ * --obs-v2 (M3.4) for the (12, 77) schema-v2 observation (boost stages +
+ * volatile flags) flattened to 924 floats.
  *
  * Opponent selection (M3.3):
  *   --opponent random|damagefirst   picks the built-in p2 AI (default random)
@@ -28,20 +30,32 @@
  *       → {"p1":{...},"p2":{...},"reward":<float>,"done":<bool>,"info":{}}
  *   Pass an action for exactly the seats whose "needs" was true; reward is
  *   always from p1's perspective (self-play trains the p1 seat).
+ *
+ * Per-reset opponent override (M3.4, --opponent-mix training):
+ *   {"cmd":"reset","opponent":"random"|"damagefirst"|"self"} recreates the
+ *   env with that opponent for the new episode. "self" switches this env to
+ *   the dual-seat protocol (and back) — the reset/step response shapes follow
+ *   the CURRENT episode's opponent, not the spawn-time flags.
  */
 
 const readline = require('readline');
 const { PokemonGymEnv } = require('../dist/sim/tools/pokemon-gym');
 
-const obsMode = process.argv.includes('--flat') ? 'flat' : 'structured';
+const flat = process.argv.includes('--flat');
+const obsV2 = process.argv.includes('--obs-v2');
+if (flat && obsV2) {
+	process.stdout.write(JSON.stringify({ error: '--flat and --obs-v2 are mutually exclusive' }) + '\n');
+	process.exit(1);
+}
+const obsMode = flat ? 'flat' : (obsV2 ? 'structured-v2' : 'structured');
 const selfplay = process.argv.includes('--selfplay');
 const opponentArgIdx = process.argv.indexOf('--opponent');
-const opponent = selfplay
+const defaultOpponent = selfplay
 	? 'self'
 	: (opponentArgIdx !== -1 ? process.argv[opponentArgIdx + 1] : 'random');
 
-if (!['random', 'damagefirst', 'self'].includes(opponent)) {
-	process.stdout.write(JSON.stringify({ error: `unknown --opponent: ${opponent}` }) + '\n');
+if (!['random', 'damagefirst', 'self'].includes(defaultOpponent)) {
+	process.stdout.write(JSON.stringify({ error: `unknown --opponent: ${defaultOpponent}` }) + '\n');
 	process.exit(1);
 }
 
@@ -53,6 +67,8 @@ function seatToJSON(seat) {
 // Env is recreated on every reset() to avoid stream/worker accumulation.
 let env = null;
 let initialized = false;
+// Opponent of the CURRENT episode; 'self' selects the dual-seat protocol.
+let currentOpponent = defaultOpponent;
 
 /**
  * Write a single JSON response line to stdout.
@@ -72,9 +88,15 @@ async function processCommand(command) {
 	const { cmd } = command;
 
 	if (cmd === 'reset') {
+		const requested = command.opponent ?? currentOpponent;
+		if (!['random', 'damagefirst', 'self'].includes(requested)) {
+			respond({ error: `unknown opponent: ${requested}` });
+			return;
+		}
 		if (env) env.destroy();
-		env = new PokemonGymEnv({ obsMode, opponent });
-		if (selfplay) {
+		currentOpponent = requested;
+		env = new PokemonGymEnv({ obsMode, opponent: currentOpponent });
+		if (currentOpponent === 'self') {
 			const result = await env.resetDual();
 			initialized = true;
 			respond({ p1: seatToJSON(result.p1), p2: seatToJSON(result.p2) });
@@ -89,7 +111,7 @@ async function processCommand(command) {
 			respond({ error: 'not initialized' });
 			return;
 		}
-		if (selfplay) {
+		if (currentOpponent === 'self') {
 			const action = command.action ?? null;
 			const oppAction = command.opp_action ?? null;
 			const result = await env.stepDual(action, oppAction);

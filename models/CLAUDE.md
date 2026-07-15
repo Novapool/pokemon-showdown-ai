@@ -20,11 +20,15 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 
 Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs as a child process spawned by `gym_client.py` via `subprocess.Popen`. All communication between Python and the bridge is line-delimited JSON over stdin/stdout — one command object per line in, one response object per line out. The bridge wraps `PokemonGymEnv` from `dist/sim/tools/pokemon-gym.js`, so the TypeScript simulator must be compiled before the bridge can run. Build it once with `./build` (or `npm run build`) at the repo root before starting any training script.
 
-**Observation modes (M2):** `GymClient()` defaults to the structured `(12, 65)` per-Pokémon token observation. Pass `GymClient(structured=False)` (bridge: `--flat`) for the legacy 100-dim flat vector — required for `q_learning/`, `dqn/`, and `ppo/`, whose networks are hardcoded to that shape. `evaluate.py` also uses `structured=False` for the same reason.
+**Observation modes (M2/M3.4):** `GymClient()` defaults to the structured `(12, 65)` per-Pokémon token observation. Pass `GymClient(structured=False)` (bridge: `--flat`) for the legacy 100-dim flat vector — required for `q_learning/`, `dqn/`, and `ppo/`-flat, whose networks are hardcoded to that shape. `GymClient(obs_v2=True)` (bridge: `--obs-v2`) selects **schema v2** `(12, 77)` (M3.4): v1 tokens with 12 dims appended per token — 7 boost stages (atk/def/spe/spa/accuracy/evasion/spd, stage/6) + Reflect/Light Screen/Substitute/Leech Seed flags + toxic counter, non-zero only on the two active tokens. Dims 0–64 are byte-identical to v1, so `gym_client.slice_structured_obs()` gives a v1 agent its native view of a v2 observation — this is how v1 checkpoints act as self-play opponents (pool seeding) and head-to-head opponents inside a v2 env.
 
 **Parallelism (M3.1):** the PPO/transformer trainers and `evaluate.py` run `--num-envs` parallel simulations (default 8, ~5x throughput) via `VecGymClient`; `--num-envs 1` reproduces the serial path. `--device {cpu,mps,cuda}` overrides device auto-detection; checkpoints never store the device and are portable Mac↔CUDA. See `docs/ML-TRAINING.md` → **Parallel Training** for benchmarks and the CUDA-machine setup note.
 
 **Opponents & self-play (M3.3):** both trainers and `evaluate.py` take `--opponent` — `random` (legacy `RandomPlayerAI`, never voluntarily switches), `damagefirst` (highest-base-power heuristic, `sim/tools/damage-first-ai.ts`), or (trainers only) `selfplay`. Self-play runs the bridge in dual-seat mode (`gym_bridge.js --selfplay`): each rollout samples a frozen opponent from `--selfplay-pool` (default: the run's own checkpoint dir; 50% newest / 50% uniform; a frozen copy of the current policy until the first checkpoint exists). Reward and training remain p1-only. Baseline: the M2 MLP checkpoint scores 51% vs DamageFirstAI (101/200).
+
+**Mixed-opponent training (M3.4):** `models/ppo/train.py --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"` samples one opponent family per rollout (weights normalized; mutually exclusive with `--opponent`). The bridge accepts a per-reset opponent override (`{"cmd":"reset","opponent":...}` — `VecGymClient.set_opponent()`/`reset_all(opponent=...)`), so envs switch family at rollout boundaries without respawning; in-flight episodes are abandoned and bootstrapped, the same truncation PPO applies at every rollout end. Seed the pool by copying checkpoints into the run's checkpoint dir named `ppo_step_0_<name>.pt` (step 0 ⇒ never "newest", sampled via the uniform half; skip `ppo_step_0_*` files when sweeping checkpoints for evaluation). v1 (780-dim) seeds work inside an `--obs-v2` run via per-token slicing.
+
+**Head-to-head (M3.3):** `evaluate.py --vs-checkpoint <path>` plays the `--checkpoint` agent (seat p1) directly against a second PPO checkpoint (seat p2) through the dual-seat bridge. PPO-only; both checkpoints must share the obs mode (`--structured` applies to both); mutually exclusive with `--opponent`. Seat bias exists (~3pp) — run both orientations and combine for a fair comparison.
 
 ## Quick-Start Training
 
@@ -71,6 +75,11 @@ python models/transformer/train.py --steps 5000000 --checkpoint-every 250000 --n
 python models/ppo/train.py --structured --steps 5000000 --checkpoint-every 250000 --num-envs 8 \
     --opponent selfplay --checkpoint-dir models/ppo/checkpoints/selfplay
 
+# M3.4: schema-v2 obs (12,77)->924 + mixed opponents, pool seeded with M2 + M3.3-best
+# (cp <ckpt> models/ppo/checkpoints/v2/ppo_step_0_<name>.pt before starting)
+python models/ppo/train.py --obs-v2 --steps 5000000 --checkpoint-every 250000 --num-envs 8 \
+    --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" --checkpoint-dir models/ppo/checkpoints/v2
+
 # Evaluate a checkpoint (--num-envs 8 parallel battles by default; --num-envs 1 = legacy serial)
 # Add --opponent damagefirst to evaluate against the heuristic attacker instead of RandomPlayerAI
 python models/evaluate.py --model dqn --checkpoint models/dqn/checkpoints/dqn_step_100000.pt --battles 200
@@ -78,6 +87,16 @@ python models/evaluate.py --model q_learning --checkpoint models/q_learning/qtab
 python models/evaluate.py --model ppo --checkpoint models/ppo/checkpoints/ppo_step_100000.pt --battles 200
 python models/evaluate.py --model ppo --structured --checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 200
 python models/evaluate.py --model transformer --checkpoint models/transformer/checkpoints/pretrained/transformer_step_2600000_final.pt --battles 200
+
+# Head-to-head: checkpoint vs checkpoint (M3.3) — run both seat orders and combine
+python models/evaluate.py --model ppo --structured \
+    --checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt \
+    --vs-checkpoint models/ppo/checkpoints/structured/ppo_step_2600000_final.pt --battles 500
+
+# Evaluate an --obs-v2 checkpoint; --vs-checkpoint may be a v1 checkpoint (cross-schema h2h)
+python models/evaluate.py --model ppo --obs-v2 --checkpoint models/ppo/checkpoints/v2/ppo_step_5000000_final.pt --battles 500
+python models/evaluate.py --model ppo --obs-v2 --checkpoint models/ppo/checkpoints/v2/ppo_step_5000000_final.pt \
+    --vs-checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt --battles 500
 ```
 
 For the full message type reference and troubleshooting, see `docs/ML-TRAINING.md` -> **Python-Node Bridge Protocol**.

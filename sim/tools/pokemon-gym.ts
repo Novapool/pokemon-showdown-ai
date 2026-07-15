@@ -14,8 +14,8 @@ import type { PRNGSeed } from '../prng';
 import { toID } from '../dex-data';
 import { RandomPlayerAI } from './random-player-ai';
 import { DamageFirstAI } from './damage-first-ai';
-import { extractFeatures, extractFeaturesStructured } from './feature-extractor';
-import type { OpponentPokemonInfo } from './feature-extractor';
+import { extractFeatures, extractFeaturesStructured, BOOST_ORDER, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2 } from './feature-extractor';
+import type { OpponentPokemonInfo, ActiveVolatiles } from './feature-extractor';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
 
 // ---------------------------------------------------------------------------
@@ -26,9 +26,11 @@ import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
  * 'structured' (default) returns the (12, 65) per-Pokémon token observation
  * from extractFeaturesStructured(), flattened to 780 floats. 'flat' returns
  * the legacy 100-dim extractFeatures() vector for MLP-baseline regression
- * checks against the M1 result.
+ * checks against the M1 result. 'structured-v2' (M3.4) returns the (12, 77)
+ * schema-v2 observation — v1 tokens plus boost stages and volatile-condition
+ * flags on the two active tokens — flattened to 924 floats.
  */
-export type ObsMode = 'flat' | 'structured';
+export type ObsMode = 'flat' | 'structured' | 'structured-v2';
 
 /**
  * Who sits in the p2 seat (M3.3):
@@ -69,6 +71,44 @@ interface OpponentRecord {
 	condition: string;
 	active: boolean;
 	moves: string[];
+}
+
+/**
+ * Internal per-side volatile tracker (M3.4, obsMode 'structured-v2') —
+ * boost stages and volatile conditions of the side's ACTIVE Pokémon,
+ * reconstructed purely from public battle-log lines. Everything resets on
+ * switch/drag/faint, matching gen1 mechanics (boosts, screens, Substitute,
+ * Leech Seed, and the toxic counter are all lost on switch-out).
+ */
+interface SideVolatiles {
+	boosts: Record<string, number>;
+	reflect: boolean;
+	lightScreen: boolean;
+	substitute: boolean;
+	leechSeed: boolean;
+	toxicCounter: number;
+}
+
+function freshSideVolatiles(): SideVolatiles {
+	return {
+		boosts: {},
+		reflect: false,
+		lightScreen: false,
+		substitute: false,
+		leechSeed: false,
+		toxicCounter: 0,
+	};
+}
+
+function toActiveVolatiles(v: SideVolatiles): ActiveVolatiles {
+	return {
+		boosts: BOOST_ORDER.map(stat => v.boosts[stat] ?? 0),
+		reflect: v.reflect,
+		lightScreen: v.lightScreen,
+		substitute: v.substitute,
+		leechSeed: v.leechSeed,
+		toxicCounter: v.toxicCounter,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +223,12 @@ export class PokemonGymEnv {
 		p1: new Map(), p2: new Map(),
 	};
 
+	// Active-Pokémon volatile trackers (M3.4, 'structured-v2') — same
+	// public-lines-only rule as the reveal trackers.
+	private _volatiles: { p1: SideVolatiles, p2: SideVolatiles } = {
+		p1: freshSideVolatiles(), p2: freshSideVolatiles(),
+	};
+
 	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind } = {}) {
 		this._format = options.format ?? 'gen1randombattle';
 		this._seed = options.seed;
@@ -228,6 +274,7 @@ export class PokemonGymEnv {
 		// Reset reveal trackers
 		this._revealOrder = { p1: [], p2: [] };
 		this._revealRecords = { p1: new Map(), p2: new Map() };
+		this._volatiles = { p1: freshSideVolatiles(), p2: freshSideVolatiles() };
 
 		// Start players (they loop reading their streams)
 		void this._gymPlayer.start();
@@ -584,7 +631,9 @@ export class PokemonGymEnv {
 		if (this._obsMode === 'flat') {
 			return extractFeatures(this._currentRequest!, null);
 		}
-		return extractFeaturesStructured(this._currentRequest!, this._getOpponentInfo('p1'));
+		return extractFeaturesStructured(
+			this._currentRequest!, this._getOpponentInfo('p1'), this._getVolatilesFor('p1'),
+		);
 	}
 
 	/** Obs for a specific seat (dual-seat self-play mode). */
@@ -593,12 +642,24 @@ export class PokemonGymEnv {
 		const request = player._lastActionable ?? player._currentRequest;
 		if (!request) {
 			// Stream closed before any actionable request — terminal filler
-			return new Float32Array(this._obsMode === 'flat' ? 100 : 780);
+			const size = this._obsMode === 'flat' ? 100 :
+				N_TOKENS * (this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM);
+			return new Float32Array(size);
 		}
 		if (this._obsMode === 'flat') {
 			return extractFeatures(request, null);
 		}
-		return extractFeaturesStructured(request, this._getOpponentInfo(seat));
+		return extractFeaturesStructured(request, this._getOpponentInfo(seat), this._getVolatilesFor(seat));
+	}
+
+	/** The `viewer` seat's volatile view (own side + opponent side), or null in v1 mode. */
+	private _getVolatilesFor(viewer: 'p1' | 'p2'): { own: ActiveVolatiles, opp: ActiveVolatiles } | null {
+		if (this._obsMode !== 'structured-v2') return null;
+		const other = viewer === 'p1' ? 'p2' : 'p1';
+		return {
+			own: toActiveVolatiles(this._volatiles[viewer]),
+			opp: toActiveVolatiles(this._volatiles[other]),
+		};
 	}
 
 	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */
@@ -671,6 +732,55 @@ export class PokemonGymEnv {
 	}
 
 	/**
+	 * Update the per-side volatile trackers (boosts, screens, Substitute,
+	 * Leech Seed, toxic counter) from one battle-log line. All of these are
+	 * public information. Gen1 line inventory:
+	 *   |-boost|p1a: X|atk|1     |-unboost|...        (stat stages)
+	 *   |-clearallboost|[silent]                      (Haze — both sides)
+	 *   |-start|p1a: X|Reflect / Light Screen / Substitute / move: Leech Seed
+	 *   |-end|p1a: X|<same>                           (incl. Haze's [silent] ends)
+	 *   |-status|p1a: X|tox / |-curestatus|           (toxic-counter lifecycle)
+	 *   |-damage|p1a: X|HP|[from] psn                 (one poison tick)
+	 *   |switch/|drag/|faint                          (everything resets)
+	 */
+	private _processVolatileLine(line: string): void {
+		const parts = line.split('|');
+		const type = parts[1];
+
+		if (type === '-clearallboost') {
+			this._volatiles.p1.boosts = {};
+			this._volatiles.p2.boosts = {};
+			return;
+		}
+
+		const ident = parts[2] ?? '';
+		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
+		if (!side) return;
+		const vol = this._volatiles[side];
+
+		if (type === 'switch' || type === 'drag' || type === 'faint') {
+			this._volatiles[side] = freshSideVolatiles();
+		} else if (type === '-boost' || type === '-unboost') {
+			const stat = parts[3] ?? '';
+			const amount = parseInt(parts[4] ?? '', 10);
+			if (!stat || isNaN(amount)) return;
+			const delta = type === '-boost' ? amount : -amount;
+			vol.boosts[stat] = Math.max(-6, Math.min(6, (vol.boosts[stat] ?? 0) + delta));
+		} else if (type === '-start' || type === '-end') {
+			const condition = (parts[3] ?? '').replace(/^move: /, '');
+			const value = type === '-start';
+			if (condition === 'Reflect') vol.reflect = value;
+			else if (condition === 'Light Screen') vol.lightScreen = value;
+			else if (condition === 'Substitute') vol.substitute = value;
+			else if (condition === 'Leech Seed') vol.leechSeed = value;
+		} else if (type === '-status' || type === '-curestatus') {
+			vol.toxicCounter = 0;
+		} else if (type === '-damage' && line.includes('[from] psn')) {
+			vol.toxicCounter++;
+		}
+	}
+
+	/**
 	 * Parse a batch of new omniscient lines into (reward, done, winner),
 	 * updating the turn counter as a side effect. Reward is always from p1's
 	 * perspective. Shared between step() and stepDual().
@@ -711,6 +821,7 @@ export class PokemonGymEnv {
 					if (!line) continue;
 					this._omniscientLines.push(line);
 					this._processRevealLine(line);
+					this._processVolatileLine(line);
 
 					// Notify any pending waiters that new data arrived
 					if (this._omniscientNotify) {

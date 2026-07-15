@@ -11,7 +11,8 @@ Protocol (one JSON object per line):
 By default the bridge returns the M2 structured (12, 65) token observation
 as a flat 780-element array; GymClient reshapes it back to (12, 65). Pass
 structured=False to run the bridge with --flat and get the legacy 100-dim
-vector instead (M1 MLP baseline regression checks).
+vector instead (M1 MLP baseline regression checks), or obs_v2=True (M3.4)
+for the (12, 77) schema-v2 observation (boost stages + volatile flags).
 """
 
 import json
@@ -24,9 +25,37 @@ import numpy as np
 
 N_TOKENS = 12
 TOKEN_DIM = 65
+TOKEN_DIM_V2 = 77
 
 # Set to True to print every send/receive for hang debugging
 DEBUG = False
+
+
+def slice_structured_obs(obs_flat: np.ndarray, agent_obs_size: int, n_tokens: int = N_TOKENS) -> np.ndarray:
+    """Adapt a flattened structured observation batch to an agent's obs size.
+
+    Schema v2 tokens are v1 tokens with extra dims APPENDED, so a v1 view of a
+    v2 observation is exactly the first 65 dims of each 77-dim token. This
+    lets v1 checkpoints (the M2 baseline, the M3.3 self-play best) act inside
+    a v2 env — self-play pool seeding and cross-schema head-to-head (M3.4).
+
+    Args:
+        obs_flat:       (N, n_tokens * d_env) float32 batch.
+        agent_obs_size: the agent's expected flat obs size (n_tokens * d_agent).
+
+    Returns:
+        (N, agent_obs_size) — the input unchanged if sizes already match.
+    """
+    if obs_flat.shape[-1] == agent_obs_size:
+        return obs_flat
+    d_env = obs_flat.shape[-1] // n_tokens
+    d_agent = agent_obs_size // n_tokens
+    if n_tokens * d_env != obs_flat.shape[-1] or n_tokens * d_agent != agent_obs_size or d_agent > d_env:
+        raise ValueError(
+            f"cannot adapt obs of size {obs_flat.shape[-1]} to agent obs_size {agent_obs_size}"
+        )
+    n = obs_flat.shape[0]
+    return obs_flat.reshape(n, n_tokens, d_env)[:, :, :d_agent].reshape(n, agent_obs_size)
 
 
 class GymClient:
@@ -38,18 +67,28 @@ class GymClient:
         structured: bool = True,
         opponent: str = "random",
         selfplay: bool = False,
+        obs_v2: bool = False,
     ):
         """opponent: 'random' (legacy default) or 'damagefirst' (M3.3 heuristic).
         selfplay=True runs the bridge in dual-seat mode (opponent seat driven
-        externally) — use reset_dual()/step_dual() instead of reset()/step()."""
+        externally) — use reset_dual()/step_dual() instead of reset()/step().
+        obs_v2=True (M3.4) selects the (12, 77) schema-v2 observation.
+        set_opponent() switches the opponent (and single/dual protocol) for
+        subsequent resets — used by --opponent-mix training."""
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
+        if obs_v2 and not structured:
+            raise ValueError("obs_v2=True requires structured=True")
         self._bridge_path = bridge_path
         self._structured = structured
+        self._token_dim = TOKEN_DIM_V2 if obs_v2 else TOKEN_DIM
         self._selfplay = selfplay
+        self._opponent = "self" if selfplay else opponent
         args = ["node", bridge_path]
         if not structured:
             args.append("--flat")
+        if obs_v2:
+            args.append("--obs-v2")
         if selfplay:
             args.append("--selfplay")
         elif opponent != "random":
@@ -67,7 +106,20 @@ class GymClient:
         self._stderr_thread.start()
 
     def _reshape(self, obs: np.ndarray) -> np.ndarray:
-        return obs.reshape(N_TOKENS, TOKEN_DIM) if self._structured else obs
+        return obs.reshape(N_TOKENS, self._token_dim) if self._structured else obs
+
+    def set_opponent(self, opponent: str) -> None:
+        """Switch the opponent used by subsequent resets (M3.4 --opponent-mix).
+
+        'self' switches this client to the dual-seat protocol (use
+        reset_dual()/step_dual()); anything else back to single-seat."""
+        if opponent not in ("random", "damagefirst", "self"):
+            raise ValueError(f"unknown opponent: {opponent!r}")
+        self._opponent = opponent
+        self._selfplay = opponent == "self"
+
+    def _reset_cmd(self) -> dict:
+        return {"cmd": "reset", "opponent": self._opponent}
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -128,7 +180,7 @@ class GymClient:
                         constructed with structured=False. dtype float32
             valid_mask: list of bool, length 9
         """
-        response = self._send({"cmd": "reset"})
+        response = self._send(self._reset_cmd())
         obs = self._reshape(np.array(response["obs"], dtype=np.float32))
         mask = list(response["mask"])
         return obs, mask
@@ -170,7 +222,7 @@ class GymClient:
     def reset_dual(self) -> tuple:
         """Reset in dual-seat mode. Returns (p1_state, p2_state) dicts, each
         {"obs": ndarray, "mask": (9,) bool ndarray, "needs": bool}."""
-        response = self._send({"cmd": "reset"})
+        response = self._send(self._reset_cmd())
         return self._parse_seat(response["p1"]), self._parse_seat(response["p2"])
 
     def step_dual(self, action, opp_action) -> tuple:

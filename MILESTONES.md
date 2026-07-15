@@ -328,7 +328,7 @@ rollout_steps=512, ppo_epochs=4, batch_size=64
 **Conclusion:** the transformer's ceiling (~46%) is below the MLP baseline (51%) regardless of warm-starting, training budget (2.6M–7.6M steps tested), or PPO stability fixes. This is a genuine negative result, not an artifact of insufficient training or an unresolved bug.
 
 ### Unblocks
-M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head) — **both on hold** pending M3.2, which decides whether the transformer is revisited or retired in favor of the M2 MLP-PPO baseline. Direction decided 2026-07-14: run M3.1 (parallel training) → M3.2 (BC→PPO degradation fix) → M3.3 (self-play + opponent pool) before touching M4+.
+M4 (needs trained value function for MCTS leaf evaluation), M5 (opponent modeling head) — **both on hold** pending M3.2, which decides whether the transformer is revisited or retired in favor of the M2 MLP-PPO baseline. Direction decided 2026-07-14: run M3.1 (parallel training) → M3.2 (BC→PPO degradation fix) → M3.3 (self-play + opponent pool) → M3.4 (policy ceiling: obs schema v2 + mixed opponents) before touching M4+.
 
 ---
 
@@ -444,10 +444,14 @@ M4/M5 (on the MLP-PPO architecture); M3.3 comparison runs
 
 ---
 
-## M3.3: Self-Play + Opponent Pool 🟨 CODE COMPLETE
+## M3.3: Self-Play + Opponent Pool ✅ COMPLETE — MIXED RESULT
 
-**Status:** 🟨 Code complete and verified (2026-07-14) — the comparison training
-runs (self-play-trained vs fixed-opponent-trained) remain to be executed.
+**Status:** ✅ Complete (2026-07-14). Training run, fixed-opponent evals, and
+head-to-head all executed. Verdict: self-play fixed training *stability*
+(first run whose strength improves over training) and produced a rough peer
+of the M2 agent — slightly better vs Random and head-to-head, slightly worse
+vs DamageFirst — but not a decisively stronger one. The opponent-distribution
+fix moves to M3.4.
 **Goals:** Fix the degenerate-opponent problem. Everything before this trained
 and evaluated against `RandomPlayerAI`, which never voluntarily switches
 (`move: 1.0`) — a weak opponent giving a weak, exploitable learning signal.
@@ -476,13 +480,51 @@ opponent. (MCTS, the other chess ingredient, is already planned as M4.)
    p1-only; rewards from opponent-only decision points accumulate into p1's
    open transition (pending-transition collection).
 
-### Success Criteria (pending the comparison runs)
+### Comparison Run (2026-07-14): 5M-step MLP-PPO self-play
+
+`--opponent selfplay`, own-checkpoint pool, 8 envs, checkpoints every 250k.
+20-checkpoint sweep (150 battles each vs Random) rose from 42% @ 250k into a
+stable 47–61% band with **no collapse — the first run in this project whose
+eval strength trends up over training instead of decaying.** Top candidates
+confirmed at full battle counts:
+
+| Checkpoint | vs Random (500) | vs DamageFirst (200) |
+|---|---|---|
+| M2 baseline (trained vs Random) | 51% (254/500) | 51% (101/200) |
+| selfplay 2.5M | 52% (259/500) | 43% (86/200) |
+| selfplay 4.25M | 53% (267/500) | 45% (90/200) |
+| **selfplay 4.75M** | **57% (287/500)** | 46% (91/200) |
+| selfplay 5M final | 51% (255/500) | 46% (91/200) |
+
+Best checkpoint: `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`.
+
+**Head-to-head** (`evaluate.py --vs-checkpoint`, dual-seat, seat-balanced):
+self-play 4.75M vs the M2 checkpoint — **51% as p1 (254/500), 54% as p2
+(270/500), 52.4% combined (524/1000)**. A slight edge, inside the ±3.1pp
+95% CI — statistical parity, not a decisive win.
+
+### Success Criteria
 - ✅ Dual-seat battles run to completion with no illegal moves or hangs
   (TS + Python + trainer smokes, both trainers)
-- ⬜ Agent trained against the pool beats the fixed-opponent-trained agent
-  head-to-head, and beats DamageFirstAI at a rate the RandomPlayerAI-trained
-  agent cannot match
-- ⬜ Win rate vs RandomPlayerAI does not regress (sanity floor)
+- 🟨 Agent trained against the pool beats the fixed-opponent-trained agent
+  head-to-head — **marginal**: 52.4% over 1000 seat-balanced battles, within
+  noise of 50%. The DamageFirstAI half of the criterion is **not met**:
+  43–46% across all top self-play checkpoints vs the M2 agent's 51% (each
+  ~±7pp at 200 battles — no self-play checkpoint transfers *better* to the
+  held-out heuristic, and the trend is mildly worse)
+- ✅ Win rate vs RandomPlayerAI does not regress: best 57% (287/500) vs the
+  baseline's 51% (254/500), ~2σ above; final checkpoint 51% — floor held
+
+### Reading
+Self-play fixed training *stability* (monotone-ish improvement, no
+collapse/decay — every fixed-opponent and transformer run eroded from its
+peak) and modestly improved play vs Random, but did **not** transfer to the
+held-out DamageFirst heuristic. Plausible mechanism: the pool is seeded from
+an untrained policy and grows only its own descendants, so early league play
+rewards exploiting weak self-like opponents rather than robust play against
+pure attackers. The fix — seeding the pool with the M2 checkpoint and mixing
+heuristic rollouts into training — is Part B of **M3.4**, along with the
+observation-schema upgrade the M3.2 transformer retirement unlocked.
 
 ### Unblocks
 Meaningful M4/M5 evaluation opponents; higher-quality training signal for
@@ -490,7 +532,104 @@ whichever architecture M3.2 selects
 
 ---
 
-## M4: MCTS Integration ⬜ AFTER M3.3 COMPARISON RUNS
+## M3.4: Raise the Policy Ceiling 🟨 IN PROGRESS
+
+**Status:** 🟨 In progress (2026-07-15). **Code for both parts complete, smoke-verified end-to-end; the 5M-step decision run is training** (`models/ppo/checkpoints/v2/`, log in `train.log`). Evaluation battery pending.
+
+### What Was Built (2026-07-15)
+- **Part A — schema v2:** `TOKEN_DIM_V2 = 77` in `sim/tools/feature-extractor.ts`.
+  12 dims appended per token (dims 0–64 stay byte-identical to v1): 7 boost
+  stages (atk/def/spe/spa/accuracy/evasion/spd — spd captures gen1 Amnesia's
+  spa+spd pair), each stage/6 in [-1, 1]; Reflect / Light Screen / Substitute /
+  Leech Seed flags; toxic counter (poison ticks, min(n,16)/16). Non-zero only
+  on the two active tokens — gen1 resets all of it on switch. Tracked in
+  `pokemon-gym.ts` (`_processVolatileLine`) from public log lines only:
+  `|-boost|/|-unboost|/|-clearallboost|` (Haze), `|-start|/|-end|`
+  (screens/Sub/Leech Seed), `|-status|/|-curestatus|/|-damage ... [from] psn`
+  (toxic counter), reset on `|switch|/|drag|/|faint|`. New obsMode
+  `'structured-v2'` → bridge `--obs-v2` → `GymClient(obs_v2=True)` → trainers
+  and `evaluate.py` `--obs-v2` (924-dim flat input, checkpoints in
+  `models/ppo/checkpoints/v2/`).
+- **Part B — mixed opponents:** `--opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"`
+  on `models/ppo/train.py` samples one family per rollout; the bridge accepts
+  a per-reset opponent override so envs switch family at rollout boundaries
+  without respawning (in-flight episodes abandoned + bootstrapped — the same
+  truncation PPO applies at every rollout end). Pool seeded with the M2
+  baseline and M3.3 best as `ppo_step_0_seed_{m2,m33best}.pt` (step 0 ⇒ never
+  "newest"). **Cross-schema play:** since v2 tokens are v1-prefixed,
+  `gym_client.slice_structured_obs()` hands v1 checkpoints their native view
+  of v2 observations — used for pool opponents in training and for
+  `evaluate.py --vs-checkpoint` head-to-head (v2 agent vs v1 agent directly).
+- Verified: 23/23 gym tests (new: v2 shape, v1-prefix byte-equality, volatile
+  dims, full-battle v2 range/stability); bridge smokes (v2 single/dual seat,
+  live opponent switching both directions, v1 path regression); 4k-step
+  mixed-opponent training smoke with a v1 seed acting cross-schema; all four
+  eval paths; v1 self-play trainer regression.
+**Goals:** Close the gap between where the policy is and where M4 assumed it
+would be. The best policy to date is **57% vs Random / 46% vs DamageFirst**;
+M4's original criteria assumed ≥90% vs Random. MCTS multiplies the quality of
+the policy/value net it searches with — layering it on a ~51–57% policy
+amplifies mediocrity. Two levers, both newly unlocked:
+
+### Part A: Observation schema v2 (boosts et al.)
+
+The M2 schema was frozen at (12, 65) **solely** so the BC checkpoint's input
+projection stayed loadable. The M3.2 decision retired the transformer — the
+MLP-PPO path has no BC dependency, so the freeze is moot. The policy currently
+cannot see stat boosts, which decide gen1 games (Amnesia, Swords Dance,
+Agility, paralysis+speed interactions).
+
+- Extend the active-Pokémon tokens with a boost tracker
+  (`|-boost|`/`|-unboost|`/`|-clearallboost|` lines, both sides): 7 boost
+  stages (atk/def/spe/spc/accuracy/evasion + a spare), normalized to
+  [-1, 1] (stage/6)
+- Candidates to include while the schema is open (cheap, same tracker
+  pattern): Reflect/Light Screen flags, Substitute flag, Leech Seed flag,
+  toxic counter. PP tracking is *own-side only* from the request JSON —
+  include if trivial
+- This is a deliberate schema-version bump: `TOKEN_DIM` 65 → 65+K, new
+  checkpoint dir (`models/ppo/checkpoints/v2/`), old checkpoints incompatible
+  by design. `extractFeaturesStructured()` keeps a v1 mode only if the tests
+  need it; the flat 100-dim path is untouched
+- Update `test/tools/gym.test.js` shape/consistency coverage
+
+### Part B: Mixed-opponent training
+
+M3.3's league contained only the run's own descendants, and the result didn't
+transfer to DamageFirst (43–46% vs the M2 agent's 51%). Fix the opponent
+distribution, not just the algorithm:
+
+- **Seed the pool:** copy the M2 checkpoint (and the M3.3 best) into
+  `--selfplay-pool` — already supported, zero code
+- **`--opponent-mix`:** per-rollout opponent sampling across
+  `selfplay/damagefirst/random` with configurable weights (e.g. 50/30/20),
+  so the learner never overfits to one opponent family. Damagefirst/random
+  rollouts reuse the existing single-seat path; selfplay rollouts the dual
+  path — the trainer already has both loops
+
+### Training + evaluation plan
+
+One 5M-step run with schema v2 + seeded pool + opponent mix, 20-checkpoint
+sweep vs Random, confirmations vs Random (500) / DamageFirst (200) /
+head-to-head vs the M3.3 best (`evaluate.py --vs-checkpoint`, both seat
+orders).
+
+### Success Criteria (pre-registered)
+- ≥ 65% vs RandomPlayerAI (500 battles) — clearly above the M3.3 best's 57%
+- ≥ 60% vs DamageFirstAI (200+ battles) — beats both prior agents' ~51%,
+  i.e. the training signal finally transfers to a held-out opponent
+- Beats the M3.3 best checkpoint head-to-head (≥ 55% over 500+ battles,
+  seat-balanced)
+- If Part A alone or Part B alone must be cut for time, run Part B first
+  (zero-code pool seeding + one flag); Part A requires the retraining anyway
+
+### Unblocks
+M4 starts from a policy/value net actually worth searching with; M4's
+success criteria re-anchored to this milestone's result
+
+---
+
+## M4: MCTS Integration ⬜ AFTER M3.4
 
 **Status:** ⬜ Not Started
 **Architecture note (2026-07-14):** per the M3.2 decision, M4 builds on the
@@ -534,9 +673,14 @@ more complex — defer unless determinization plateaus.
 | `models/mcts/determinizer.py` | Samples plausible opponent teams given revealed Pokémon |
 
 ### Success Criteria
-- MCTS(N=100) + transformer value beats PPO-only transformer by ≥ 5% win rate vs DamageFirstAI
+Recalibrated 2026-07-14 — the original targets assumed a ≥90%-vs-Random base
+policy that never materialized; these anchor to whatever M3.4 produces.
+- MCTS(N=100) + MLP value beats the raw MLP-PPO policy (same checkpoint,
+  no search) by ≥ 5pp win rate vs DamageFirstAI
+- MCTS beats the raw policy head-to-head (`evaluate.py --vs-checkpoint`-style
+  dual-seat, seat-balanced) by ≥ 5pp
 - Decision latency < 500ms per move (100 sims, gen1 is fast)
-- Win rate vs RandomPlayerAI ≥ 90%
+- Win rate vs RandomPlayerAI ≥ base policy + 10pp
 - Determinizer generates valid gen1randombattle-legal teams
 
 ### Unblocks
@@ -656,7 +800,8 @@ Best action
 | M3: Transformer + PPO | ✅ | Negative result — transformer (peak 46%) never beat the MLP baseline (51%) | M3.1–M3.3 |
 | M3.1: Parallel Training | ✅ | Vectorized envs + batched inference (`--num-envs`) | M3.2, M3.3 |
 | M3.2: BC→PPO Fix | ✅ | Fixes verified; transformer still ≤ baseline → **retired; M4+ proceeds on MLP-PPO** | M4, M5 |
-| M3.3: Self-Play + Opponents | 🟨 | Heuristic opponent + checkpoint-pool self-play — code complete, comparison runs pending | M4, M5 |
+| M3.3: Self-Play + Opponents | ✅ | Self-play fixed training stability; peer of M2 (52.4% h2h), no DamageFirst transfer | M3.4 |
+| M3.4: Policy Ceiling | 🟨 | Schema v2 (boosts/volatiles) + mixed-opponent training — code done, 5M-step run training | M4, M5 |
 | M4: MCTS | ⬜ | UCT search over value network | M6 |
 | M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |

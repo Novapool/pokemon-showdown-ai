@@ -34,6 +34,7 @@ import numpy as np
 # Resolve models/ directory so vec_gym_client and ppo modules are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from gym_client import slice_structured_obs  # noqa: E402
 from vec_gym_client import VecGymClient   # noqa: E402
 
 # ppo_agent and trajectory_buffer live alongside this script
@@ -69,6 +70,16 @@ def parse_args() -> argparse.Namespace:
             "Train on the M2 (12,65)->780 flattened structured observation "
             "instead of the legacy flat 100-dim vector. Checkpoints go to "
             "checkpoints/structured/ to avoid colliding with the M1 baseline."
+        ),
+    )
+    parser.add_argument(
+        "--obs-v2",
+        action="store_true",
+        help=(
+            "M3.4: train on the (12,77)->924 schema-v2 observation (boost "
+            "stages + volatile flags appended to each token). Implies "
+            "--structured. Checkpoints go to checkpoints/v2/ — incompatible "
+            "with v1 checkpoints by design."
         ),
     )
     parser.add_argument(
@@ -113,10 +124,47 @@ def parse_args() -> argparse.Namespace:
             "(default: this run's own checkpoint directory). Each rollout picks "
             "the newest checkpoint 50%% of the time, else uniform over the pool; "
             "until any checkpoint exists the opponent is a frozen copy of the "
-            "current policy."
+            "current policy. Pool checkpoints may use the v1 obs schema even "
+            "in an --obs-v2 run (their view is sliced down per token)."
         ),
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--opponent-mix",
+        type=str,
+        default=None,
+        help=(
+            "M3.4: per-rollout opponent-family sampling instead of a fixed "
+            "--opponent, e.g. 'selfplay=0.5,damagefirst=0.3,random=0.2' "
+            "(weights are normalized). Each rollout trains against one "
+            "family; envs are reset when the family changes (in-flight "
+            "episodes are abandoned and bootstrapped, standard PPO practice). "
+            "Mutually exclusive with --opponent."
+        ),
+    )
+    args = parser.parse_args()
+    if args.obs_v2:
+        args.structured = True
+    if args.opponent_mix and args.opponent != "random":
+        parser.error("--opponent-mix and --opponent are mutually exclusive")
+    return args
+
+
+def _parse_opponent_mix(spec: str) -> dict:
+    """'selfplay=0.5,damagefirst=0.3,random=0.2' -> normalized weight dict."""
+    mix = {}
+    for part in spec.split(","):
+        name, sep, weight = part.partition("=")
+        name = name.strip()
+        if not sep or name not in ("selfplay", "damagefirst", "random"):
+            raise ValueError(
+                f"bad --opponent-mix entry {part!r} "
+                "(expected name=weight with name in selfplay/damagefirst/random)"
+            )
+        mix[name] = float(weight)
+    total = sum(mix.values())
+    if total <= 0:
+        raise ValueError("--opponent-mix weights must sum to > 0")
+    return {name: weight / total for name, weight in mix.items()}
 
 
 def _checkpoint_step(path: Path) -> int:
@@ -163,61 +211,85 @@ def main() -> None:
     checkpoint_dir = (
         Path(args.checkpoint_dir)
         if args.checkpoint_dir
-        else Path(__file__).parent / "checkpoints" / ("structured" if args.structured else ".")
+        else Path(__file__).parent / "checkpoints"
+        / ("v2" if args.obs_v2 else "structured" if args.structured else ".")
     )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
-    selfplay = args.opponent == "selfplay"
+    mix = _parse_opponent_mix(args.opponent_mix) if args.opponent_mix else None
+    mix_names = list(mix) if mix else None
+    mix_weights = [mix[name] for name in mix_names] if mix else None
 
     # One buffer per env — GAE must never cross env streams. merge_buffers()
     # combines them (and normalizes advantages globally) before each update.
     buffers = [TrajectoryBuffer() for _ in range(num_envs)]
-    env = VecGymClient(
-        num_envs,
-        structured=args.structured,
-        opponent="random" if selfplay else args.opponent,
-        selfplay=selfplay,
-    )
+    # The opponent family is set per reset by _switch_family() below, so the
+    # constructor doesn't need spawn-time opponent flags.
+    env = VecGymClient(num_envs, structured=args.structured, obs_v2=args.obs_v2)
 
     def _flatten(o):
-        # The MLP consumes flat vectors: (N, 12, 65) -> (N, 780) in structured
-        # mode; flat mode is already (N, 100).
+        # The MLP consumes flat vectors: (N, 12, D) -> (N, 12*D) in structured
+        # mode (D=65 v1, 77 v2); flat mode is already (N, 100).
         return o.reshape(num_envs, -1) if args.structured else o
 
     def _flatten_seat(state):
         state["obs"] = _flatten(state["obs"])
         return state
 
-    if selfplay:
-        p1_state, p2_state = env.reset_all_dual()
-        _flatten_seat(p1_state)
-        _flatten_seat(p2_state)
-        # Open p1 transitions, one per env: a transition closes at p1's NEXT
-        # decision point (or terminal), accumulating rewards from any
-        # opponent-only steps (e.g. p2 force-switches) in between.
-        pending: list = [None] * num_envs
-        selfplay_rng = np.random.default_rng()
-        obs_size = p1_state["obs"].shape[1]
-    else:
-        obs_batch, masks = env.reset_all()
-        obs_batch = _flatten(obs_batch)
-        obs_size = obs_batch.shape[1]
+    rng = np.random.default_rng()
+
+    obs_batch = masks = None      # single-seat rollout state
+    p1_state = p2_state = None    # dual-seat (selfplay) rollout state
+    # Open p1 transitions, one per env (selfplay only): a transition closes at
+    # p1's NEXT decision point (or terminal), accumulating rewards from any
+    # opponent-only steps (e.g. p2 force-switches) in between.
+    pending: list = [None] * num_envs
+    current_family = None
+
+    def _sample_family() -> str:
+        if mix is None:
+            return args.opponent
+        return str(rng.choice(mix_names, p=mix_weights))
+
+    def _switch_family(family: str) -> None:
+        """Reset every env into `family`, abandoning in-flight episodes.
+
+        Only called at rollout boundaries: the abandoned episodes' last
+        transitions were stored with done=False and bootstrapped from their
+        value estimates — the same truncation PPO already applies at every
+        rollout end.
+        """
+        nonlocal obs_batch, masks, p1_state, p2_state, pending, current_family
+        current_family = family
+        if family == "selfplay":
+            p1_state, p2_state = env.reset_all_dual()
+            _flatten_seat(p1_state)
+            _flatten_seat(p2_state)
+            pending = [None] * num_envs
+        else:
+            obs_batch, masks = env.reset_all(opponent=family)
+            obs_batch = _flatten(obs_batch)
+
+    _switch_family(_sample_family())
+    obs_size = (p1_state["obs"] if current_family == "selfplay" else obs_batch).shape[1]
 
     # obs_size is derived from the actual observation rather than hardcoded,
-    # so this loop works for both the M1 flat vector (100) and the M2
-    # structured flatten (780) without duplicating the PPOAgent class.
+    # so this loop works for the M1 flat vector (100), the M2 structured
+    # flatten (780), and schema v2 (924) without duplicating the PPOAgent class.
     agent = PPOAgent(obs_size=obs_size, device=args.device)
     # Self-play opponents come from this run's own checkpoints unless a pool
     # is given explicitly.
     pool_dir = Path(args.selfplay_pool) if args.selfplay_pool else checkpoint_dir
+    uses_selfplay = args.opponent == "selfplay" or bool(mix and mix.get("selfplay"))
 
     print(
         f"Starting PPO training: {total_budget} steps | "
-        f"obs_mode={'structured' if args.structured else 'flat'} (obs_size={obs_size}) | "
+        f"obs_mode={'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
+        f"(obs_size={obs_size}) | "
         f"rollout={rollout_steps} steps | "
         f"num_envs={num_envs} | device={agent.device} | "
-        f"opponent={args.opponent}"
-        + (f" (pool: {pool_dir})" if selfplay else "")
+        f"opponent={args.opponent_mix or args.opponent}"
+        + (f" (pool: {pool_dir})" if uses_selfplay else "")
         + " | "
         f"checkpoint every {checkpoint_every} steps",
         flush=True,
@@ -239,10 +311,22 @@ def main() -> None:
             rollout_episodes = 0
             steps_this_rollout = 0
 
-            if selfplay:
+            # One opponent family per rollout (fixed --opponent, or sampled
+            # from --opponent-mix); envs reset when the family changes.
+            family = _sample_family()
+            if family != current_family:
+                _switch_family(family)
+
+            if family == "selfplay":
                 # One frozen opponent per rollout, shared by all envs so its
-                # inference stays batched. Re-sampled every rollout.
-                opponent_agent = _sample_opponent(pool_dir, agent, args.device, selfplay_rng)
+                # inference stays batched. Re-sampled every rollout. Pool
+                # checkpoints may predate the current obs schema — their view
+                # of a structured observation is sliced down per token.
+                opponent_agent = _sample_opponent(pool_dir, agent, args.device, rng)
+                opp_obs_size = opponent_agent._hparams["obs_size"]
+
+                def _opp_view(obs):
+                    return slice_structured_obs(obs, opp_obs_size) if args.structured else obs
 
                 while steps_this_rollout < rollout_steps and total_steps < total_budget:
                     # p1 (the learner): a new decision point closes the
@@ -274,7 +358,7 @@ def main() -> None:
                     p2_idx = np.flatnonzero(p2_state["needs"])
                     if len(p2_idx):
                         opp_acts, _, _ = opponent_agent.act_batch(
-                            p2_state["obs"][p2_idx], p2_state["mask"][p2_idx]
+                            _opp_view(p2_state["obs"][p2_idx]), p2_state["mask"][p2_idx]
                         )
                         for k, i in enumerate(p2_idx):
                             a2[i] = int(opp_acts[k])

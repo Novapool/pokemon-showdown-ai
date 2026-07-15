@@ -39,6 +39,7 @@ class VecGymClient:
         structured: bool = True,
         opponent: str = "random",
         selfplay: bool = False,
+        obs_v2: bool = False,
     ):
         if n_envs < 1:
             raise ValueError(f"n_envs must be >= 1, got {n_envs}")
@@ -46,9 +47,20 @@ class VecGymClient:
         self._structured = structured
         self._selfplay = selfplay
         self._clients = [
-            GymClient(structured=structured, opponent=opponent, selfplay=selfplay)
+            GymClient(
+                structured=structured, opponent=opponent, selfplay=selfplay, obs_v2=obs_v2,
+            )
             for _ in range(n_envs)
         ]
+
+    def set_opponent(self, opponent: str) -> None:
+        """Switch all envs' opponent for subsequent resets (M3.4 --opponent-mix).
+
+        'self' selects the dual-seat protocol: use reset_all_dual()/step_dual()
+        afterwards; anything else the single-seat reset_all()/step()."""
+        for client in self._clients:
+            client.set_opponent(opponent)
+        self._selfplay = opponent == "self"
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -63,15 +75,24 @@ class VecGymClient:
     def _reset_indices(self, indices: list) -> dict:
         """Pipelined reset of the given env indices; returns {i: response}."""
         for i in indices:
-            self._clients[i]._write({"cmd": "reset"})
+            self._clients[i]._write(self._clients[i]._reset_cmd())
         return {i: self._clients[i]._read() for i in indices}
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def reset_all(self) -> tuple:
-        """Reset every env. Returns (obs (N, ...), masks (N, 9) bool array)."""
+    def reset_all(self, opponent: str = None) -> tuple:
+        """Reset every env. Returns (obs (N, ...), masks (N, 9) bool array).
+
+        Passing opponent switches all envs to it first (must not be 'self' —
+        use reset_all_dual() for the dual-seat protocol)."""
+        if opponent is not None:
+            if opponent == "self":
+                raise ValueError("use reset_all_dual() for opponent 'self'")
+            self.set_opponent(opponent)
+        if self._selfplay:
+            raise RuntimeError("envs are in dual-seat mode; use reset_all_dual()")
         responses = self._reset_indices(list(range(self.n_envs)))
         obs_list, mask_list = [], []
         for i in range(self.n_envs):
@@ -149,9 +170,13 @@ class VecGymClient:
         }
 
     def reset_all_dual(self) -> tuple:
-        """Reset every env in dual-seat mode. Returns (p1, p2) stacked dicts."""
+        """Reset every env in dual-seat mode. Returns (p1, p2) stacked dicts.
+
+        Switches all envs to opponent 'self' if they aren't already."""
+        if not self._selfplay:
+            self.set_opponent("self")
         for client in self._clients:
-            client._write({"cmd": "reset"})
+            client._write(client._reset_cmd())
         responses = [client._read() for client in self._clients]
         p1 = [self._clients[i]._parse_seat(responses[i]["p1"]) for i in range(self.n_envs)]
         p2 = [self._clients[i]._parse_seat(responses[i]["p2"]) for i in range(self.n_envs)]
@@ -199,7 +224,7 @@ class VecGymClient:
 
         if needs_reset:
             for i in needs_reset:
-                self._clients[i]._write({"cmd": "reset"})
+                self._clients[i]._write(self._clients[i]._reset_cmd())
             for i in needs_reset:
                 response = self._clients[i]._read()
                 p1_seats[i] = self._clients[i]._parse_seat(response["p1"])

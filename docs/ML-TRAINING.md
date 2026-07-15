@@ -78,8 +78,8 @@ See `docs/AI-PLAYERS.md` → **Gym Wrapper** section for the full API reference 
 
 | Direction | Command | Request | Response |
 |-----------|---------|---------|----------|
-| Python → Node | reset | `{"cmd":"reset"}` | `{"obs":[...100 floats...]}` |
-| Python → Node | step | `{"cmd":"step","action":<int 0–8>}` | `{"obs":[...],"reward":<float>,"done":<bool>,"info":{}}` |
+| Python → Node | reset | `{"cmd":"reset"}` (optional `"opponent":"random"\|"damagefirst"\|"self"` — M3.4 per-episode override; `"self"` switches this env to the dual-seat protocol) | `{"obs":[...780 floats...],"mask":[...]}` (100 with `--flat`, 924 with `--obs-v2`; dual protocol when the episode's opponent is `self`) |
+| Python → Node | step | `{"cmd":"step","action":<int 0–8>}` | `{"obs":[...],"reward":<float>,"done":<bool>,"info":{},"mask":[...]}` |
 | Python → Node | valid_actions | `{"cmd":"valid_actions"}` | `{"mask":[<9 booleans>]}` |
 | Python → Node | close | `{"cmd":"close"}` | `{"ok":true}` then process exits |
 
@@ -137,6 +137,11 @@ Both trainers and `evaluate.py` accept `--opponent`:
 - **`selfplay`** (trainers only) — the p2 seat is a frozen past checkpoint of the agent itself, league-style.
 
 Self-play runs the gym in dual-seat mode (`PokemonGymEnv` `opponent: 'self'`, bridge `--selfplay`): each `stepDual()` advances the battle to the next decision point and reports both seats' observations, masks, and a `needsAction` flag (only one seat acts during force-switches). The learner trains on the p1 seat only; rewards from opponent-only decision points accumulate into p1's open transition. Each rollout samples one frozen opponent from `--selfplay-pool` (default: the run's own checkpoint directory) — the newest checkpoint 50% of the time, otherwise uniform over the pool; until a first checkpoint exists the opponent is a frozen copy of the current policy. Both seats see only revealed information (the reveal tracker runs for both sides).
+
+### Schema v2 & Mixed Opponents (M3.4)
+
+- **Obs schema v2** — `--obs-v2` on `models/ppo/train.py` and `evaluate.py` (bridge `--obs-v2`, gym obsMode `'structured-v2'`): `(12, 77)` tokens = the v1 65 dims (byte-identical) + 7 boost stages (stage/6), Reflect/Light Screen/Substitute/Leech Seed flags, and a toxic counter, all tracked from public battle-log lines and non-zero only on the two active tokens (gen1 resets them on switch). v2 checkpoints live in `models/ppo/checkpoints/v2/` and are incompatible with v1 by design; the v1-prefix property means `gym_client.slice_structured_obs()` can hand any v1 checkpoint its native view of a v2 observation (used for cross-schema self-play opponents and `--vs-checkpoint` head-to-head).
+- **Mixed opponents** — `--opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"` (PPO trainer only, mutually exclusive with `--opponent`) samples one opponent family per rollout and resets the envs when the family changes (abandoned episodes are bootstrapped, the same truncation PPO applies at rollout ends). Seed the self-play pool by copying checkpoints into the run's checkpoint dir as `ppo_step_0_<name>.pt` — step 0 keeps them out of the "newest" half of the sampling; skip `ppo_step_0_*` files when sweeping checkpoints for evaluation.
 
 ```bash
 python models/transformer/train.py --steps 5000000 --num-envs 8 --opponent selfplay \

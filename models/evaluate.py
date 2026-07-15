@@ -23,11 +23,13 @@ import argparse
 import sys
 from pathlib import Path
 
+import numpy as np
+
 # ---- path setup so imports resolve regardless of cwd ----------------------
 _MODELS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_MODELS_DIR))
 
-from gym_client import GymClient  # noqa: E402 (after sys.path patch)
+from gym_client import GymClient, slice_structured_obs  # noqa: E402 (after sys.path patch)
 from vec_gym_client import VecGymClient  # noqa: E402
 
 
@@ -72,7 +74,7 @@ def _load_agent(model: str, checkpoint: str, device: str | None = None):
 
 def _run_battles_vec(
     agent, n_battles: int, num_envs: int, structured: bool, flatten: bool,
-    opponent: str = "random",
+    opponent: str = "random", obs_v2: bool = False,
 ) -> tuple:
     """Run n_battles episodes across num_envs parallel envs; return (wins, total).
 
@@ -86,7 +88,7 @@ def _run_battles_vec(
     simulation is the speedup either way.
     """
     num_envs = max(1, min(num_envs, n_battles))
-    env = VecGymClient(num_envs, structured=structured, opponent=opponent)
+    env = VecGymClient(num_envs, structured=structured, opponent=opponent, obs_v2=obs_v2)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -131,19 +133,94 @@ def _run_battles_vec(
     return wins, n_battles
 
 
+def _run_battles_h2h(
+    agent, opponent_agent, n_battles: int, num_envs: int, structured: bool,
+    obs_v2: bool = False,
+) -> tuple:
+    """Head-to-head (M3.3): agent (seat p1) vs a second checkpoint (seat p2).
+
+    Runs the bridge in dual-seat self-play mode; both sides act through
+    act_batch() on their own seat's revealed-info observation. Wins are
+    counted from p1's perspective. Battle quotas per env keep the count
+    exact, same as _run_battles_vec.
+
+    Cross-schema (M3.4): with obs_v2=True the env produces (12, 77) schema-v2
+    observations; each seat's view is sliced down per token to its own
+    checkpoint's obs size, so a v2 agent can play a v1 agent directly.
+    """
+    num_envs = max(1, min(num_envs, n_battles))
+    env = VecGymClient(num_envs, structured=structured, selfplay=True, obs_v2=obs_v2)
+    quotas = [n_battles // num_envs] * num_envs
+    for i in range(n_battles % num_envs):
+        quotas[i] += 1
+
+    completed = [0] * num_envs
+    wins = 0
+    done_total = 0
+    log_every = min(50, max(1, n_battles // 10))
+
+    def _prep(state):
+        if structured:
+            state["obs"] = state["obs"].reshape(num_envs, -1)
+        return state
+
+    def _seat_actions(seat_agent, state):
+        actions = [None] * num_envs
+        idx = np.flatnonzero(state["needs"])
+        if len(idx):
+            obs = state["obs"][idx]
+            if structured:
+                obs = slice_structured_obs(obs, seat_agent._hparams["obs_size"])
+            acts = seat_agent.act_batch(obs, state["mask"][idx])[0]
+            for k, i in enumerate(idx):
+                actions[i] = int(acts[k])
+        return actions
+
+    try:
+        p1_state, p2_state = env.reset_all_dual()
+        _prep(p1_state)
+        _prep(p2_state)
+        while any(completed[i] < quotas[i] for i in range(num_envs)):
+            a1 = _seat_actions(agent, p1_state)
+            a2 = _seat_actions(opponent_agent, p2_state)
+            p1_state, p2_state, _rewards, dones, infos = env.step_dual(a1, a2)
+            _prep(p1_state)
+            _prep(p2_state)
+            for i in range(num_envs):
+                if "error" in infos[i]:
+                    print(f"  [env {i}] error ({infos[i]['error']}) — battle not counted", flush=True)
+                    continue
+                if dones[i] and completed[i] < quotas[i]:
+                    completed[i] += 1
+                    done_total += 1
+                    if infos[i].get("winner") == "Gym":
+                        wins += 1
+                    if done_total % log_every == 0 or done_total == n_battles:
+                        print(
+                            f"Battle {done_total}/{n_battles} | running win rate: "
+                            f"{wins / done_total:.2f} ({wins}/{done_total})",
+                            flush=True,
+                        )
+    finally:
+        env.close()
+
+    return wins, n_battles
+
+
 def _run_battles(
     agent, n_battles: int, structured: bool = False, flatten: bool = True,
-    opponent: str = "random",
+    opponent: str = "random", obs_v2: bool = False,
 ) -> tuple:
     """Run n_battles greedy episodes; return (wins, total).
 
     structured=True makes GymClient return the (12, 65) M2 observation
-    instead of the legacy flat 100-dim vector. flatten=True additionally
-    reshapes that to (780,), matching a PPO checkpoint trained with
-    train.py --structured. The transformer consumes the (12, 65) observation
-    directly, so its caller passes structured=True, flatten=False.
+    instead of the legacy flat 100-dim vector (or (12, 77) with obs_v2=True).
+    flatten=True additionally reshapes that to (780,)/(924,), matching a PPO
+    checkpoint trained with train.py --structured/--obs-v2. The transformer
+    consumes the (12, 65) observation directly, so its caller passes
+    structured=True, flatten=False.
     """
-    env = GymClient(structured=structured, opponent=opponent)
+    env = GymClient(structured=structured, opponent=opponent, obs_v2=obs_v2)
     wins = 0
     # Auto-scale so short smoke-test runs still produce output (same
     # approach as the train.py scripts' log_every).
@@ -202,6 +279,16 @@ def main():
         help="Evaluate a PPO checkpoint trained with train.py --structured (M2 verification).",
     )
     parser.add_argument(
+        "--obs-v2",
+        action="store_true",
+        help=(
+            "M3.4: evaluate a PPO checkpoint trained with train.py --obs-v2 "
+            "(the (12,77)->924 schema-v2 observation). Implies --structured. "
+            "With --vs-checkpoint, the opponent checkpoint may still be v1 — "
+            "its view is sliced down per token."
+        ),
+    )
+    parser.add_argument(
         "--num-envs",
         type=int,
         default=8,
@@ -219,13 +306,31 @@ def main():
         default="random",
         help="Evaluation opponent (M3.3): RandomPlayerAI or the DamageFirst heuristic.",
     )
+    parser.add_argument(
+        "--vs-checkpoint",
+        default=None,
+        help=(
+            "Head-to-head (M3.3): path to a second PPO checkpoint to play as the "
+            "opponent (seat p2) via dual-seat self-play. Both checkpoints must use "
+            "the same obs mode (--structured applies to both). --model ppo only."
+        ),
+    )
     args = parser.parse_args()
 
+    if args.obs_v2:
+        if args.model != "ppo":
+            parser.error("--obs-v2 is only meaningful with --model ppo")
+        args.structured = True
     if args.structured and args.model != "ppo":
         parser.error(
             "--structured is only meaningful with --model ppo "
             "(transformer always uses structured, unflattened observations; no flag needed)"
         )
+    if args.vs_checkpoint:
+        if args.model != "ppo":
+            parser.error("--vs-checkpoint only supports --model ppo (the project architecture)")
+        if args.opponent != "random":
+            parser.error("--vs-checkpoint and --opponent are mutually exclusive")
 
     agent = _load_agent(args.model, args.checkpoint, device=args.device)
     if args.model == "transformer":
@@ -233,19 +338,27 @@ def main():
     else:
         structured, flatten = args.structured, True
 
-    if args.num_envs > 1:
+    if args.vs_checkpoint:
+        opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
+        wins, total = _run_battles_h2h(
+            agent, opponent_agent, args.battles, args.num_envs, structured=structured,
+            obs_v2=args.obs_v2,
+        )
+        opponent_name = args.vs_checkpoint
+    elif args.num_envs > 1:
         wins, total = _run_battles_vec(
             agent, args.battles, args.num_envs, structured=structured, flatten=flatten,
-            opponent=args.opponent,
+            opponent=args.opponent, obs_v2=args.obs_v2,
         )
     else:
         wins, total = _run_battles(
             agent, args.battles, structured=structured, flatten=flatten,
-            opponent=args.opponent,
+            opponent=args.opponent, obs_v2=args.obs_v2,
         )
     win_rate = wins / total if total > 0 else 0.0
 
-    opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
+    if not args.vs_checkpoint:
+        opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")
     print(f"Battles: {total}")
     print(f"Win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
