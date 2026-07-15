@@ -11,6 +11,7 @@
 import { BattleStream, getPlayerStreams, BattlePlayer } from '../battle-stream';
 import { PRNG } from '../prng';
 import type { PRNGSeed } from '../prng';
+import { State } from '../state';
 import { toID } from '../dex-data';
 import { RandomPlayerAI } from './random-player-ai';
 import { DamageFirstAI } from './damage-first-ai';
@@ -74,6 +75,29 @@ interface OpponentRecord {
 }
 
 /**
+ * Serializable snapshot of an ObservationTrackers instance (plain JSON —
+ * safe to deep-copy or ship over the bridge).
+ */
+export interface TrackerSnapshot {
+	revealOrder: { p1: string[], p2: string[] };
+	revealRecords: { p1: Array<[string, OpponentRecord]>, p2: Array<[string, OpponentRecord]> };
+	volatiles: { p1: SideVolatiles, p2: SideVolatiles };
+}
+
+/**
+ * Everything needed to reconstruct a live battle inside BattleSim (M4 MCTS
+ * forward model): the engine state plus the gym's log-derived tracker state.
+ * Produced by PokemonGymEnv.snapshot(); consumed by BattleSim.fromSnapshot().
+ */
+export interface GymSnapshot {
+	/** State.serializeBattle() output, JSON deep-copied (owns no live refs). */
+	battleState: AnyObject;
+	trackers: TrackerSnapshot;
+	obsMode: ObsMode;
+	turnCount: number;
+}
+
+/**
  * Internal per-side volatile tracker (M3.4, obsMode 'structured-v2') —
  * boost stages and volatile conditions of the side's ACTIVE Pokémon,
  * reconstructed purely from public battle-log lines. Everything resets on
@@ -109,6 +133,186 @@ function toActiveVolatiles(v: SideVolatiles): ActiveVolatiles {
 		leechSeed: v.leechSeed,
 		toxicCounter: v.toxicCounter,
 	};
+}
+
+// ---------------------------------------------------------------------------
+// ObservationTrackers — log-derived observation state, shared by the live gym
+// and the BattleSim forward model (M4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Reveal + volatile trackers reconstructed purely from battle-log lines a
+ * real player could see — never omniscient state. Both sides are tracked:
+ * p2's records feed p1's opponent tokens and vice versa.
+ *
+ * Extracted from PokemonGymEnv (M4) so BattleSim can snapshot this state
+ * alongside the serialized battle and keep processing new log lines with
+ * identical semantics inside simulated rollouts.
+ */
+export class ObservationTrackers {
+	revealOrder: { p1: string[], p2: string[] } = { p1: [], p2: [] };
+	revealRecords: { p1: Map<string, OpponentRecord>, p2: Map<string, OpponentRecord> } = {
+		p1: new Map(), p2: new Map(),
+	};
+	volatiles: { p1: SideVolatiles, p2: SideVolatiles } = {
+		p1: freshSideVolatiles(), p2: freshSideVolatiles(),
+	};
+
+	/** Update all trackers from one battle-log line. */
+	processLine(line: string): void {
+		this._processRevealLine(line);
+		this._processVolatileLine(line);
+	}
+
+	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */
+	opponentInfoFor(viewer: 'p1' | 'p2'): OpponentPokemonInfo[] {
+		const side = viewer === 'p1' ? 'p2' : 'p1';
+		return this.revealOrder[side].map(nickname => {
+			const record = this.revealRecords[side].get(nickname)!;
+			return {
+				details: record.details,
+				condition: record.condition,
+				active: record.active,
+				moves: record.moves,
+			};
+		});
+	}
+
+	/** The `viewer` seat's volatile view (own side + opponent side). */
+	volatilesFor(viewer: 'p1' | 'p2'): { own: ActiveVolatiles, opp: ActiveVolatiles } {
+		const other = viewer === 'p1' ? 'p2' : 'p1';
+		return {
+			own: toActiveVolatiles(this.volatiles[viewer]),
+			opp: toActiveVolatiles(this.volatiles[other]),
+		};
+	}
+
+	/** Nicknames of `side`'s Pokémon revealed so far (BattleSim determinizer). */
+	revealedNicknames(side: 'p1' | 'p2'): Set<string> {
+		return new Set(this.revealOrder[side]);
+	}
+
+	snapshot(): TrackerSnapshot {
+		return JSON.parse(JSON.stringify({
+			revealOrder: this.revealOrder,
+			revealRecords: {
+				p1: Array.from(this.revealRecords.p1.entries()),
+				p2: Array.from(this.revealRecords.p2.entries()),
+			},
+			volatiles: this.volatiles,
+		}));
+	}
+
+	static fromSnapshot(snap: TrackerSnapshot): ObservationTrackers {
+		const copy: TrackerSnapshot = JSON.parse(JSON.stringify(snap));
+		const trackers = new ObservationTrackers();
+		trackers.revealOrder = copy.revealOrder;
+		trackers.revealRecords = {
+			p1: new Map(copy.revealRecords.p1),
+			p2: new Map(copy.revealRecords.p2),
+		};
+		trackers.volatiles = copy.volatiles;
+		return trackers;
+	}
+
+	private _processRevealLine(line: string): void {
+		const parts = line.split('|');
+		const type = parts[1];
+		const ident = parts[2] ?? '';
+		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
+		if (!side) return;
+		const records = this.revealRecords[side];
+		const nickname = extractNickname(ident);
+
+		if (type === 'switch' || type === 'drag') {
+			for (const record of records.values()) record.active = false;
+
+			const details = parts[3] ?? '';
+			const condition = parts[4] ?? '';
+			const existing = records.get(nickname);
+			if (existing) {
+				existing.details = details;
+				existing.condition = condition;
+				existing.active = true;
+			} else {
+				records.set(nickname, { details, condition, active: true, moves: [] });
+				this.revealOrder[side].push(nickname);
+			}
+		} else if (type === '-damage' || type === '-heal') {
+			const record = records.get(nickname);
+			if (record) record.condition = parts[3] ?? record.condition;
+		} else if (type === '-status') {
+			const record = records.get(nickname);
+			if (record) {
+				const statusToken = parts[3] ?? '';
+				record.condition = `${hpFraction(record.condition)} ${statusToken}`.trim();
+			}
+		} else if (type === '-curestatus') {
+			const record = records.get(nickname);
+			if (record) record.condition = hpFraction(record.condition);
+		} else if (type === 'faint') {
+			const record = records.get(nickname);
+			if (record) {
+				record.condition = '0 fnt';
+				record.active = false;
+			}
+		} else if (type === 'move') {
+			const record = records.get(nickname);
+			if (record && record.moves.length < 4) {
+				const moveId = toID(parts[3] ?? '');
+				if (moveId && !record.moves.includes(moveId)) record.moves.push(moveId);
+			}
+		}
+	}
+
+	/**
+	 * Update the per-side volatile trackers (boosts, screens, Substitute,
+	 * Leech Seed, toxic counter) from one battle-log line. All of these are
+	 * public information. Gen1 line inventory:
+	 *   |-boost|p1a: X|atk|1     |-unboost|...        (stat stages)
+	 *   |-clearallboost|[silent]                      (Haze — both sides)
+	 *   |-start|p1a: X|Reflect / Light Screen / Substitute / move: Leech Seed
+	 *   |-end|p1a: X|<same>                           (incl. Haze's [silent] ends)
+	 *   |-status|p1a: X|tox / |-curestatus|           (toxic-counter lifecycle)
+	 *   |-damage|p1a: X|HP|[from] psn                 (one poison tick)
+	 *   |switch/|drag/|faint                          (everything resets)
+	 */
+	private _processVolatileLine(line: string): void {
+		const parts = line.split('|');
+		const type = parts[1];
+
+		if (type === '-clearallboost') {
+			this.volatiles.p1.boosts = {};
+			this.volatiles.p2.boosts = {};
+			return;
+		}
+
+		const ident = parts[2] ?? '';
+		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
+		if (!side) return;
+		const vol = this.volatiles[side];
+
+		if (type === 'switch' || type === 'drag' || type === 'faint') {
+			this.volatiles[side] = freshSideVolatiles();
+		} else if (type === '-boost' || type === '-unboost') {
+			const stat = parts[3] ?? '';
+			const amount = parseInt(parts[4] ?? '', 10);
+			if (!stat || isNaN(amount)) return;
+			const delta = type === '-boost' ? amount : -amount;
+			vol.boosts[stat] = Math.max(-6, Math.min(6, (vol.boosts[stat] ?? 0) + delta));
+		} else if (type === '-start' || type === '-end') {
+			const condition = (parts[3] ?? '').replace(/^move: /, '');
+			const value = type === '-start';
+			if (condition === 'Reflect') vol.reflect = value;
+			else if (condition === 'Light Screen') vol.lightScreen = value;
+			else if (condition === 'Substitute') vol.substitute = value;
+			else if (condition === 'Leech Seed') vol.leechSeed = value;
+		} else if (type === '-status' || type === '-curestatus') {
+			vol.toxicCounter = 0;
+		} else if (type === '-damage' && line.includes('[from] psn')) {
+			vol.toxicCounter++;
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -214,20 +418,9 @@ export class PokemonGymEnv {
 	private _winResolve: ((winner: string) => void) | null = null;
 	private _winPromise: Promise<string> | null = null;
 
-	// Reveal trackers (structured obs mode) — reconstructed purely from
-	// battle-log lines a real player could see, never omniscient state.
-	// Both sides are tracked: p2's records feed p1's opponent tokens, and
-	// (in self-play mode) p1's records feed p2's opponent tokens.
-	private _revealOrder: { p1: string[], p2: string[] } = { p1: [], p2: [] };
-	private _revealRecords: { p1: Map<string, OpponentRecord>, p2: Map<string, OpponentRecord> } = {
-		p1: new Map(), p2: new Map(),
-	};
-
-	// Active-Pokémon volatile trackers (M3.4, 'structured-v2') — same
-	// public-lines-only rule as the reveal trackers.
-	private _volatiles: { p1: SideVolatiles, p2: SideVolatiles } = {
-		p1: freshSideVolatiles(), p2: freshSideVolatiles(),
-	};
+	// Reveal + volatile trackers (structured obs modes) — see
+	// ObservationTrackers. Snapshot-able for the BattleSim forward model.
+	private _trackers = new ObservationTrackers();
 
 	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind } = {}) {
 		this._format = options.format ?? 'gen1randombattle';
@@ -271,10 +464,8 @@ export class PokemonGymEnv {
 		this._winResolve = null;
 		this._winPromise = null;
 
-		// Reset reveal trackers
-		this._revealOrder = { p1: [], p2: [] };
-		this._revealRecords = { p1: new Map(), p2: new Map() };
-		this._volatiles = { p1: freshSideVolatiles(), p2: freshSideVolatiles() };
+		// Reset reveal + volatile trackers
+		this._trackers = new ObservationTrackers();
 
 		// Start players (they loop reading their streams)
 		void this._gymPlayer.start();
@@ -655,129 +846,12 @@ export class PokemonGymEnv {
 	/** The `viewer` seat's volatile view (own side + opponent side), or null in v1 mode. */
 	private _getVolatilesFor(viewer: 'p1' | 'p2'): { own: ActiveVolatiles, opp: ActiveVolatiles } | null {
 		if (this._obsMode !== 'structured-v2') return null;
-		const other = viewer === 'p1' ? 'p2' : 'p1';
-		return {
-			own: toActiveVolatiles(this._volatiles[viewer]),
-			opp: toActiveVolatiles(this._volatiles[other]),
-		};
+		return this._trackers.volatilesFor(viewer);
 	}
 
 	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */
 	private _getOpponentInfo(viewer: 'p1' | 'p2'): OpponentPokemonInfo[] {
-		const side = viewer === 'p1' ? 'p2' : 'p1';
-		return this._revealOrder[side].map(nickname => {
-			const record = this._revealRecords[side].get(nickname)!;
-			return {
-				details: record.details,
-				condition: record.condition,
-				active: record.active,
-				moves: record.moves,
-			};
-		});
-	}
-
-	/**
-	 * Update the reveal trackers from one battle-log line. Both sides are
-	 * tracked (p2 records feed p1's opponent tokens and vice versa), but only
-	 * from lines a real player could see — never omniscient state.
-	 */
-	private _processRevealLine(line: string): void {
-		const parts = line.split('|');
-		const type = parts[1];
-		const ident = parts[2] ?? '';
-		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
-		if (!side) return;
-		const records = this._revealRecords[side];
-		const nickname = extractNickname(ident);
-
-		if (type === 'switch' || type === 'drag') {
-			for (const record of records.values()) record.active = false;
-
-			const details = parts[3] ?? '';
-			const condition = parts[4] ?? '';
-			const existing = records.get(nickname);
-			if (existing) {
-				existing.details = details;
-				existing.condition = condition;
-				existing.active = true;
-			} else {
-				records.set(nickname, { details, condition, active: true, moves: [] });
-				this._revealOrder[side].push(nickname);
-			}
-		} else if (type === '-damage' || type === '-heal') {
-			const record = records.get(nickname);
-			if (record) record.condition = parts[3] ?? record.condition;
-		} else if (type === '-status') {
-			const record = records.get(nickname);
-			if (record) {
-				const statusToken = parts[3] ?? '';
-				record.condition = `${hpFraction(record.condition)} ${statusToken}`.trim();
-			}
-		} else if (type === '-curestatus') {
-			const record = records.get(nickname);
-			if (record) record.condition = hpFraction(record.condition);
-		} else if (type === 'faint') {
-			const record = records.get(nickname);
-			if (record) {
-				record.condition = '0 fnt';
-				record.active = false;
-			}
-		} else if (type === 'move') {
-			const record = records.get(nickname);
-			if (record && record.moves.length < 4) {
-				const moveId = toID(parts[3] ?? '');
-				if (moveId && !record.moves.includes(moveId)) record.moves.push(moveId);
-			}
-		}
-	}
-
-	/**
-	 * Update the per-side volatile trackers (boosts, screens, Substitute,
-	 * Leech Seed, toxic counter) from one battle-log line. All of these are
-	 * public information. Gen1 line inventory:
-	 *   |-boost|p1a: X|atk|1     |-unboost|...        (stat stages)
-	 *   |-clearallboost|[silent]                      (Haze — both sides)
-	 *   |-start|p1a: X|Reflect / Light Screen / Substitute / move: Leech Seed
-	 *   |-end|p1a: X|<same>                           (incl. Haze's [silent] ends)
-	 *   |-status|p1a: X|tox / |-curestatus|           (toxic-counter lifecycle)
-	 *   |-damage|p1a: X|HP|[from] psn                 (one poison tick)
-	 *   |switch/|drag/|faint                          (everything resets)
-	 */
-	private _processVolatileLine(line: string): void {
-		const parts = line.split('|');
-		const type = parts[1];
-
-		if (type === '-clearallboost') {
-			this._volatiles.p1.boosts = {};
-			this._volatiles.p2.boosts = {};
-			return;
-		}
-
-		const ident = parts[2] ?? '';
-		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
-		if (!side) return;
-		const vol = this._volatiles[side];
-
-		if (type === 'switch' || type === 'drag' || type === 'faint') {
-			this._volatiles[side] = freshSideVolatiles();
-		} else if (type === '-boost' || type === '-unboost') {
-			const stat = parts[3] ?? '';
-			const amount = parseInt(parts[4] ?? '', 10);
-			if (!stat || isNaN(amount)) return;
-			const delta = type === '-boost' ? amount : -amount;
-			vol.boosts[stat] = Math.max(-6, Math.min(6, (vol.boosts[stat] ?? 0) + delta));
-		} else if (type === '-start' || type === '-end') {
-			const condition = (parts[3] ?? '').replace(/^move: /, '');
-			const value = type === '-start';
-			if (condition === 'Reflect') vol.reflect = value;
-			else if (condition === 'Light Screen') vol.lightScreen = value;
-			else if (condition === 'Substitute') vol.substitute = value;
-			else if (condition === 'Leech Seed') vol.leechSeed = value;
-		} else if (type === '-status' || type === '-curestatus') {
-			vol.toxicCounter = 0;
-		} else if (type === '-damage' && line.includes('[from] psn')) {
-			vol.toxicCounter++;
-		}
+		return this._trackers.opponentInfoFor(viewer);
 	}
 
 	/**
@@ -786,32 +860,27 @@ export class PokemonGymEnv {
 	 * perspective. Shared between step() and stepDual().
 	 */
 	private _parseProgressLines(lines: string[]): { reward: number, done: boolean, winner?: string } {
-		let reward = 0;
-		let winner: string | undefined;
-		let done = false;
+		const parsed = parseProgressLines(lines);
+		if (parsed.lastTurn !== undefined) this._turnCount = parsed.lastTurn;
+		return parsed;
+	}
 
-		for (const line of lines) {
-			if (line.startsWith('|faint|p2a:') || line.startsWith('|faint|p2b:')) {
-				reward += 0.01;
-			} else if (line.startsWith('|faint|p1a:') || line.startsWith('|faint|p1b:')) {
-				reward -= 0.01;
-			} else if (line.startsWith('|-status|p2')) {
-				reward += 0.0001;
-			} else if (line.startsWith('|win|Gym')) {
-				reward += 1.0;
-				done = true;
-				winner = 'Gym';
-			} else if (line.startsWith('|win|Opponent')) {
-				reward -= 1.0;
-				done = true;
-				winner = 'Opponent';
-			} else if (line.startsWith('|turn|')) {
-				const turnStr = line.slice('|turn|'.length).trim();
-				const turnNum = parseInt(turnStr, 10);
-				if (!isNaN(turnNum)) this._turnCount = turnNum;
-			}
+	/**
+	 * Snapshot the live battle for the BattleSim forward model (M4 MCTS):
+	 * serialized engine state + tracker state, deep-copied so the snapshot
+	 * stays frozen while the real battle advances.
+	 */
+	snapshot(): GymSnapshot {
+		const battle = this._battleStream?.battle;
+		if (!battle || this._done) {
+			throw new Error('snapshot() requires an active, unfinished battle');
 		}
-		return { reward, done, winner };
+		return {
+			battleState: JSON.parse(JSON.stringify(State.serializeBattle(battle))),
+			trackers: this._trackers.snapshot(),
+			obsMode: this._obsMode,
+			turnCount: this._turnCount,
+		};
 	}
 
 	private async _runOmniscientReader(): Promise<void> {
@@ -820,8 +889,7 @@ export class PokemonGymEnv {
 				for (const line of chunk.split('\n')) {
 					if (!line) continue;
 					this._omniscientLines.push(line);
-					this._processRevealLine(line);
-					this._processVolatileLine(line);
+					this._trackers.processLine(line);
 
 					// Notify any pending waiters that new data arrived
 					if (this._omniscientNotify) {
@@ -906,11 +974,50 @@ function hpFraction(condition: string): string {
 }
 
 /**
+ * Parse a batch of battle-log lines (omniscient view) into progress info.
+ * Reward is always from p1's ("Gym") perspective: ±0.01 per faint, +0.0001
+ * per status inflicted on p2, ±1.0 on |win|. `lastTurn` is the highest
+ * |turn| number seen (undefined if none). Shared by PokemonGymEnv and
+ * BattleSim so live and simulated rewards stay identical.
+ */
+export function parseProgressLines(
+	lines: string[],
+): { reward: number, done: boolean, winner?: string, lastTurn?: number } {
+	let reward = 0;
+	let winner: string | undefined;
+	let done = false;
+	let lastTurn: number | undefined;
+
+	for (const line of lines) {
+		if (line.startsWith('|faint|p2a:') || line.startsWith('|faint|p2b:')) {
+			reward += 0.01;
+		} else if (line.startsWith('|faint|p1a:') || line.startsWith('|faint|p1b:')) {
+			reward -= 0.01;
+		} else if (line.startsWith('|-status|p2')) {
+			reward += 0.0001;
+		} else if (line.startsWith('|win|Gym')) {
+			reward += 1.0;
+			done = true;
+			winner = 'Gym';
+		} else if (line.startsWith('|win|Opponent')) {
+			reward -= 1.0;
+			done = true;
+			winner = 'Opponent';
+		} else if (line.startsWith('|turn|')) {
+			const turnStr = line.slice('|turn|'.length).trim();
+			const turnNum = parseInt(turnStr, 10);
+			if (!isNaN(turnNum)) lastTurn = turnNum;
+		}
+	}
+	return { reward, done, winner, lastTurn };
+}
+
+/**
  * Convert a 0-indexed action (0-8) to a Pokemon Showdown choice string.
  *   0-3  → "move 1" through "move 4"
  *   4-8  → "switch 2" through "switch 6"
  */
-function actionToChoice(action: number): string {
+export function actionToChoice(action: number): string {
 	if (action <= 3) {
 		return `move ${action + 1}`;
 	}
@@ -922,7 +1029,7 @@ function actionToChoice(action: number): string {
  * Compute the legal-action mask for a request:
  *   [move0, move1, move2, move3, switch1, switch2, switch3, switch4, switch5]
  */
-function validActionsForRequest(request: ChoiceRequest | null): boolean[] {
+export function validActionsForRequest(request: ChoiceRequest | null): boolean[] {
 	const result: boolean[] = new Array(9).fill(false);
 
 	if (!request || request.wait || request.teamPreview) {

@@ -6,7 +6,36 @@ Last updated: 2026-07-15
 
 ## Current Work
 
-**M3.4 — ✅ complete 2026-07-15, NEGATIVE RESULT. Next up: M4 (MCTS).**
+**M4 — MCTS Integration (started 2026-07-15).**
+Layer determinized UCT search on top of the M3.3 best MLP-PPO checkpoint
+(`models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`, v1 schema): policy head
+as prior, value head at leaves, N=100 sims/move. Success criteria (recalibrated
+2026-07-14, relative to the same checkpoint without search): ≥ +10pp vs Random,
+≥ +5pp vs DamageFirst, ≥ +5pp head-to-head, < 500ms/move.
+
+### Active Tasks (M4)
+- [ ] **Forward model** `sim/tools/battle-sim.ts` — clone the live gym battle via
+  `State.serializeBattle`/`deserializeBattle` (verified: 0.8ms round-trip, clone
+  steps independently and plays to terminal), snapshot the gym's reveal/volatile
+  tracker state alongside, step both seats directly on the clone with gym action
+  semantics, reproduce obs/mask/reward exactly. Snapshot API on `PokemonGymEnv`.
+- [ ] **Determinizer** (Node-side, inside battle-sim — deviation from the
+  original `models/mcts/determinizer.py` spec since team generation/legality
+  live in Node): replace *unrevealed* p2 slots in the clone with sets sampled
+  from the gen1randombattle generator; revealed Pokémon keep their tracked
+  state. Documented approximation: revealed Pokémon keep true full movesets.
+- [ ] TS tests: clone isolation, obs parity with the gym, determinization
+  correctness, terminal handling
+- [ ] Bridge/`GymClient` sim protocol: `sim_clone`/`sim_step`/`sim_fork`/`sim_free`
+- [ ] `models/mcts/mcts_agent.py` — root-parallel determinized UCT (PUCT with
+  policy prior; opponent actions sampled from the same policy on the p2 obs;
+  value head + shaped path rewards at leaves; visit counts aggregated across
+  determinizations)
+- [ ] `evaluate.py --model mcts` + latency benchmark (< 500ms/move @ 100 sims)
+- [ ] Eval battery: 500 vs Random, 200 vs DamageFirst, seat-balanced h2h vs the
+  raw checkpoint; record vs criteria in `MILESTONES.md` → M4
+
+**Previous: M3.4 — ✅ complete 2026-07-15, NEGATIVE RESULT.**
 - Code for both parts (obs schema v2, mixed-opponent training) landed, smoke-verified, and committed (`7533e08d7`). The 5M-step decision run (externally killed at 4.77M steps — no crash; 19 checkpoints cover the trajectory) trained stably in a 42–62% sweep band with no collapse, but full-battle confirmations regress to an M2/M3.3 peer: best **54% (272/500) vs Random**, **46% (92/200) vs DamageFirst**, and **48.0% (480/1000) seat-balanced head-to-head vs the M3.3 best** — all three pre-registered criteria unmet. Full tables + reading in `MILESTONES.md` → M3.4.
 - Takeaway: four independent 5M-step-class runs (fixed-opponent, transformer, self-play, v2+mix) all land in the same 51–57%-vs-Random band — the bottleneck is not the observation or the opponent distribution. M4 (MCTS lookahead) attacks the most plausible remaining lever and its criteria were already recalibrated to be relative to the base policy.
 - **M4 base checkpoint (recommended):** `models/ppo/checkpoints/selfplay/ppo_step_4750059.pt` (M3.3 best, v1); A/B against `models/ppo/checkpoints/v2/ppo_step_2250032.pt` (v2 peer, richer obs) once the MCTS harness exists.

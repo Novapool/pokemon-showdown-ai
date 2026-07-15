@@ -7,6 +7,8 @@ Protocol (one JSON object per line):
   step         → {"cmd":"step","action":<int>}
   valid_actions→ {"cmd":"valid_actions"}
   close        → {"cmd":"close"}
+  sim_clone / sim_step / sim_fork / sim_free / sim_free_all — forward-model
+  simulation of the current battle for MCTS (M4); see the sim_* methods.
 
 By default the bridge returns the M2 structured (12, 65) token observation
 as a flat 780-element array; GymClient reshapes it back to (12, 65). Pass
@@ -252,6 +254,71 @@ class GymClient:
         """
         response = self._send({"cmd": "valid_actions"})
         return list(response["mask"])
+
+    # ------------------------------------------------------------------
+    # Simulation / forward-model interface (M4, MCTS)
+    # ------------------------------------------------------------------
+
+    def _parse_sim_state(self, response: dict) -> dict:
+        state = {
+            "p1": self._parse_seat(response["p1"]),
+            "p2": self._parse_seat(response["p2"]),
+            "done": bool(response["done"]),
+            "info": response.get("info", {}),
+        }
+        if "sim" in response:
+            state["sim"] = int(response["sim"])
+        return state
+
+    def sim_clone(self, determinize: bool = True, seed=None, perspective: str = "p1") -> dict:
+        """Clone the CURRENT live battle into an independent simulator.
+
+        determinize=True replaces the unrevealed Pokémon of the seat OPPOSITE
+        `perspective` with sets sampled from the format's generator
+        (reproducible via `seed`), so the searcher never sees hidden
+        information. determinize=False keeps the true hidden team
+        (omniscient search — diagnostic only).
+
+        Returns {"sim": id, "p1": seat, "p2": seat, "done": bool, "info": {}}
+        where each seat is {"obs": ndarray, "mask": (9,) bool, "needs": bool}.
+        """
+        cmd = {
+            "cmd": "sim_clone",
+            "determinize": bool(determinize),
+            "perspective": perspective,
+        }
+        if seed is not None:
+            cmd["seed"] = int(seed)
+        return self._parse_sim_state(self._send(cmd))
+
+    def sim_step(self, sim_id: int, action, opp_action) -> dict:
+        """Step a simulator (dual-seat semantics: int for seats whose "needs"
+        was True, None otherwise). Reward is p1-perspective, gym-identical.
+
+        Returns {"p1": seat, "p2": seat, "reward": float, "done": bool, "info": {}}.
+        """
+        response = self._send({
+            "cmd": "sim_step",
+            "sim": int(sim_id),
+            "action": None if action is None else int(action),
+            "opp_action": None if opp_action is None else int(opp_action),
+        })
+        state = self._parse_sim_state(response)
+        state["reward"] = float(response["reward"])
+        return state
+
+    def sim_fork(self, sim_id: int) -> dict:
+        """Independent copy of a sim's current state (tree branching).
+        Same return shape as sim_clone()."""
+        return self._parse_sim_state(self._send({"cmd": "sim_fork", "sim": int(sim_id)}))
+
+    def sim_free(self, sim_id: int) -> None:
+        """Release one simulator."""
+        self._send({"cmd": "sim_free", "sim": int(sim_id)})
+
+    def sim_free_all(self) -> None:
+        """Release every live simulator (call after each real decision)."""
+        self._send({"cmd": "sim_free_all"})
 
     def close(self):
         """Send close command, wait for the bridge process to exit."""

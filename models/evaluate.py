@@ -207,6 +207,109 @@ def _run_battles_h2h(
     return wins, n_battles
 
 
+def _run_battles_mcts(
+    mcts, n_battles: int, opponent: str = "random", obs_v2: bool = False,
+) -> tuple:
+    """MCTS evaluation (M4): one env, search runs per decision via sim_* commands.
+
+    Single-env by design — every MCTS decision issues its own sequence of
+    sim_clone/sim_fork/sim_step commands against the env hosting the live
+    battle, so battles are played one at a time. Reports decision latency.
+    """
+    import time
+
+    env = GymClient(structured=True, opponent=opponent, obs_v2=obs_v2)
+    wins = 0
+    latencies = []
+    log_every = min(50, max(1, n_battles // 10))
+
+    try:
+        for i in range(1, n_battles + 1):
+            obs, valid_mask = env.reset()
+            obs = obs.reshape(-1)
+            done = False
+            while not done:
+                t0 = time.perf_counter()
+                action = mcts.act(env, obs, valid_mask)
+                if mcts.last_search_sims > 0:
+                    latencies.append(time.perf_counter() - t0)
+                obs, _reward, done, info, valid_mask = env.step(action)
+                obs = obs.reshape(-1)
+            if done and info.get("winner") == "Gym":
+                wins += 1
+
+            if i % log_every == 0 or i == n_battles:
+                lat = np.array(latencies) * 1000 if latencies else np.zeros(1)
+                print(
+                    f"Battle {i}/{n_battles} | running win rate: {wins / i:.2f} ({wins}/{i}) "
+                    f"| search latency ms: mean {lat.mean():.0f} / p95 {np.percentile(lat, 95):.0f} "
+                    f"/ max {lat.max():.0f}",
+                    flush=True,
+                )
+    finally:
+        env.close()
+
+    return wins, n_battles
+
+
+def _run_battles_mcts_h2h(
+    mcts, opponent_agent, n_battles: int, obs_v2: bool = False,
+) -> tuple:
+    """Head-to-head (M4): MCTS vs a raw PPO checkpoint via dual-seat self-play.
+
+    Single-env loop; the search drives the seat given by mcts.seat ('p1' or
+    'p2' — run both orientations for a seat-balanced comparison), the raw
+    checkpoint's policy drives the other. Wins are counted for the MCTS side.
+    """
+    import time
+
+    env = GymClient(structured=True, selfplay=True, obs_v2=obs_v2)
+    wins = 0
+    latencies = []
+    log_every = min(50, max(1, n_battles // 10))
+    mcts_winner_name = "Gym" if mcts.seat == "p1" else "Opponent"
+
+    def _opp_action(seat):
+        obs = seat["obs"].reshape(1, -1)
+        obs = slice_structured_obs(obs, opponent_agent._hparams["obs_size"])
+        return int(opponent_agent.act_batch(obs, seat["mask"][None, :])[0][0])
+
+    def _mcts_action(seat):
+        t0 = time.perf_counter()
+        action = mcts.act(env, seat["obs"].reshape(-1), seat["mask"])
+        if mcts.last_search_sims > 0:
+            latencies.append(time.perf_counter() - t0)
+        return action
+
+    try:
+        for i in range(1, n_battles + 1):
+            p1_state, p2_state = env.reset_dual()
+            done = False
+            while not done:
+                if mcts.seat == "p1":
+                    a1 = _mcts_action(p1_state) if p1_state["needs"] else None
+                    a2 = _opp_action(p2_state) if p2_state["needs"] else None
+                else:
+                    a1 = _opp_action(p1_state) if p1_state["needs"] else None
+                    a2 = _mcts_action(p2_state) if p2_state["needs"] else None
+                p1_state, p2_state, _reward, done, info = env.step_dual(a1, a2)
+            if info.get("winner") == mcts_winner_name:
+                wins += 1
+
+            if i % log_every == 0 or i == n_battles:
+                lat = np.array(latencies) * 1000 if latencies else np.zeros(1)
+                print(
+                    f"Battle {i}/{n_battles} | running MCTS win rate: {wins / i:.2f} ({wins}/{i}) "
+                    f"| search latency ms: mean {lat.mean():.0f} / p95 {np.percentile(lat, 95):.0f} "
+                    f"/ max {lat.max():.0f}",
+                    flush=True,
+                )
+    finally:
+        env.close()
+
+    return wins, n_battles
+
+
 def _run_battles(
     agent, n_battles: int, structured: bool = False, flatten: bool = True,
     opponent: str = "random", obs_v2: bool = False,
@@ -259,8 +362,9 @@ def main():
     parser.add_argument(
         "--model",
         required=True,
-        choices=["q_learning", "dqn", "ppo", "transformer"],
-        help="Model architecture to evaluate.",
+        choices=["q_learning", "dqn", "ppo", "transformer", "mcts"],
+        help="Model architecture to evaluate. 'mcts' (M4) wraps a structured "
+             "PPO checkpoint in determinized UCT search at inference time.",
     )
     parser.add_argument(
         "--checkpoint",
@@ -312,25 +416,96 @@ def main():
         help=(
             "Head-to-head (M3.3): path to a second PPO checkpoint to play as the "
             "opponent (seat p2) via dual-seat self-play. Both checkpoints must use "
-            "the same obs mode (--structured applies to both). --model ppo only."
+            "the same obs mode (--structured applies to both). --model ppo or mcts."
         ),
+    )
+    parser.add_argument(
+        "--sims",
+        type=int,
+        default=100,
+        help="MCTS (M4): total simulation budget per move decision (default: 100).",
+    )
+    parser.add_argument(
+        "--determinizations",
+        type=int,
+        default=4,
+        help="MCTS (M4): opponent-team samples per decision; --sims is split "
+             "evenly across them (default: 4).",
+    )
+    parser.add_argument(
+        "--c-puct",
+        type=float,
+        default=1.5,
+        help="MCTS (M4): PUCT exploration constant (default: 1.5).",
+    )
+    parser.add_argument(
+        "--no-determinize",
+        action="store_true",
+        help="MCTS (M4): search on the true hidden opponent team instead of "
+             "sampled ones (omniscient upper-bound diagnostic only).",
+    )
+    parser.add_argument(
+        "--mcts-seat",
+        choices=["p1", "p2"],
+        default="p1",
+        help="MCTS (M4, --vs-checkpoint only): which seat the search drives. "
+             "Run both orientations for a seat-balanced head-to-head.",
     )
     args = parser.parse_args()
 
     if args.obs_v2:
-        if args.model != "ppo":
-            parser.error("--obs-v2 is only meaningful with --model ppo")
+        if args.model not in ("ppo", "mcts"):
+            parser.error("--obs-v2 is only meaningful with --model ppo/mcts")
         args.structured = True
-    if args.structured and args.model != "ppo":
+    if args.structured and args.model not in ("ppo", "mcts"):
         parser.error(
             "--structured is only meaningful with --model ppo "
             "(transformer always uses structured, unflattened observations; no flag needed)"
         )
     if args.vs_checkpoint:
-        if args.model != "ppo":
-            parser.error("--vs-checkpoint only supports --model ppo (the project architecture)")
+        if args.model not in ("ppo", "mcts"):
+            parser.error("--vs-checkpoint only supports --model ppo/mcts")
         if args.opponent != "random":
             parser.error("--vs-checkpoint and --opponent are mutually exclusive")
+
+    if args.model == "mcts":
+        # The search wraps a structured PPO checkpoint (v1 780 or --obs-v2 924).
+        base_agent = _load_agent("ppo", args.checkpoint, device=args.device)
+        sys.path.insert(0, str(_MODELS_DIR / "mcts"))
+        from mcts_agent import MCTSAgent
+
+        if args.mcts_seat == "p2" and not args.vs_checkpoint:
+            parser.error("--mcts-seat p2 requires --vs-checkpoint (dual-seat mode)")
+        mcts = MCTSAgent(
+            base_agent,
+            n_sims=args.sims,
+            n_determinizations=args.determinizations,
+            c_puct=args.c_puct,
+            determinize=not args.no_determinize,
+            seed=0,
+            seat=args.mcts_seat,
+        )
+        if args.num_envs > 1:
+            print("[mcts] search is single-env by design; ignoring --num-envs", flush=True)
+        if args.vs_checkpoint:
+            opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
+            wins, total = _run_battles_mcts_h2h(
+                mcts, opponent_agent, args.battles, obs_v2=args.obs_v2,
+            )
+            opponent_name = args.vs_checkpoint
+        else:
+            wins, total = _run_battles_mcts(
+                mcts, args.battles, opponent=args.opponent, obs_v2=args.obs_v2,
+            )
+            opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
+        win_rate = wins / total if total > 0 else 0.0
+        print(f"Model: mcts (sims={args.sims}, det={args.determinizations}, "
+              f"c_puct={args.c_puct}, determinize={not args.no_determinize}, "
+              f"seat={args.mcts_seat})")
+        print(f"Base checkpoint: {args.checkpoint}")
+        print(f"Battles: {total}")
+        print(f"MCTS win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
+        return
 
     agent = _load_agent(args.model, args.checkpoint, device=args.device)
     if args.model == "transformer":
