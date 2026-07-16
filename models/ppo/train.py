@@ -155,6 +155,44 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--pretrain-checkpoint",
+        type=str,
+        default=None,
+        help=(
+            "M5.5: warm-start from a BC checkpoint (models/bc_pretrain_mlp.py "
+            "output — a normal PPOAgent checkpoint). Unlike --resume, training "
+            "starts at step 0 with this run's flags."
+        ),
+    )
+    parser.add_argument(
+        "--value-warmup-steps",
+        type=int,
+        default=0,
+        help=(
+            "M3.2 fix (ported for M5.5): freeze trunk + policy/opp heads for "
+            "the first N steps, training only the value head, so the value "
+            "function fits the warm-started policy before full PPO gradients "
+            "flow through the shared trunk. 0 = off."
+        ),
+    )
+    parser.add_argument(
+        "--bc-anchor",
+        type=str,
+        default=None,
+        help=(
+            "M3.2 fix (ported for M5.5): path to a BC checkpoint kept frozen "
+            "as a KL anchor — adds coef*KL(pi||pi_BC) to the loss so PPO "
+            "can't drift far from human-cloned play. Held CONSTANT (not "
+            "annealed): M3.2 showed decay resumes when the anchor anneals away."
+        ),
+    )
+    parser.add_argument(
+        "--bc-anchor-coef",
+        type=float,
+        default=0.05,
+        help="KL-anchor coefficient (with --bc-anchor; default 0.05, the M3.2 value)",
+    )
+    parser.add_argument(
         "--resume",
         type=str,
         default=None,
@@ -319,8 +357,24 @@ def main() -> None:
                 f"--resume checkpoint obs_size={ckpt_obs_size} does not match "
                 f"the environment's obs_size={obs_size} — check --obs-v2/--structured"
             )
+    elif args.pretrain_checkpoint:
+        agent = PPOAgent.load(args.pretrain_checkpoint, device=args.device)
+        ckpt_obs_size = agent.trunk[0].in_features
+        if ckpt_obs_size != obs_size:
+            raise ValueError(
+                f"--pretrain-checkpoint obs_size={ckpt_obs_size} does not match "
+                f"the environment's obs_size={obs_size} — check --obs-v2/--structured"
+            )
+        agent.opp_coef = args.opp_coef  # this run's flag, not the BC default
+        print(f"Warm-started from BC checkpoint: {args.pretrain_checkpoint}", flush=True)
     else:
         agent = PPOAgent(obs_size=obs_size, device=args.device, opp_coef=args.opp_coef)
+
+    # M3.2 fixes (M5.5 port): KL anchor to the BC policy + value-head warmup.
+    if args.bc_anchor:
+        agent.set_bc_anchor(args.bc_anchor, args.bc_anchor_coef)
+        print(f"BC KL-anchor attached: {args.bc_anchor} (coef {args.bc_anchor_coef}, constant)", flush=True)
+    warmup_active = False  # decided below, once the starting step is known
     # Self-play opponents come from this run's own checkpoints unless a pool
     # is given explicitly.
     pool_dir = Path(args.selfplay_pool) if args.selfplay_pool else checkpoint_dir
@@ -349,6 +403,11 @@ def main() -> None:
     else:
         total_steps = 0
         last_checkpoint_step = 0
+
+    if args.value_warmup_steps > 0 and total_steps < args.value_warmup_steps:
+        warmup_active = True
+        agent.set_policy_frozen(True)
+        print(f"Value warmup: policy frozen until step {args.value_warmup_steps}", flush=True)
 
     # Episode tracking within each rollout window
     rollout_wins = 0
@@ -527,6 +586,11 @@ def main() -> None:
             loss = agent.update(merged)
             for b in buffers:
                 b.clear()
+
+            if warmup_active and total_steps >= args.value_warmup_steps:
+                warmup_active = False
+                agent.set_policy_frozen(False)
+                print(f"[value-warmup] complete at step {total_steps} — policy unfrozen", flush=True)
 
             # ----------------------------------------------------------------
             # Log rollout summary

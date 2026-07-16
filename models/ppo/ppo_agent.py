@@ -85,6 +85,15 @@ class PPOAgent(nn.Module):
         # Single optimizer over all parameters
         self.optimizer = torch.optim.Adam(self.parameters(), lr=lr)
 
+        # M3.2-style fine-tune knobs, ported for M5.5 (BC→PPO): configured by
+        # train.py via set_bc_anchor()/set_policy_frozen(), never saved into
+        # checkpoints. The anchor lives in a plain list so nn.Module does not
+        # register it (keeps it out of state_dict/parameters()); the optimizer
+        # above was already created, so anchor params are never optimized.
+        self._bc_anchor: list["PPOAgent"] = []
+        self.bc_anchor_coef = 0.0
+        self._policy_frozen = False
+
         # Store hparams for save/load
         self._hparams = dict(
             obs_size=obs_size,
@@ -172,6 +181,43 @@ class PPOAgent(nn.Module):
     # ------------------------------------------------------------------
     # Training helpers
     # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # M3.2/M5.5 fine-tune configuration (value-head warmup, BC KL-anchor)
+    # ------------------------------------------------------------------
+
+    @property
+    def bc_policy(self) -> "PPOAgent | None":
+        return self._bc_anchor[0] if self._bc_anchor else None
+
+    def set_policy_frozen(self, frozen: bool) -> None:
+        """Freeze/unfreeze the trunk + policy/opp heads (value-head warmup).
+
+        Training only the value head for the first N steps lets the value
+        function fit the BC policy before full PPO gradients flow through the
+        shared trunk and scramble the BC-learned features (the M3 failure
+        mode, diagnosed and fixed in M3.2 for the transformer).
+        """
+        for module in (self.trunk, self.policy_head, self.opp_head):
+            for p in module.parameters():
+                p.requires_grad = not frozen
+        self._policy_frozen = frozen
+
+    def set_bc_anchor(self, checkpoint_path: str, coef: float) -> None:
+        """Attach a frozen copy of a BC checkpoint as a KL anchor.
+
+        update() adds `coef × KL(π_θ ‖ π_BC)` to the loss so PPO fine-tuning
+        can't drift arbitrarily far from human-cloned play. The anchor is a
+        separate frozen agent; it is never saved into training checkpoints
+        (train.py re-attaches it on --resume) and its parameters are not in
+        the optimizer.
+        """
+        anchor = PPOAgent.load(checkpoint_path, device=str(self.device))
+        anchor.eval()
+        for p in anchor.parameters():
+            p.requires_grad = False
+        self._bc_anchor = [anchor]
+        self.bc_anchor_coef = coef
 
     def evaluate_actions(
         self,
@@ -308,6 +354,19 @@ class PPOAgent(nn.Module):
                             opp_logits_b[valid_opp], opp_labels_b[valid_opp]
                         )
                         loss = loss + opp_coef * opp_ce
+
+                # BC KL-anchor (M3.2 recipe, M5.5 port): penalize divergence
+                # from the frozen human-cloned policy on the same minibatch.
+                if self.bc_policy is not None and self.bc_anchor_coef > 0:
+                    features_b = self.trunk(obs_b)
+                    logits_b = self.policy_head(features_b).masked_fill(~mask_b, -1e9)
+                    dist_b = Categorical(logits=logits_b)
+                    with torch.no_grad():
+                        bc_features = self.bc_policy.trunk(obs_b)
+                        bc_logits = self.bc_policy.policy_head(bc_features).masked_fill(~mask_b, -1e9)
+                    bc_dist = Categorical(logits=bc_logits)
+                    anchor_kl = torch.distributions.kl_divergence(dist_b, bc_dist).mean()
+                    loss = loss + self.bc_anchor_coef * anchor_kl
 
                 self.optimizer.zero_grad()
                 loss.backward()
