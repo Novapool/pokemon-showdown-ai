@@ -1,0 +1,9 @@
+step_3250040 vs Random(500): Win rate vs RandomPlayerAI: 0.53 (266/500)
+step_3250040 vs DamageFirst(200): Win rate vs DamageFirstAI: 0.45 (89/200)
+step_2250032 vs Random(500): Win rate vs RandomPlayerAI: 0.54 (272/500)
+step_2250032 vs DamageFirst(200): Win rate vs DamageFirstAI: 0.46 (92/200)
+step_2000032 vs Random(500): Win rate vs RandomPlayerAI: 0.51 (256/500)
+step_2000032 vs DamageFirst(200): Win rate vs DamageFirstAI: 0.42 (85/200)
+step_4000050 vs Random(500): Win rate vs RandomPlayerAI: 0.54 (269/500)
+step_4000050 vs DamageFirst(200): Win rate vs DamageFirstAI: 0.41 (81/200)
+CONFIRM DONE

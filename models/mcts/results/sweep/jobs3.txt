@@ -1,0 +1,4 @@
+confirm_c05d1 100 0.5 1 random
+confirm_c05d1 100 0.5 1 damagefirst
+confirm_c10d1 100 1.0 1 random
+confirm_c10d1 100 1.0 1 damagefirst

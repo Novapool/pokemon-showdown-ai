@@ -1,0 +1,8 @@
+c05d1 100 0.5 1 random
+c05d1 100 0.5 1 damagefirst
+c05d2 100 0.5 2 random
+c05d2 100 0.5 2 damagefirst
+c10d1 100 1.0 1 random
+c10d1 100 1.0 1 damagefirst
+c10d2 100 1.0 2 random
+c10d2 100 1.0 2 damagefirst

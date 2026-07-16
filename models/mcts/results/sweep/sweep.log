@@ -1,0 +1,72 @@
+=== MCTS knob sweep started Wed Jul 15 20:56:20 EDT 2026 ===
+[20:56:20] start s400 vs random
+[20:56:20] start s400 vs damagefirst
+[20:56:20] start s200 vs random
+[21:21:39] done  s200 vs random: MCTS win rate vs RandomPlayerAI: 0.67 (133/200)
+[21:21:39] start s200 vs damagefirst
+[21:34:25] done  s400 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.55 (110/200)
+[21:34:25] start d8 vs random
+[21:43:04] done  s400 vs random: MCTS win rate vs RandomPlayerAI: 0.71 (142/200)
+[21:43:04] start d8 vs damagefirst
+[21:47:52] done  s200 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.47 (94/200)
+[21:47:52] start c05 vs random
+[21:52:36] done  d8 vs random: MCTS win rate vs RandomPlayerAI: 0.62 (125/200)
+[21:52:36] start c05 vs damagefirst
+[21:57:05] done  d8 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.52 (104/200)
+[21:57:05] start c10 vs random
+[22:02:35] done  c05 vs random: MCTS win rate vs RandomPlayerAI: 0.72 (145/200)
+[22:02:35] start c10 vs damagefirst
+[22:03:16] done  c05 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.58 (117/200)
+[22:03:16] start c25 vs random
+[22:09:30] done  c10 vs random: MCTS win rate vs RandomPlayerAI: 0.69 (139/200)
+[22:09:30] start c25 vs damagefirst
+[22:11:54] done  c10 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.59 (119/200)
+[22:11:54] start d1 vs random
+[22:16:57] done  c25 vs random: MCTS win rate vs RandomPlayerAI: 0.59 (119/200)
+[22:16:57] start d1 vs damagefirst
+[22:22:06] done  c25 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.52 (104/200)
+[22:22:06] start d2 vs random
+[22:22:48] done  d1 vs random: MCTS win rate vs RandomPlayerAI: 0.72 (144/200)
+[22:22:48] start d2 vs damagefirst
+[22:25:05] done  d1 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.63 (126/200)
+[22:25:05] start s050 vs random
+[22:33:34] done  d2 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.65 (129/200)
+[22:33:34] start s050 vs damagefirst
+[22:35:16] done  s050 vs random: MCTS win rate vs RandomPlayerAI: 0.59 (118/200)
+[22:36:46] done  d2 vs random: MCTS win rate vs RandomPlayerAI: 0.68 (135/200)
+[22:39:04] done  s050 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.45 (89/200)
+=== MCTS knob sweep finished Wed Jul 15 22:39:04 EDT 2026 ===
+=== MCTS knob sweep stage 2 started Wed Jul 15 22:40:01 EDT 2026 ===
+[22:40:01] start c05d1 vs random
+[22:40:01] start c05d1 vs damagefirst
+[22:40:01] start c05d2 vs random
+[22:48:18] done  c05d1 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.67 (134/200)
+[22:48:18] start c05d2 vs damagefirst
+[22:50:36] done  c05d1 vs random: MCTS win rate vs RandomPlayerAI: 0.79 (158/200)
+[22:50:36] start c10d1 vs random
+[22:54:08] done  c05d2 vs random: MCTS win rate vs RandomPlayerAI: 0.77 (154/200)
+[22:54:08] start c10d1 vs damagefirst
+[22:58:44] done  c05d2 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.65 (130/200)
+[22:58:44] start c10d2 vs random
+[23:04:00] done  c10d1 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.65 (130/200)
+[23:04:00] start c10d2 vs damagefirst
+[23:05:58] done  c10d1 vs random: MCTS win rate vs RandomPlayerAI: 0.80 (160/200)
+[23:10:52] done  c10d2 vs random: MCTS win rate vs RandomPlayerAI: 0.74 (149/200)
+[23:11:49] done  c10d2 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.62 (124/200)
+=== MCTS knob sweep stage 2 finished Wed Jul 15 23:11:49 EDT 2026 ===
+=== MCTS knob sweep confirmation started Wed Jul 15 23:12:25 EDT 2026 ===
+[23:12:25] start confirm_c05d1 vs random
+[23:12:25] start confirm_c05d1 vs damagefirst
+[23:12:25] start confirm_c10d1 vs random
+[23:29:18] done  confirm_c05d1 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.67 (336/500)
+[23:29:18] start confirm_c10d1 vs damagefirst
+[23:38:00] done  confirm_c05d1 vs random: MCTS win rate vs RandomPlayerAI: 0.81 (406/500)
+[23:41:47] done  confirm_c10d1 vs random: MCTS win rate vs RandomPlayerAI: 0.76 (382/500)
+[23:49:50] done  confirm_c10d1 vs damagefirst: MCTS win rate vs DamageFirstAI: 0.64 (322/500)
+=== MCTS knob sweep confirmation finished Wed Jul 15 23:49:50 EDT 2026 ===
+=== v2-checkpoint A/B started Wed Jul 15 23:51:41 EDT 2026 ===
+[23:51:41] start v2ab vs random
+[23:51:41] start v2ab vs damagefirst
+[00:11:51] done  v2ab vs damagefirst: MCTS win rate vs DamageFirstAI: 0.70 (351/500)
+[00:17:56] done  v2ab vs random: MCTS win rate vs RandomPlayerAI: 0.83 (413/500)
+=== v2-checkpoint A/B finished Thu Jul 16 00:17:56 EDT 2026 ===

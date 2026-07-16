@@ -1,0 +1,15 @@
+[mcts] search is single-env by design; ignoring --num-envs
+Battle 20/200 | running win rate: 0.45 (9/20) | search latency ms: mean 332 / p95 496 / max 646
+Battle 40/200 | running win rate: 0.53 (21/40) | search latency ms: mean 337 / p95 508 / max 646
+Battle 60/200 | running win rate: 0.53 (32/60) | search latency ms: mean 342 / p95 508 / max 646
+Battle 80/200 | running win rate: 0.59 (47/80) | search latency ms: mean 335 / p95 505 / max 646
+Battle 100/200 | running win rate: 0.59 (59/100) | search latency ms: mean 335 / p95 505 / max 646
+Battle 120/200 | running win rate: 0.58 (70/120) | search latency ms: mean 346 / p95 548 / max 820
+Battle 140/200 | running win rate: 0.57 (80/140) | search latency ms: mean 358 / p95 589 / max 820
+Battle 160/200 | running win rate: 0.55 (88/160) | search latency ms: mean 369 / p95 599 / max 820
+Battle 180/200 | running win rate: 0.56 (100/180) | search latency ms: mean 376 / p95 603 / max 820
+Battle 200/200 | running win rate: 0.55 (110/200) | search latency ms: mean 382 / p95 606 / max 820
+Model: mcts (sims=400, det=4, c_puct=1.5, determinize=True, seat=p1)
+Base checkpoint: models/ppo/checkpoints/selfplay/ppo_step_4750059.pt
+Battles: 200
+MCTS win rate vs DamageFirstAI: 0.55 (110/200)

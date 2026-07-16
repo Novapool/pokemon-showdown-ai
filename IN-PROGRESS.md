@@ -6,6 +6,38 @@ Last updated: 2026-07-15
 
 ## Current Work
 
+**Search-knob sweep (post-M4 step 1) — ✅ COMPLETE 2026-07-15, decisive.
+New operating point: sims=100, c_puct=0.5, det=1.**
+- Two-stage sweep (OFAT then combos, 200 battles/cell) + 500-battle
+  confirmation on `ppo_step_4750059.pt`. Lower c_puct and fewer
+  determinizations each beat their defaults on both opponents, and the
+  effects stack: confirmed **81.2% (406/500) vs Random** and **67.2%
+  (336/500) vs DamageFirst** — vs 66%/56% at the M4 defaults, at slightly
+  *lower* latency (~85ms/move). The narrowly-missed M4 vs-Random criterion
+  (+10pp over raw) is now cleared at +23.8pp. Lesson: one deep tree with a
+  trusted prior beats a shallow determinization ensemble at fixed budget.
+- Defaults updated in `MCTSAgent`/`evaluate.py` (uncommitted, with the
+  earlier mcts_agent.py cleanup); full tables in `MILESTONES.md` → M4 →
+  "Post-M4 knob sweep"; logs in `models/mcts/results/sweep/`.
+
+**v2-checkpoint A/B (post-M4 step 2, pre-planned in M3.4) — ✅ COMPLETE
+2026-07-16: a tie, v2 nominally ahead.**
+- Tuned MCTS over `v2/ppo_step_2250032.pt`: **82.6% (413/500) vs Random,
+  70.2% (351/500) vs DamageFirst** vs v1's 81.2%/67.2% — within noise
+  (~±4pp), though the direction reversed (raw v2 trailed raw v1). Verdict
+  in `MILESTONES.md` → M4 → "Post-M4 knob sweep": either checkpoint is a
+  valid M5/M6 base; **v1 stays the default**; v2 is a live option for M5.
+  Logs: `models/mcts/results/sweep/v2ab_*.log`.
+
+**Next up: M5 (opponent modeling) — awaiting go-ahead / scoping.**
+- Post-M4 steps 1–2 done; M5's prediction head plugs into the search's
+  opponent-action sampler (currently the base policy on the opponent's
+  reveal-tracked obs). Obs-schema choice (v1 vs v2) is an M5 design
+  decision given the A/B tie.
+- Uncommitted working tree: mcts_agent.py cleanup + tuned defaults
+  (`MCTSAgent`, `evaluate.py`), doc updates, sweep/A/B logs — ready to
+  commit as the post-M4 tuning checkpoint.
+
 **M4 — ✅ complete 2026-07-15, POSITIVE RESULT. Next up: M5 (opponent modeling)
 or search tuning.**
 - Determinized UCT over the M3.3 best checkpoint (100 sims, 4 determinizations,

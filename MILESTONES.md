@@ -726,6 +726,42 @@ Artifacts: `models/mcts/results/{vs_random,vs_damagefirst,h2h_seat_p1,h2h_seat_p
   the cheapest path to closing the vs-Random gap; an A/B on the v2 2.25M
   checkpoint (richer obs) is the other pre-planned follow-up.
 
+### Post-M4 knob sweep (2026-07-15) — new operating point: sims=100, c_puct=0.5, det=1
+
+Two-stage sweep (OFAT then combinations, 200 battles/cell) + 500-battle
+confirmation, all on the M4 base checkpoint. Two knobs beat their defaults
+on both opponents, and the effects stack — both point the same way:
+**concentrate the search**. Fewer determinizations at fixed total `--sims`
+means one deeper tree instead of a shallow ensemble over opponent-team
+samples (det=1 also fastest, ~85ms/move); lower c_puct trusts the policy
+prior more (2.5 clearly hurts). Raising sims to 400 helped vs Random but
+not DamageFirst at 4× latency — the least attractive lever.
+
+Confirmed at 500 battles (c_puct=0.5/det=1 beat c_puct=1.0/det=1 on both):
+
+| Test | Tuned MCTS | M4 default MCTS | Raw checkpoint |
+|---|---|---|---|
+| vs RandomPlayerAI (500) | **81.2% (406/500)** | 66.0% | 57.4% |
+| vs DamageFirstAI (500) | **67.2% (336/500)** | 56.5% (200 battles) | 45.5% |
+
+The M4 vs-Random criterion (≥ +10pp over raw), narrowly missed at the
+defaults, is cleared decisively at the tuned point: **+23.8pp** (and
++21.7pp vs DamageFirst). The gap was untuned defaults, as suspected.
+Defaults updated in `MCTSAgent` and `evaluate.py`; logs in
+`models/mcts/results/sweep/`.
+
+**v2-checkpoint A/B (2026-07-16, pre-planned in M3.4):** the same tuned
+battery over `v2/ppo_step_2250032.pt` (obs schema v2): **82.6% (413/500)
+vs Random, 70.2% (351/500) vs DamageFirst** — nominally ahead of v1 on
+both (81.2%/67.2%) but within noise (~±4pp at 500 battles; DF gap ≈ 1σ).
+Notable direction reversal: raw v2 was *behind* raw v1 (54%R/46%DF vs
+57.4%/45.5%), yet with search attached it's at least on par — consistent
+with richer obs mattering more under lookahead, though not statistically
+established. Verdict: **a tie; either checkpoint is a valid M5/M6 base.**
+v1 (`selfplay/ppo_step_4750059.pt`) stays the default to avoid churn; v2
+is a live option for M5, where the obs schema gets revisited anyway.
+Logs: `models/mcts/results/sweep/v2ab_*.log`.
+
 ### What Was Built (2026-07-15, committed `9da4d273a`)
 
 - **Forward model** `sim/tools/battle-sim.ts` (`BattleSim`): clones the live

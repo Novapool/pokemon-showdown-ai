@@ -428,15 +428,17 @@ def main():
     parser.add_argument(
         "--determinizations",
         type=int,
-        default=4,
+        default=1,
         help="MCTS (M4): opponent-team samples per decision; --sims is split "
-             "evenly across them (default: 4).",
+             "evenly across them (default: 1, per the post-M4 knob sweep — "
+             "one deep tree beats a shallow ensemble at fixed --sims).",
     )
     parser.add_argument(
         "--c-puct",
         type=float,
-        default=1.5,
-        help="MCTS (M4): PUCT exploration constant (default: 1.5).",
+        default=0.5,
+        help="MCTS (M4): PUCT exploration constant (default: 0.5, per the "
+             "post-M4 knob sweep).",
     )
     parser.add_argument(
         "--no-determinize",

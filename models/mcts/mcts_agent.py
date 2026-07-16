@@ -62,8 +62,8 @@ class MCTSAgent:
         self,
         agent,
         n_sims: int = 100,
-        n_determinizations: int = 4,
-        c_puct: float = 1.5,
+        n_determinizations: int = 1,
+        c_puct: float = 0.5,
         determinize: bool = True,
         seed: int | None = None,
         seat: str = "p1",
@@ -94,7 +94,6 @@ class MCTSAgent:
         self._opp_seat = "p2" if seat == "p1" else "p1"
         self._reward_sign = 1.0 if seat == "p1" else -1.0
         self._rng = np.random.default_rng(seed)
-        self._det_counter = 0
         # Stats for latency reporting (evaluate.py --model mcts)
         self.last_search_sims = 0
 
@@ -157,7 +156,6 @@ class MCTSAgent:
         ran_sims = 0
 
         for _ in range(self.n_determinizations):
-            self._det_counter += 1
             root_state = client.sim_clone(
                 determinize=self.determinize,
                 seed=int(self._rng.integers(0, 2**31 - 1)),
@@ -173,8 +171,7 @@ class MCTSAgent:
                 self._simulate(client, root)
                 ran_sims += 1
             total_visits += root.child_visits
-            with np.errstate(invalid="ignore"):
-                total_value += root.child_values
+            total_value += root.child_values
             client.sim_free_all()
 
         self.last_search_sims = ran_sims

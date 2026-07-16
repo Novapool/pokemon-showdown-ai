@@ -1,0 +1,4 @@
+=== v2 2.25M as p1 vs M3.3-best ===
+Win rate vs models/ppo/checkpoints/selfplay/ppo_step_4750059.pt: 0.45 (227/500)
+=== M3.3-best as p1 vs v2 2.25M ===
+Win rate vs models/ppo/checkpoints/v2/ppo_step_2250032.pt: 0.49 (247/500)
