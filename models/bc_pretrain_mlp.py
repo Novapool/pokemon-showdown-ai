@@ -91,7 +91,11 @@ class ReplayShardDataset:
                     if not self._keep(rec):
                         continue
                     obs = np.frombuffer(base64.b64decode(rec["o"]), dtype=np.float32)
-                    yield obs, rec["a"], rec["oa"], self.format_idx
+                    # Value target: the trajectory's final outcome in [-1, 1]
+                    # (win +1 / loss -1) — the supervised value-net recipe, so
+                    # the checkpoint is searchable (MCTS evaluates leaves with
+                    # the value head, which plain policy-BC leaves at init).
+                    yield obs, rec["a"], rec["oa"], 2.0 * rec["w"] - 1.0, self.format_idx
 
     def train_samples(self, seed: int):
         yield from self._iter_files(self.files, seed)
@@ -137,19 +141,22 @@ def shuffled(sample_iter, seed: int):
 
 
 def batches(sample_iter, batch_size: int):
-    obs_buf, act_buf, opp_buf, fmt_buf = [], [], [], []
-    for obs, action, opp_action, fmt_idx in sample_iter:
+    obs_buf, act_buf, opp_buf, val_buf, fmt_buf = [], [], [], [], []
+    for obs, action, opp_action, value, fmt_idx in sample_iter:
         obs_buf.append(obs)
         act_buf.append(action)
         opp_buf.append(opp_action)
+        val_buf.append(value)
         fmt_buf.append(fmt_idx)
         if len(obs_buf) == batch_size:
             yield (np.stack(obs_buf), np.array(act_buf, dtype=np.int64),
-                   np.array(opp_buf, dtype=np.int64), np.array(fmt_buf, dtype=np.int64))
-            obs_buf, act_buf, opp_buf, fmt_buf = [], [], [], []
+                   np.array(opp_buf, dtype=np.int64), np.array(val_buf, dtype=np.float32),
+                   np.array(fmt_buf, dtype=np.int64))
+            obs_buf, act_buf, opp_buf, val_buf, fmt_buf = [], [], [], [], []
     if obs_buf:
         yield (np.stack(obs_buf), np.array(act_buf, dtype=np.int64),
-               np.array(opp_buf, dtype=np.int64), np.array(fmt_buf, dtype=np.int64))
+               np.array(opp_buf, dtype=np.int64), np.array(val_buf, dtype=np.float32),
+               np.array(fmt_buf, dtype=np.int64))
 
 
 def parse_weights(spec: str | None, formats: list[str]) -> list[float]:
@@ -165,10 +172,11 @@ def parse_weights(spec: str | None, formats: list[str]) -> list[float]:
 def evaluate(agent: PPOAgent, datasets: list[ReplayShardDataset], batch_size: int, device):
     """Per-format policy/opp-head top-1 accuracy on the held-out shards."""
     agent.eval()
-    stats = {ds.fmt: [0, 0, 0, 0] for ds in datasets}  # correct, n, opp_correct, opp_n
+    # correct, n, opp_correct, opp_n, value_sign_correct
+    stats = {ds.fmt: [0, 0, 0, 0, 0] for ds in datasets}
     with torch.no_grad():
         for ds in datasets:
-            for obs_np, act_np, opp_np, _ in batches(ds.val_samples(), batch_size):
+            for obs_np, act_np, opp_np, val_np, _ in batches(ds.val_samples(), batch_size):
                 obs = torch.from_numpy(obs_np).to(device)
                 features = agent.trunk(obs)
                 pred = agent.policy_head(features).argmax(dim=-1).cpu().numpy()
@@ -180,6 +188,8 @@ def evaluate(agent: PPOAgent, datasets: list[ReplayShardDataset], batch_size: in
                     opp_pred = agent.opp_head(features).argmax(dim=-1).cpu().numpy()
                     s[2] += int((opp_pred[labeled] == opp_np[labeled]).sum())
                     s[3] += int(labeled.sum())
+                value_pred = agent.value_head(features).squeeze(-1).cpu().numpy()
+                s[4] += int((np.sign(value_pred) == np.sign(val_np)).sum())
     agent.train()
     return stats
 
@@ -198,6 +208,9 @@ def main() -> None:
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--opp-bc-coef", type=float, default=0.1,
                         help="weight of the opp-head CE term (M5 convention)")
+    parser.add_argument("--value-bc-coef", type=float, default=0.5,
+                        help="weight of the value-head MSE toward the game outcome "
+                             "(0 disables — leaves the value head at init)")
     parser.add_argument("--val-shards", type=int, default=1,
                         help="shards per format held out for validation")
     parser.add_argument("--max-shards", type=int, default=None,
@@ -225,6 +238,8 @@ def main() -> None:
     # untouched PPO Adam that gets checkpointed for a later fine-tune.
     params = (list(agent.trunk.parameters()) + list(agent.policy_head.parameters()) +
               list(agent.opp_head.parameters()))
+    if args.value_bc_coef > 0:
+        params += list(agent.value_head.parameters())
     optimizer = torch.optim.Adam(params, lr=args.lr)
     print(f"device: {device} | params: {sum(p.numel() for p in agent.parameters()):,}")
 
@@ -244,7 +259,7 @@ def main() -> None:
             [ds.train_samples(seed=epoch * 31 + i) for i, ds in enumerate(datasets)],
             weights, seed=epoch,
         )
-        for obs_np, act_np, opp_np, _fmt in batches(shuffled(stream, seed=epoch), args.batch_size):
+        for obs_np, act_np, opp_np, val_np, _fmt in batches(shuffled(stream, seed=epoch), args.batch_size):
             obs = torch.from_numpy(obs_np).to(device)
             actions = torch.from_numpy(act_np).to(device)
             opp_actions = torch.from_numpy(opp_np).to(device)
@@ -252,6 +267,11 @@ def main() -> None:
             features = agent.trunk(obs)
             logits = agent.policy_head(features)
             loss = F.cross_entropy(logits, actions)
+
+            if args.value_bc_coef > 0:
+                values = agent.value_head(features).squeeze(-1)
+                targets = torch.from_numpy(val_np).to(device)
+                loss = loss + args.value_bc_coef * F.mse_loss(values, targets)
 
             labeled = opp_actions >= 0
             if args.opp_bc_coef > 0 and bool(labeled.any()):
@@ -286,10 +306,11 @@ def main() -> None:
               f"acc {ep['correct'] / max(ep['n'], 1):.3f}{opp_msg} over {ep['n']} samples")
 
         val = evaluate(agent, datasets, args.batch_size, device)
-        for fmt, (c, n, oc, on) in val.items():
+        for fmt, (c, n, oc, on, vc) in val.items():
             if n:
                 opp_msg = f" opp-acc {oc / on:.3f}" if on else ""
-                print(f"  val[{fmt}]: acc {c / n:.3f}{opp_msg} ({n} samples)")
+                print(f"  val[{fmt}]: acc {c / n:.3f}{opp_msg} "
+                      f"value-sign-acc {vc / n:.3f} ({n} samples)")
 
         agent.save(str(checkpoint_path))
         print(f"checkpoint saved: {checkpoint_path}")
