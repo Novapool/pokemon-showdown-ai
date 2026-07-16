@@ -150,27 +150,23 @@ class MCTSAgent:
     # ------------------------------------------------------------------
 
     @torch.no_grad()
-    def _policy_value(self, obs: np.ndarray, mask) -> tuple[np.ndarray, float]:
-        """Masked policy distribution and state value for one observation."""
-        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.agent.device)
-        mask_t = torch.tensor(np.asarray(mask, dtype=bool)).unsqueeze(0).to(self.agent.device)
-        features = self.agent.trunk(obs_t)
-        logits = self.agent.policy_head(features).masked_fill(~mask_t, -1e9)
-        probs = torch.softmax(logits, dim=-1)
-        value = self.agent.value_head(features).squeeze()
-        return probs.squeeze(0).cpu().numpy(), float(value.item())
+    def _policy_value(
+        self, obs: np.ndarray, mask, with_opp_logits: bool = False,
+    ) -> tuple[np.ndarray, float] | tuple[np.ndarray, float, np.ndarray]:
+        """Masked policy distribution and state value for one observation.
 
-    @torch.no_grad()
-    def _policy_value_opp(self, obs: np.ndarray, mask) -> tuple[np.ndarray, float, np.ndarray]:
-        """Like _policy_value, but also returns the opp head's raw (unmasked)
+        Pass with_opp_logits=True to also get the opp head's raw (unmasked)
         logits from the SAME trunk forward — used to prime the head sampler on
-        expand without a second network pass."""
+        expand without a second network pass.
+        """
         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.agent.device)
         mask_t = torch.tensor(np.asarray(mask, dtype=bool)).unsqueeze(0).to(self.agent.device)
         features = self.agent.trunk(obs_t)
         logits = self.agent.policy_head(features).masked_fill(~mask_t, -1e9)
         probs = torch.softmax(logits, dim=-1)
         value = self.agent.value_head(features).squeeze()
+        if not with_opp_logits:
+            return probs.squeeze(0).cpu().numpy(), float(value.item())
         opp_logits = self.agent.opp_head(features).squeeze(0)
         return probs.squeeze(0).cpu().numpy(), float(value.item()), opp_logits.cpu().numpy()
 
@@ -305,7 +301,7 @@ class MCTSAgent:
         opponent model reuses it for this node's simultaneous decision.
         """
         if self.opp_sampler == "head":
-            priors, value, opp_logits = self._policy_value_opp(node.obs, node.mask)
+            priors, value, opp_logits = self._policy_value(node.obs, node.mask, with_opp_logits=True)
             node.opp_dist = self._head_opp_dist(opp_logits, node.opp_mask)
         else:
             priors, value = self._policy_value(node.obs, node.mask)

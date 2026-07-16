@@ -821,6 +821,16 @@ export class PokemonGymEnv {
 		for (let i = 0; i < 3 && this._oppChoicePending(oppSeat); i++) {
 			await new Promise<void>(resolve => setImmediate(resolve));
 		}
+		if (this._oppChoicePending(oppSeat)) {
+			// The opponent's async choice still hasn't committed after 3 flushes —
+			// an unresolved timing race, not a legitimate "no simultaneous choice"
+			// case. Log it so label-coverage drops stay diagnosable instead of
+			// silently blending into the masked (-1) bucket below.
+			console.error(
+				`[pokemon-gym] _captureOppLabel(${oppSeat}): opponent choice still ` +
+				`pending after 3 flushes; masking label as -1`
+			);
+		}
 		return this._opponentActionLabel(oppSeat);
 	}
 
@@ -878,7 +888,12 @@ export class PokemonGymEnv {
 
 			// pass / revivalblessing / shift / team — no clean slot mapping.
 			return -1;
-		} catch {
+		} catch (err) {
+			// Genuinely unexpected (e.g. a malformed battle/request shape) — distinct
+			// from the deliberate -1 returns above, which cover every known
+			// no-simultaneous-choice case without needing to throw. Log so this
+			// doesn't silently blend into legitimate masked labels.
+			console.error(`[pokemon-gym] _opponentActionLabel(${oppSeat}) threw, masking label as -1:`, err);
 			return -1;
 		}
 	}

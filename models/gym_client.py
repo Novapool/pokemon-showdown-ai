@@ -34,17 +34,21 @@ DEBUG = False
 
 
 def with_opp_action(info: dict) -> dict:
-    """Surface the M5 opponent-action label as `opp_action` (int, -1 = masked).
+    """Surface the M5 opponent-action label(s) in snake_case.
 
     The bridge forwards the gym's raw camelCase `info` object as-is (`oppAction`
     for single-seat steps and the p1-perspective dual-seat label; `oppActionP2`
-    is the p2-perspective label, unused by the p1-only trainer). This adds the
-    snake_case `opp_action` key callers actually consume, defaulting to -1 when
-    the field is absent (e.g. sim_* responses, which predate M5 labeling).
-    Returns a shallow copy — the original response dict is left untouched.
+    is the p2-perspective label — dual-seat only, unused by the p1-only
+    trainer today, kept for symmetry and future p2-perspective training). This
+    adds the snake_case keys callers actually consume (`opp_action`, and
+    `opp_action_p2` when present), defaulting `opp_action` to -1 when absent
+    (e.g. sim_* responses, which predate M5 labeling). Returns a shallow copy —
+    the original response dict is left untouched.
     """
     info = dict(info)
     info["opp_action"] = int(info.get("oppAction", -1))
+    if "oppActionP2" in info:
+        info["opp_action_p2"] = int(info["oppActionP2"])
     return info
 
 

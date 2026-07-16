@@ -22,6 +22,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
@@ -33,20 +34,13 @@ from gym_client import GymClient, slice_structured_obs  # noqa: E402 (after sys.
 from vec_gym_client import VecGymClient  # noqa: E402
 
 
-def _checkpoint_has_opp_head(checkpoint: str) -> bool:
-    """Whether a PPO checkpoint carries saved opponent-head weights (M5).
-
-    Pre-M5 checkpoints have no 'opp_head' key in their saved dict, so this is
-    the robust way to tell a headed checkpoint apart from an old one without
-    depending on how the trainer propagated the opp_coef hparam.
-    """
-    import torch
-
-    try:
-        ckpt = torch.load(checkpoint, map_location="cpu")
-    except Exception:
-        return False
-    return isinstance(ckpt, dict) and "opp_head" in ckpt
+class BattleResult(NamedTuple):
+    """Result of a _run_battles* call. opp_correct/opp_total are 0 for the
+    h2h/mcts variants, which don't track opp-head prediction accuracy."""
+    wins: int
+    total: int
+    opp_correct: int = 0
+    opp_total: int = 0
 
 
 def _opp_head_argmax(agent, obs_batch: np.ndarray) -> np.ndarray:
@@ -109,7 +103,7 @@ def _load_agent(model: str, checkpoint: str, device: str | None = None):
 def _run_battles_vec(
     agent, n_battles: int, num_envs: int, structured: bool, flatten: bool,
     opponent: str = "random", obs_v2: bool = False, track_opp: bool = False,
-) -> tuple:
+) -> BattleResult:
     """Run n_battles episodes across num_envs parallel envs; return
     (wins, total, opp_correct, opp_total).
 
@@ -176,13 +170,13 @@ def _run_battles_vec(
     finally:
         env.close()
 
-    return wins, n_battles, opp_correct, opp_total
+    return BattleResult(wins, n_battles, opp_correct, opp_total)
 
 
 def _run_battles_h2h(
     agent, opponent_agent, n_battles: int, num_envs: int, structured: bool,
     obs_v2: bool = False,
-) -> tuple:
+) -> BattleResult:
     """Head-to-head (M3.3): agent (seat p1) vs a second checkpoint (seat p2).
 
     Runs the bridge in dual-seat self-play mode; both sides act through
@@ -250,12 +244,12 @@ def _run_battles_h2h(
     finally:
         env.close()
 
-    return wins, n_battles
+    return BattleResult(wins, n_battles)
 
 
 def _run_battles_mcts(
     mcts, n_battles: int, opponent: str = "random", obs_v2: bool = False,
-) -> tuple:
+) -> BattleResult:
     """MCTS evaluation (M4): one env, search runs per decision via sim_* commands.
 
     Single-env by design — every MCTS decision issues its own sequence of
@@ -295,12 +289,12 @@ def _run_battles_mcts(
     finally:
         env.close()
 
-    return wins, n_battles
+    return BattleResult(wins, n_battles)
 
 
 def _run_battles_mcts_h2h(
     mcts, opponent_agent, n_battles: int, obs_v2: bool = False,
-) -> tuple:
+) -> BattleResult:
     """Head-to-head (M4): MCTS vs a raw PPO checkpoint via dual-seat self-play.
 
     Single-env loop; the search drives the seat given by mcts.seat ('p1' or
@@ -353,13 +347,13 @@ def _run_battles_mcts_h2h(
     finally:
         env.close()
 
-    return wins, n_battles
+    return BattleResult(wins, n_battles)
 
 
 def _run_battles(
     agent, n_battles: int, structured: bool = False, flatten: bool = True,
     opponent: str = "random", obs_v2: bool = False, track_opp: bool = False,
-) -> tuple:
+) -> BattleResult:
     """Run n_battles greedy episodes; return (wins, total, opp_correct, opp_total).
 
     structured=True makes GymClient return the (12, 65) M2 observation
@@ -408,7 +402,7 @@ def _run_battles(
     finally:
         env.close()
 
-    return wins, n_battles, opp_correct, opp_total
+    return BattleResult(wins, n_battles, opp_correct, opp_total)
 
 
 def main():
@@ -553,21 +547,22 @@ def main():
             seed=0,
             seat=args.mcts_seat,
             opp_sampler=args.opp_sampler,
-            has_opp_head=_checkpoint_has_opp_head(args.checkpoint),
+            has_opp_head=base_agent.has_opp_head,
         )
         if args.num_envs > 1:
             print("[mcts] search is single-env by design; ignoring --num-envs", flush=True)
         if args.vs_checkpoint:
             opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
-            wins, total = _run_battles_mcts_h2h(
+            result = _run_battles_mcts_h2h(
                 mcts, opponent_agent, args.battles, obs_v2=args.obs_v2,
             )
             opponent_name = args.vs_checkpoint
         else:
-            wins, total = _run_battles_mcts(
+            result = _run_battles_mcts(
                 mcts, args.battles, opponent=args.opponent, obs_v2=args.obs_v2,
             )
             opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
+        wins, total = result.wins, result.total
         win_rate = wins / total if total > 0 else 0.0
         print(f"Model: mcts (sims={args.sims}, det={args.determinizations}, "
               f"c_puct={args.c_puct}, determinize={not args.no_determinize}, "
@@ -586,26 +581,26 @@ def main():
     # M5: for a headed PPO checkpoint, also report opp-prediction top-1 accuracy
     # (opp head argmax vs the ground-truth opp_action label over unmasked steps).
     # Only the single-opponent paths carry the label in `info`; h2h is skipped.
-    track_opp = args.model == "ppo" and _checkpoint_has_opp_head(args.checkpoint)
+    track_opp = args.model == "ppo" and agent.has_opp_head
 
-    opp_correct = opp_total = 0
     if args.vs_checkpoint:
         opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
-        wins, total = _run_battles_h2h(
+        result = _run_battles_h2h(
             agent, opponent_agent, args.battles, args.num_envs, structured=structured,
             obs_v2=args.obs_v2,
         )
         opponent_name = args.vs_checkpoint
     elif args.num_envs > 1:
-        wins, total, opp_correct, opp_total = _run_battles_vec(
+        result = _run_battles_vec(
             agent, args.battles, args.num_envs, structured=structured, flatten=flatten,
             opponent=args.opponent, obs_v2=args.obs_v2, track_opp=track_opp,
         )
     else:
-        wins, total, opp_correct, opp_total = _run_battles(
+        result = _run_battles(
             agent, args.battles, structured=structured, flatten=flatten,
             opponent=args.opponent, obs_v2=args.obs_v2, track_opp=track_opp,
         )
+    wins, total, opp_correct, opp_total = result
     win_rate = wins / total if total > 0 else 0.0
 
     if not args.vs_checkpoint:

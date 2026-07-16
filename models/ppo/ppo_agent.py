@@ -72,6 +72,9 @@ class PPOAgent(nn.Module):
         # action in the opponent's own 9-way action frame. Off the same shared
         # trunk as policy/value.
         self.opp_head = nn.Linear(128, n_actions)
+        # Overwritten by load() to False when the loaded checkpoint predates
+        # the opp head (M5) and the head above is a fresh init, not trained.
+        self.has_opp_head = True
 
         # device is a runtime choice, not a model hyperparameter — it is
         # deliberately excluded from _hparams so checkpoints stay portable
@@ -358,7 +361,8 @@ class PPOAgent(nn.Module):
 
         # M5 opp head: present in headed checkpoints, absent in pre-M5 ones.
         # Missing → keep the freshly-initialized head and warn (not a failure).
-        if "opp_head" in checkpoint:
+        agent.has_opp_head = "opp_head" in checkpoint
+        if agent.has_opp_head:
             agent.opp_head.load_state_dict(checkpoint["opp_head"])
         else:
             warnings.warn(

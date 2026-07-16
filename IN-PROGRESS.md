@@ -23,8 +23,8 @@ new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**
 - **Decision:** `--opp-sampler policy` stays the default; head mode kept
   (it's cheaper, 57ms vs 59–64ms). The opp head stays in the training
   recipe. M6 ships the M5 checkpoint (or ladder-A/Bs it vs the v2 control).
-- Remaining before M6: post-run cleanup pass (code-simplifier findings
-  below), commit results/docs.
+- Post-run cleanup pass done (code-simplifier findings below). Remaining
+  before M6: commit results/docs.
 
 **Previous: M5 build (all phases complete, committed `ffd14e275`).**
 - Auxiliary opponent-action-prediction head (`Linear(128, 9)`) on the
@@ -166,20 +166,26 @@ new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**
       **C3 thesis negative (−2.2pp, parity)**; C2/C4/C5 ✅, C1 ❌ (35.8% vs
       40% bar). Side finding: **M5 final + policy-sampler MCTS is the new
       best agent (72.6% DF / 86.0% R)**. Full verdict in `MILESTONES.md` → M5.
-- [ ] Post-run cleanup pass (code-simplifier review of `ffd14e275`,
-      2026-07-16 — no blockers, apply after the decision run):
-      (1) medium: `evaluate.py` `_checkpoint_has_opp_head()` re-torch.loads
-      the checkpoint `PPOAgent.load()` already parsed — set
-      `agent.has_opp_head` inside `load()` instead; (2) medium: dual-seat
-      `oppActionP2` has zero consumers (p1-only trainer) and stays camelCase
-      in info — delete or snake_case-alias it; (3) medium:
-      `_opponentActionLabel()`'s blanket try/catch + the 3×`setImmediate`
-      retry in `_captureOppLabel()` collapse real errors and lost timing
-      races into the same masked -1 as "no simultaneous choice" — narrow
-      the catch/log unexpected errors so label-coverage drops stay
-      diagnosable; (4) low: merge `_policy_value()`/`_policy_value_opp()`
-      duplication in `mcts_agent.py`; (5) low: `_run_battles*` positional
-      tuple growth in `evaluate.py`
+- [x] Post-run cleanup pass (code-simplifier review of `ffd14e275`,
+      2026-07-16 — all 5 applied, verified end-to-end (single-opponent,
+      h2h, and MCTS head/policy-sampler eval runs), `./build` +
+      `test/tools/gym.test.js` green):
+      (1) `PPOAgent.load()` now sets `agent.has_opp_head` directly (default
+      `True` from `__init__`, so it's meaningful on non-loaded agents too);
+      `evaluate.py` reads it instead of re-torch.loading the checkpoint via
+      the now-deleted `_checkpoint_has_opp_head()`; (2) kept `oppActionP2`
+      (cheap — already computed alongside `oppActionP1` — and covered by the
+      dual-seat symmetry test) but added a `opp_action_p2` snake_case alias
+      in `gym_client.with_opp_action()` for consistency, matching
+      `opp_action`; (3) `_captureOppLabel()` now logs when the opponent's
+      choice is still pending after 3 flushes (an unresolved timing race)
+      instead of silently masking it the same as -1, and
+      `_opponentActionLabel()`'s catch now logs unexpected errors before
+      returning -1, distinguishing them from the many deliberate -1 returns;
+      (4) merged `_policy_value_opp()` into `_policy_value(..., with_opp_logits=
+      False)` in `mcts_agent.py`; (5) `evaluate.py`'s five `_run_battles*`
+      functions now return a `BattleResult` NamedTuple (wins, total,
+      opp_correct=0, opp_total=0) instead of growing positional tuples.
 
 **Search-knob sweep (post-M4 step 1) — ✅ COMPLETE 2026-07-15, decisive.
 New operating point: sims=100, c_puct=0.5, det=1.**
@@ -741,10 +747,9 @@ search); side finding: **new best agent = tuned MCTS (policy sampler) over
 Verdict + reading in `MILESTONES.md` → M5.
 
 ### Immediate (post-M5)
-1. **Post-run cleanup pass** — apply the code-simplifier findings from the
-   `ffd14e275` review (listed in Active Tasks above): dedupe the checkpoint
-   head-detection load, decide keep-or-cut on `oppActionP2`, narrow the
-   label-capture catch, minor dedups.
+1. ~~**Post-run cleanup pass**~~ — ✅ done 2026-07-16 (all 5 code-simplifier
+   findings from the `ffd14e275` review applied; details in Active Tasks
+   above).
 2. **M6 (server integration & ladder)** — ship the M5 checkpoint with tuned
    policy-sampler MCTS (~60ms/move, well inside M6's 2s budget); optionally
    ladder-A/B vs the v2 control checkpoint.
