@@ -29,10 +29,12 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
 - [x] Phase 3: `models/bc_pretrain_mlp.py` — smoke: 1 epoch on 2 shards →
       val acc 0.319 / opp-acc 0.300 (chance ~0.11); checkpoint plays via
       `evaluate.py --obs-v2` unchanged. Committed `875c1aa77`.
-- [ ] Data collection (running in background): full gen1ou→trajectory
-      conversion (98k battles); gen1randombattle high-Elo backfill
-      (`--backfill --max-replays 12000`, rate-limited — re-run/backfill more
-      across sessions as needed; ~20% of rated ladder games clear 1300).
+- [x] Data collection: full gen1ou→trajectory conversion done (98,349
+      battles → 8.45M decisions, 0 parse errors, 746MB). Randbats backfill
+      stopped at user request with **8,143 high-Elo logs** on disk (user:
+      "we'll resume this later") — resume any time with
+      `python3 scripts/scrape_replays.py --backfill --formats gen1randombattle --max-replays 12000 --max-pages 4000`
+      then re-run `node models/replay_adapter_cli.js --format gen1randombattle --shard-size 1000`.
 - [~] Phase 4 (in flight, 2026-07-16): **BC runs done.** Run 1 (policy+opp
       heads): val acc 49.7% randbats / 53.1% gen1ou (chance ~11%), opp-acc
       ~35% — but raw play only 20% vs Random / 20.5% vs DamageFirst; ~50%
@@ -49,8 +51,14 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       (`--pretrain-checkpoint`, `--value-warmup-steps`, `--bc-anchor`
       constant-coef) — 5M-step anchored fine-tune running
       (`models/ppo/checkpoints/bcft/`, pool seeded M2+M3.3-best, M5
-      opponent-mix recipe). Then: sweep, confirmations, MCTS battery on the
-      best fine-tuned ckpt, verdict → MILESTONES.
+      opponent-mix recipe). Externally stopped at 2.02M, resumed at user
+      request (`--resume ppo_step_2000030.pt --bc-anchor ...`).
+      **Interim 8-checkpoint sweep (150 battles vs Random):** 31% @ 250k →
+      45/45 → 51% @ 1M → 53% @ 1.25M → 36/37 (dip) → 49% @ 2M. The anchored
+      recipe lifts BC's 22% raw into the ~50% band — first BC→RL transfer
+      in the project that improves rather than erodes.
+      Then: full sweep, confirmations, MCTS battery on the best fine-tuned
+      ckpt, verdict → MILESTONES.
       Side note: the human-data opp head reads DamageFirst at only ~19-24%
       (vs the bot-trained M5 head's 30-36%) — the M5 "mixture
       miscalibration" reading, confirmed from the other direction.
