@@ -18,6 +18,7 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
 | `mcts/` | `mcts_agent.py` — inference-time determinized UCT over a PPO checkpoint (M4); `results/` — eval battery logs |
 | `checkpoints/` | BC pretraining checkpoints |
+| `infer_server.py` | M6: stdio JSON inference server over a PPO checkpoint (reverse of `gym_bridge.js`); spawned by `tools/ladder-bot/ladder-bot.js` |
 
 ## Bridge Architecture
 
@@ -69,6 +70,20 @@ node models/replay_adapter_cli.js --format gen1randombattle --shard-size 1000
 node models/replay_adapter_cli.js --format gen1ou --shard-size 1000
 python models/bc_pretrain_mlp.py --epochs 5          # -> models/checkpoints/bc_mlp_gen1.pt
 python models/bc_pretrain_mlp.py --max-shards 2 --epochs 1   # smoke test
+
+# M6: ladder bot — local-server smoke (two instances, bot vs bot)
+node pokemon-showdown start --no-security --port 8355   # separate terminal
+node tools/ladder-bot/ladder-bot.js --server ws://localhost:8355/showdown/websocket \
+    --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt \
+    --name lbotalpha --battles 2 --accept-from lbotbeta
+node tools/ladder-bot/ladder-bot.js --server ws://localhost:8355/showdown/websocket \
+    --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt \
+    --name lbotbeta --battles 2 --challenge lbotalpha
+# M6: official ladder (registered account; conservative pacing — one battle at a time)
+PS_USERNAME=... PS_PASSWORD=... node tools/ladder-bot/ladder-bot.js \
+    --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt --battles 10
+# Game logs land in data/replays/self_ladder/ (+ ladder_results.csv) and feed
+# straight back into models/replay_adapter_cli.js.
 
 # Transformer PPO (M3) — always structured (12,65) obs, no --structured flag.
 # Both from-scratch and warm-started runs are needed to compare against the
