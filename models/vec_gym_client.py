@@ -25,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from gym_client import GymClient  # noqa: E402
+from gym_client import GymClient, with_opp_action  # noqa: E402
 
 N_ACTIONS = 9
 
@@ -114,7 +114,8 @@ class VecGymClient:
               rewards — (N,) float32; 0.0 in errored slots
               dones   — (N,) bool; False in errored slots
               infos   — list of N dicts; the terminal step's info where done,
-                        {"error": "<msg>"} where the env errored and was reset
+                        {"error": "<msg>"} where the env errored and was reset.
+                        Includes `opp_action` (M5, int, -1 = masked)
               masks   — (N, 9) bool
         """
         if len(actions) != self.n_envs:
@@ -142,7 +143,7 @@ class VecGymClient:
             mask_list[i] = mask
             rewards[i] = float(response["reward"])
             dones[i] = bool(response["done"])
-            infos[i] = response["info"]
+            infos[i] = with_opp_action(response["info"])
             if dones[i]:
                 needs_reset.append(i)
 
@@ -189,6 +190,8 @@ class VecGymClient:
         (p1, p2, rewards, dones, infos) where p1/p2 are stacked seat dicts
         holding fresh-episode state in slots where dones is True, rewards are
         from p1's perspective, and errored slots carry infos[i]["error"].
+        infos[i]["opp_action"] (M5, int, -1 = masked) is p1's label — the p2
+        seat's simultaneous choice this step, in p2's own 9-way action frame.
         """
         if len(actions) != self.n_envs or len(opp_actions) != self.n_envs:
             raise ValueError(f"expected {self.n_envs} actions for each seat")
@@ -218,7 +221,7 @@ class VecGymClient:
             p2_seats[i] = client._parse_seat(response["p2"])
             rewards[i] = float(response["reward"])
             dones[i] = bool(response["done"])
-            infos[i] = response["info"]
+            infos[i] = with_opp_action(response["info"])
             if dones[i]:
                 needs_reset.append(i)
 

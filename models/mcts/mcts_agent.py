@@ -15,6 +15,10 @@ across trees before picking the action.
 Inside a tree, nodes are OUR decision points. The opponent is part of the
 environment: whenever the simulated battle needs a p2 action, one is sampled
 from the same policy network applied to p2's (reveal-tracked) observation.
+The M5 `opp_sampler='head'` alternative instead reads the auxiliary opponent
+head on the searcher's OWN obs at the node (cheaper — reuses the prior's trunk
+forward), masks it to the opponent's legal actions, and samples; it falls back
+to the policy sampler automatically for checkpoints without a trained head.
 Transitions are stochastic (damage rolls, crits, the sampled opponent action);
 each edge's outcome is sampled once at expansion and reused — standard
 single-sample determinized UCT.
@@ -25,6 +29,7 @@ Backup value:    sum of gym-shaped step rewards along the path (win/loss ±1
 """
 
 import math
+import warnings
 
 import numpy as np
 import torch
@@ -36,9 +41,10 @@ class MCTSNode:
     __slots__ = (
         "sim_id", "obs", "mask", "done", "reward_from_parent",
         "priors", "children", "child_visits", "child_values", "expanded",
+        "opp_mask", "opp_dist",
     )
 
-    def __init__(self, sim_id, obs, mask, done, reward_from_parent):
+    def __init__(self, sim_id, obs, mask, done, reward_from_parent, opp_mask=None):
         self.sim_id = sim_id            # bridge sim holding this node's state
         self.obs = obs                  # p1 obs (flattened), None if terminal
         self.mask = mask                # (9,) bool legality mask at this node
@@ -49,6 +55,12 @@ class MCTSNode:
         self.child_visits = np.zeros(9, dtype=np.int64)
         self.child_values = np.zeros(9, dtype=np.float64)  # summed backup returns W(s,a)
         self.expanded = False
+        # Head-sampler state (M5): the opponent's legal mask at this node's
+        # state (None when the opponent has no simultaneous choice here), and
+        # the opp head's masked+renormalized action distribution, cached from
+        # the same trunk forward that produced `priors` on expand.
+        self.opp_mask = opp_mask
+        self.opp_dist = None
 
 
 class MCTSAgent:
@@ -67,6 +79,8 @@ class MCTSAgent:
         determinize: bool = True,
         seed: int | None = None,
         seat: str = "p1",
+        opp_sampler: str = "policy",
+        has_opp_head: bool | None = None,
     ):
         """
         Args:
@@ -82,9 +96,26 @@ class MCTSAgent:
                                  ('p1' default; 'p2' for seat-balanced h2h runs).
                                  Tree nodes are this seat's decision points and
                                  backups negate the p1-perspective reward for p2.
+            opp_sampler:         how the in-search opponent model picks actions
+                                 (M5 A/B). 'policy' (default) forward-passes the
+                                 opponent's own reveal-tracked obs through the
+                                 policy head. 'head' evaluates the auxiliary opp
+                                 head on the SEARCHER's own obs at the node (the
+                                 same trunk forward that produced the PUCT prior —
+                                 so it is cheaper), masks the result to the
+                                 opponent's legal actions and renormalizes.
+                                 'head' auto-falls-back to 'policy' (with a
+                                 warning) when the checkpoint has no trained head.
+            has_opp_head:        whether the loaded checkpoint actually carries a
+                                 trained opponent head. None → auto-detect from
+                                 the agent's hparams (opp_coef > 0). Passed
+                                 explicitly by evaluate.py, which inspects the
+                                 checkpoint file for saved opp_head weights.
         """
         if seat not in ("p1", "p2"):
             raise ValueError(f"seat must be 'p1' or 'p2', got {seat!r}")
+        if opp_sampler not in ("policy", "head"):
+            raise ValueError(f"opp_sampler must be 'policy' or 'head', got {opp_sampler!r}")
         self.agent = agent
         self.n_sims = n_sims
         self.n_determinizations = max(1, n_determinizations)
@@ -94,6 +125,23 @@ class MCTSAgent:
         self._opp_seat = "p2" if seat == "p1" else "p1"
         self._reward_sign = 1.0 if seat == "p1" else -1.0
         self._rng = np.random.default_rng(seed)
+
+        # Head-based opponent sampler (M5). Fall back to the policy sampler when
+        # the checkpoint has no trained opp head, so a pre-M5 checkpoint used
+        # with --opp-sampler head still runs (as a policy-sampler A/B control).
+        if opp_sampler == "head":
+            trained = has_opp_head
+            if trained is None:
+                trained = float(agent._hparams.get("opp_coef", 0.0)) > 0.0
+            if not trained:
+                warnings.warn(
+                    "--opp-sampler head requested but the checkpoint has no "
+                    "trained opponent head; falling back to the policy sampler",
+                    stacklevel=2,
+                )
+                opp_sampler = "policy"
+        self.opp_sampler = opp_sampler
+
         # Stats for latency reporting (evaluate.py --model mcts)
         self.last_search_sims = 0
 
@@ -111,6 +159,44 @@ class MCTSAgent:
         probs = torch.softmax(logits, dim=-1)
         value = self.agent.value_head(features).squeeze()
         return probs.squeeze(0).cpu().numpy(), float(value.item())
+
+    @torch.no_grad()
+    def _policy_value_opp(self, obs: np.ndarray, mask) -> tuple[np.ndarray, float, np.ndarray]:
+        """Like _policy_value, but also returns the opp head's raw (unmasked)
+        logits from the SAME trunk forward — used to prime the head sampler on
+        expand without a second network pass."""
+        obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(self.agent.device)
+        mask_t = torch.tensor(np.asarray(mask, dtype=bool)).unsqueeze(0).to(self.agent.device)
+        features = self.agent.trunk(obs_t)
+        logits = self.agent.policy_head(features).masked_fill(~mask_t, -1e9)
+        probs = torch.softmax(logits, dim=-1)
+        value = self.agent.value_head(features).squeeze()
+        opp_logits = self.agent.opp_head(features).squeeze(0)
+        return probs.squeeze(0).cpu().numpy(), float(value.item()), opp_logits.cpu().numpy()
+
+    def _head_opp_dist(self, opp_logits: np.ndarray, opp_mask) -> np.ndarray | None:
+        """Mask the opp head's logits to the opponent's legal actions and
+        renormalize to a sampling distribution. Returns None when there is no
+        legal opponent action (nothing to sample) or the distribution is
+        degenerate — callers then fall back to the policy sampler.
+
+        The head's 9-way frame IS the opponent's own action frame (0-3 moves in
+        the opponent's request order, 4-8 switches in bench order), exactly the
+        frame the sim accepts for the opponent seat — so no remapping is needed.
+        """
+        if opp_mask is None:
+            return None
+        opp_mask = np.asarray(opp_mask, dtype=bool)
+        if not opp_mask.any():
+            return None
+        masked = np.where(opp_mask, opp_logits.astype(np.float64), -np.inf)
+        masked -= masked.max()
+        probs = np.exp(masked)
+        probs[~opp_mask] = 0.0
+        total = probs.sum()
+        if not np.isfinite(total) or total <= 0:
+            return None
+        return probs / total
 
     def _sample_opponent_action(self, seat_state: dict) -> int:
         """Sample the opponent seat's action from the policy on its
@@ -201,11 +287,28 @@ class MCTSAgent:
             return MCTSNode(sim_id, None, None, True, reward)
         seat = state[self.seat]
         obs = self._fit_obs(np.asarray(seat["obs"], dtype=np.float32).reshape(-1))
-        return MCTSNode(sim_id, obs, np.asarray(seat["mask"], dtype=bool), False, reward)
+        # The opponent's legal mask at this node's state — captured for the head
+        # sampler, which predicts the opponent's SIMULTANEOUS choice here. None
+        # when the opponent has no choice at this node (our-only force switch),
+        # exactly the case the head labels as masked during training.
+        opp = state[self._opp_seat]
+        opp_mask = np.asarray(opp["mask"], dtype=bool) if opp.get("needs") else None
+        return MCTSNode(
+            sim_id, obs, np.asarray(seat["mask"], dtype=bool), False, reward, opp_mask,
+        )
 
     def _expand(self, node: MCTSNode) -> float:
-        """Set the node's policy prior; return its leaf value estimate."""
-        priors, value = self._policy_value(node.obs, node.mask)
+        """Set the node's policy prior; return its leaf value estimate.
+
+        In head-sampler mode, also cache the opp head's masked+renormalized
+        action distribution from the same trunk forward, so the in-search
+        opponent model reuses it for this node's simultaneous decision.
+        """
+        if self.opp_sampler == "head":
+            priors, value, opp_logits = self._policy_value_opp(node.obs, node.mask)
+            node.opp_dist = self._head_opp_dist(opp_logits, node.opp_mask)
+        else:
+            priors, value = self._policy_value(node.obs, node.mask)
         node.priors = priors
         node.expanded = True
         return value
@@ -221,13 +324,19 @@ class MCTSAgent:
                 best_action, best_score = int(a), score
         return best_action
 
-    def _advance(self, client, sim_id: int, state: dict, our_action) -> tuple[dict, float]:
+    def _advance(self, client, sim_id: int, state: dict, our_action, opp_dist=None) -> tuple[dict, float]:
         """Step a sim to OUR next decision point (or terminal).
 
         `our_action` is consumed at the first step that needs it; any further
         decision points that belong only to the opponent (their force-switches)
         are auto-played by the opponent model. Returns (state, summed reward)
         with the reward already flipped to this searcher's perspective.
+
+        `opp_dist` (head sampler only) is the parent node's cached opp-head
+        distribution over the opponent's SIMULTANEOUS choice at this node; it is
+        consumed for the first opponent sample and then dropped, so subsequent
+        opponent-only decisions (off-distribution for the head) fall back to the
+        policy sampler.
         """
         reward = 0.0
         action = our_action
@@ -238,7 +347,13 @@ class MCTSAgent:
             if we_need and action is None:
                 break  # our next decision point
             ours = action if we_need else None
-            theirs = self._sample_opponent_action(state[self._opp_seat]) if opp_needs else None
+            theirs = None
+            if opp_needs:
+                if opp_dist is not None:
+                    theirs = int(self._rng.choice(9, p=opp_dist))
+                else:
+                    theirs = self._sample_opponent_action(state[self._opp_seat])
+            opp_dist = None  # cached head dist only applies to this first step
             action = None
             if self.seat == "p1":
                 state = client.sim_step(sim_id, ours, theirs)
@@ -266,7 +381,9 @@ class MCTSAgent:
             if child is None:
                 # --- expansion: sample this edge's outcome once
                 fork = client.sim_fork(node.sim_id)
-                state, reward = self._advance(client, fork["sim"], fork, action)
+                state, reward = self._advance(
+                    client, fork["sim"], fork, action, opp_dist=node.opp_dist,
+                )
                 child = self._make_node(fork["sim"], state, reward)
                 node.children[action] = child
                 if child.done:

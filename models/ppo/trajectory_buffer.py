@@ -23,6 +23,7 @@ class TrajectoryBuffer:
         self._values: list = []
         self._log_probs: list = []
         self._masks: list = []
+        self._opp_actions: list = []
 
         self.returns: torch.Tensor | None = None
         self.advantages: torch.Tensor | None = None
@@ -40,6 +41,7 @@ class TrajectoryBuffer:
         value: float,
         log_prob: float,
         valid_mask=None,
+        opp_action: int = -1,
     ) -> None:
         """Append one step of data to the buffer.
 
@@ -48,6 +50,13 @@ class TrajectoryBuffer:
         PPO updates can re-mask logits with the real per-step mask (M3.2)
         instead of pretending every action was legal. None (legacy callers)
         stores an all-legal mask.
+
+        opp_action is the opponent's resolved simultaneous choice in the
+        opponent's own 9-way action frame (0-3 moves, 4-8 switches), used as
+        the label for the M5 opponent-prediction head. -1 means masked (no
+        simultaneous opponent choice / unmappable), and those steps contribute
+        zero to the auxiliary CE loss. The default -1 keeps pre-M5 callers
+        working unchanged.
         """
         self._obs.append(obs.copy())
         self._actions.append(action)
@@ -58,6 +67,7 @@ class TrajectoryBuffer:
         if valid_mask is None:
             valid_mask = np.ones(9, dtype=bool)
         self._masks.append(np.asarray(valid_mask, dtype=bool).copy())
+        self._opp_actions.append(int(opp_action))
 
     # ------------------------------------------------------------------
     # Advantage computation
@@ -116,8 +126,9 @@ class TrajectoryBuffer:
                 "actions"    — long tensor, shape (T,)
                 "returns"    — float32 tensor, shape (T,)
                 "advantages" — float32 tensor, shape (T,)
-                "log_probs"  — float32 tensor, shape (T,)
-                "masks"      — bool tensor, shape (T, n_actions)
+                "log_probs"   — float32 tensor, shape (T,)
+                "masks"       — bool tensor, shape (T, n_actions)
+                "opp_actions" — long tensor, shape (T,); -1 = masked
         """
         if self.returns is None or self.advantages is None:
             raise RuntimeError(
@@ -132,6 +143,7 @@ class TrajectoryBuffer:
             "advantages": self.advantages,
             "log_probs": torch.tensor(self._log_probs, dtype=torch.float32),
             "masks": torch.tensor(np.stack(self._masks, axis=0), dtype=torch.bool),
+            "opp_actions": torch.tensor(self._opp_actions, dtype=torch.long),
         }
 
     # ------------------------------------------------------------------
@@ -147,6 +159,7 @@ class TrajectoryBuffer:
         self._values = []
         self._log_probs = []
         self._masks = []
+        self._opp_actions = []
 
         if hasattr(self, "returns"):
             del self.returns
@@ -175,6 +188,8 @@ def merge_buffers(buffers: list) -> dict:
         raise RuntimeError("merge_buffers() called with no non-empty buffers")
 
     parts = [b.get_tensors() for b in buffers]
+    # Concatenate every per-step tensor key (obs/actions/.../masks/opp_actions)
+    # so the M5 opp_action labels are carried through the merge unchanged.
     merged = {key: torch.cat([p[key] for p in parts], dim=0) for key in parts[0]}
 
     adv = merged["advantages"]

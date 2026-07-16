@@ -46,7 +46,15 @@ export interface GymStepResult {
 	obs: Float32Array;
 	reward: number;
 	done: boolean;
-	info: { winner?: string; turns?: number; illegalMove?: boolean };
+	/**
+	 * `oppAction` (M5): the opponent's resolved simultaneous choice at this
+	 * decision point, mapped into the opponent's OWN 9-way action frame
+	 * (0–3 = moves in the opponent's request-slot order, 4–8 = switches in the
+	 * opponent's bench order). -1 when masked — no simultaneous opponent choice
+	 * (e.g. a p1-only force-switch), Struggle / no-op sleep-freeze, or an
+	 * unmappable choice. See `_opponentActionLabel`.
+	 */
+	info: { winner?: string; turns?: number; illegalMove?: boolean; oppAction?: number };
 }
 
 /** Per-seat state returned by the dual-seat (self-play) API. */
@@ -63,7 +71,16 @@ export interface DualStepResult {
 	/** Reward from p1's perspective — self-play trains the p1 seat only. */
 	reward: number;
 	done: boolean;
-	info: { winner?: string; turns?: number; illegalMove?: boolean };
+	/**
+	 * `oppAction` (M5) labels are symmetric in dual-seat self-play: each seat's
+	 * transition is labeled with the OTHER seat's simultaneous choice, in that
+	 * seat's opponent's own 9-way frame. `oppAction` is p1's label (= the p2
+	 * seat's simultaneous action); `oppActionP2` is p2's label (= the p1 seat's
+	 * simultaneous action). Both are -1 when there is no simultaneous choice by
+	 * both seats this step. Because the dual-seat actions are supplied by the
+	 * caller already in each seat's own frame, they are the labels directly.
+	 */
+	info: { winner?: string; turns?: number; illegalMove?: boolean; oppAction?: number; oppActionP2?: number };
 }
 
 /** Internal opponent-tracker record — reconstructed from the battle log. */
@@ -532,6 +549,12 @@ export class PokemonGymEnv {
 			};
 		}
 
+		// M5: capture the opponent's simultaneous committed choice (its own-frame
+		// action label) BEFORE we submit p1's choice — submitting commits the
+		// turn and clears the engine's choice buffers. The opponent (p2) has
+		// already responded to this turn's request via its async loop.
+		const oppAction = await this._captureOppLabel('p2');
+
 		// Convert action index to choice string
 		const choiceStr = actionToChoice(action);
 
@@ -609,6 +632,7 @@ export class PokemonGymEnv {
 			info: {
 				winner,
 				turns: this._turnCount,
+				oppAction,
 			},
 		};
 	}
@@ -675,6 +699,15 @@ export class PokemonGymEnv {
 				info: { illegalMove: true, turns: this._turnCount },
 			};
 		}
+
+		// M5: symmetric opponent-action labels. In dual-seat mode both seats'
+		// choices are supplied by the caller already in each seat's own 9-way
+		// frame, so a seat's label IS the other seat's simultaneous action. A
+		// label is only defined when BOTH seats act this step (otherwise there
+		// is no simultaneous opponent choice — e.g. a one-seat force-switch).
+		const bothActed = p1Action !== null && p2Action !== null;
+		const oppActionP1 = bothActed ? p2Action! : -1;
+		const oppActionP2 = bothActed ? p1Action! : -1;
 
 		let cursor = this._omniscientLines.length;
 		let reward = 0;
@@ -751,13 +784,103 @@ export class PokemonGymEnv {
 			p2: this._seatState('p2'),
 			reward,
 			done,
-			info: { winner, turns: this._turnCount },
+			info: { winner, turns: this._turnCount, oppAction: oppActionP1, oppActionP2 },
 		};
 	}
 
 	private _needsAction(seat: 'p1' | 'p2'): boolean {
 		const player = seat === 'p1' ? this._gymPlayer : this._p2Player;
 		return !!player && player.requestCount > this._consumedCount[seat];
+	}
+
+	// -------------------------------------------------------------------------
+	// M5: opponent-action labels
+	// -------------------------------------------------------------------------
+
+	/**
+	 * True while the opponent seat has an actionable request this turn but has
+	 * not yet committed a choice — i.e. its async player loop hasn't run yet.
+	 * Used to bound the flush in `_captureOppLabel`.
+	 */
+	private _oppChoicePending(oppSeat: 'p1' | 'p2'): boolean {
+		const battle = this._battleStream?.battle;
+		const side = battle?.sides[oppSeat === 'p1' ? 0 : 1];
+		if (!side) return false;
+		const req = side.activeRequest as ChoiceRequest | null;
+		if (!req || req.wait || req.teamPreview) return false;
+		return !side.choice?.actions?.length;
+	}
+
+	/**
+	 * Flush pending I/O so the opponent's async player loop can commit this
+	 * turn's choice, then read its opponent-frame action label. Only yields
+	 * when the choice is still pending, so the common (already-committed) case
+	 * costs nothing.
+	 */
+	private async _captureOppLabel(oppSeat: 'p1' | 'p2'): Promise<number> {
+		for (let i = 0; i < 3 && this._oppChoicePending(oppSeat); i++) {
+			await new Promise<void>(resolve => setImmediate(resolve));
+		}
+		return this._opponentActionLabel(oppSeat);
+	}
+
+	/**
+	 * Map the opponent seat's committed engine choice to its OWN 9-way gym
+	 * action frame (omniscient — read straight off the battle engine):
+	 *   • Move — the move's slot in the opponent's active request → 0–3.
+	 *     A normal or paralysis-blocked player choice carries an explicit
+	 *     `moveSlot`; an engine-auto-completed locked move (recharge / Wrap /
+	 *     Thrash / Petal Dance) carries only a `moveid`, matched against the
+	 *     request's move list (the M4 gotcha: these are labeled, not masked).
+	 *   • Switch — the switched-in Pokémon's bench index → 4–8.
+	 *   • -1 (masked) — no simultaneous choice (no request / wait / team
+	 *     preview / empty choice), Struggle, a no-op sleep/freeze/trap turn
+	 *     (empty engine action with no move), or any choice that doesn't map to
+	 *     a slot (pass / revival / shift).
+	 */
+	private _opponentActionLabel(oppSeat: 'p1' | 'p2'): number {
+		try {
+			const battle = this._battleStream?.battle;
+			const side = battle?.sides[oppSeat === 'p1' ? 0 : 1];
+			if (!side) return -1;
+
+			const req = side.activeRequest as ChoiceRequest | null;
+			// No simultaneous opponent choice at this decision point.
+			if (!req || req.wait || req.teamPreview) return -1;
+
+			const action = side.choice?.actions?.[0];
+			if (!action) return -1;
+
+			if (action.choice === 'move') {
+				// Explicit slot from a submitted (or paralysis-blocked) choice.
+				if (typeof action.moveSlot === 'number' && action.moveSlot >= 0 && action.moveSlot <= 3) {
+					return action.moveSlot;
+				}
+				// Auto-completed locked move: recover the slot from its move ID.
+				// Struggle and no-op sleep/freeze/trap turns carry no usable ID.
+				const moveid = action.moveid;
+				if (moveid && moveid !== 'struggle' && isMoveRequest(req)) {
+					const moves = req.active[0]?.moves ?? [];
+					const idx = moves.findIndex(m => m.id === moveid);
+					if (idx >= 0 && idx <= 3) return idx;
+				}
+				return -1;
+			}
+
+			if (action.choice === 'switch' || action.choice === 'instaswitch') {
+				const target = action.target;
+				if (!target) return -1;
+				const idx = side.pokemon.indexOf(target);
+				// Bench slots 1–5 map to action indices 4–8 (slot 0 is active).
+				if (idx >= 1 && idx <= 5) return idx + 3;
+				return -1;
+			}
+
+			// pass / revivalblessing / shift / team — no clean slot mapping.
+			return -1;
+		} catch {
+			return -1;
+		}
 	}
 
 	private _validActionsFor(seat: 'p1' | 'p2'): boolean[] {

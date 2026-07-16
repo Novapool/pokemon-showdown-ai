@@ -426,3 +426,228 @@ describe('PokemonGymEnv', () => {
 		});
 	});
 });
+
+// ---------------------------------------------------------------------------
+// M5: opponent action labels (info.oppAction)
+// ---------------------------------------------------------------------------
+
+describe('PokemonGymEnv opponent action labels (M5)', () => {
+	// Map an opponent choice string ("move 2" / "switch 3") into the opponent's
+	// own 9-way action frame — the inverse of actionToChoice. Ground-truth
+	// oracle for what the opponent actually decided.
+	function choiceToAction(str) {
+		if (!str) return -1;
+		const s = str.trim().split(',')[0].trim();
+		let m = s.match(/^move (\d+)/);
+		if (m) return parseInt(m[1], 10) - 1;         // "move 1" -> slot 0
+		m = s.match(/^switch (\d+)/);
+		if (m) return parseInt(m[1], 10) - 1 + 3;     // "switch 2" -> bench 1 -> action 4
+		return -1;                                    // pass / default / etc.
+	}
+
+	// Run a single-seat battle, wrapping the built-in opponent so we capture the
+	// exact choice it submitted each turn. Returns per-step
+	// { oppAction, oppTruth } where oppTruth is the opponent's real choice in its
+	// own frame (null only for turn 1, whose choice is made during reset()).
+	async function runWithOracle(env) {
+		const opp = env._opponentPlayer;
+		let recvCount = 0;
+		const origRecv = opp.receiveRequest.bind(opp);
+		opp.receiveRequest = (req) => {
+			if (!(req && req.wait)) recvCount++;
+			return origRecv(req);
+		};
+		const truthByCount = new Map();
+		const origChoose = opp.choose.bind(opp);
+		opp.choose = (choice) => {
+			truthByCount.set(recvCount, choiceToAction(choice));
+			return origChoose(choice);
+		};
+
+		const rows = [];
+		let done = false;
+		let steps = 0;
+		while (!done && steps < 300) {
+			const mask = env.validActions();
+			const action = mask.findIndex(v => v);
+			const countBefore = recvCount;
+			const r = await env.step(action >= 0 ? action : 0);
+			rows.push({
+				oppAction: r.info.oppAction,
+				oppTruth: truthByCount.has(countBefore) ? truthByCount.get(countBefore) : null,
+			});
+			done = r.done;
+			steps++;
+		}
+		return rows;
+	}
+
+	describe('single-seat', () => {
+		it('maps each resolved opponent move to its own request-slot (0-3), matching the actual choice', async function () {
+			this.timeout(60000);
+			const env = new PokemonGymEnv({ seed: [11, 22, 33, 44], obsMode: 'structured-v2', opponent: 'damagefirst' });
+			try {
+				await env.reset();
+				const rows = await runWithOracle(env);
+				let checkedMoves = 0;
+				for (const row of rows) {
+					assert(
+						row.oppAction === -1 || (row.oppAction >= 0 && row.oppAction <= 8),
+						`oppAction ${row.oppAction} out of range [-1, 8]`
+					);
+					if (row.oppAction >= 0 && row.oppTruth !== null) {
+						assert.equal(
+							row.oppAction, row.oppTruth,
+							`label ${row.oppAction} != opponent's actual choice ${row.oppTruth}`
+						);
+						if (row.oppAction <= 3) checkedMoves++;
+					}
+				}
+				assert(checkedMoves >= 10, `expected >= 10 verified move labels, got ${checkedMoves}`);
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('produces a deterministic oppAction sequence containing real move labels', async function () {
+			this.timeout(60000);
+			async function seq() {
+				const env = new PokemonGymEnv({ seed: [11, 22, 33, 44], obsMode: 'structured-v2', opponent: 'damagefirst' });
+				try {
+					await env.reset();
+					const labels = [];
+					let done = false;
+					let steps = 0;
+					while (!done && steps < 300) {
+						const mask = env.validActions();
+						const a = mask.findIndex(v => v);
+						const r = await env.step(a >= 0 ? a : 0);
+						labels.push(r.info.oppAction);
+						done = r.done;
+						steps++;
+					}
+					return labels;
+				} finally {
+					env.destroy();
+				}
+			}
+			const a = await seq();
+			const b = await seq();
+			assert.deepEqual(a, b, 'oppAction sequence must be deterministic for a fixed seed');
+			assert(a.some(x => x >= 0 && x <= 3), 'expected at least one move label (0-3)');
+		});
+
+		it('labels an engine-auto-completed locked move (recharge) instead of masking it', async function () {
+			this.timeout(60000);
+			// Seed chosen so the opponent lands a recharge move (Hyper Beam) whose
+			// choice the engine auto-completes: choice.actions carries a moveid but
+			// no moveSlot (the M4 gotcha). The label must recover the slot, not mask.
+			const env = new PokemonGymEnv({ seed: [13, 27, 40, 20], obsMode: 'structured-v2', opponent: 'random' });
+			try {
+				await env.reset();
+				const battle = env._battleStream.battle;
+				let sawLocked = false;
+				let done = false;
+				let steps = 0;
+				while (!done && steps < 300) {
+					const action = battle.sides[1].choice && battle.sides[1].choice.actions && battle.sides[1].choice.actions[0];
+					const isLocked = !!(action && action.choice === 'move' &&
+						typeof action.moveSlot !== 'number' && action.moveid && action.moveid !== 'struggle');
+					let expectedSlot = -1;
+					if (isLocked) {
+						const req = battle.sides[1].activeRequest;
+						const moves = (req && req.active && req.active[0] && req.active[0].moves) || [];
+						expectedSlot = moves.findIndex(m => m.id === action.moveid);
+					}
+					const mask = env.validActions();
+					const a = mask.findIndex(v => v);
+					const r = await env.step(a >= 0 ? a : 0);
+					if (isLocked) {
+						sawLocked = true;
+						assert(r.info.oppAction >= 0, `locked move must be labeled, got ${r.info.oppAction}`);
+						assert.equal(r.info.oppAction, expectedSlot, 'locked-move label must match its request slot');
+					}
+					done = r.done;
+					steps++;
+				}
+				assert(sawLocked, 'expected the scripted seed to reach a locked (recharge) turn');
+			} finally {
+				env.destroy();
+			}
+		});
+	});
+
+	describe('dual-seat (self-play)', () => {
+		it('labels both seats symmetrically with the other seat\'s simultaneous choice', async function () {
+			this.timeout(60000);
+			const env = new PokemonGymEnv({ seed: [7, 7, 7, 7], obsMode: 'structured-v2', opponent: 'self' });
+			try {
+				let st = await env.resetDual();
+				let sawBothAct = false;
+				let steps = 0;
+				while (!st.done && steps < 300) {
+					const a1 = st.p1.needsAction ? st.p1.mask.findIndex(v => v) : null;
+					const a2 = st.p2.needsAction ? st.p2.mask.findIndex(v => v) : null;
+					st = await env.stepDual(a1, a2);
+					const bothActed = a1 !== null && a2 !== null;
+					if (bothActed) {
+						sawBothAct = true;
+						assert.equal(st.info.oppAction, a2, 'p1 label must equal p2\'s simultaneous action');
+						assert.equal(st.info.oppActionP2, a1, 'p2 label must equal p1\'s simultaneous action');
+					}
+					steps++;
+				}
+				assert(sawBothAct, 'expected at least one step where both seats acted');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('maps an opponent switch to the 4-8 bench-slot frame', async function () {
+			this.timeout(60000);
+			// Turn 1: both seats have a legal switch. Submit a switch for the p2
+			// seat and confirm p1's label lands in the switch band and equals it.
+			const env = new PokemonGymEnv({ seed: [7, 7, 7, 7], obsMode: 'structured-v2', opponent: 'self' });
+			try {
+				const st0 = await env.resetDual();
+				const p1Move = st0.p1.mask.findIndex(v => v);
+				const p2Switch = st0.p2.mask.findIndex((v, i) => v && i >= 4);
+				assert(p2Switch >= 4, 'p2 should have a legal switch on turn 1');
+				const st = await env.stepDual(p1Move, p2Switch);
+				assert.equal(st.info.oppAction, p2Switch, 'p1 label must equal the p2 switch action (4-8)');
+				assert(st.info.oppAction >= 4 && st.info.oppAction <= 8, 'switch label must be in 4-8');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('masks (-1) when only one seat has a simultaneous choice (force-switch)', async function () {
+			this.timeout(60000);
+			// Find the first step where exactly one seat needs an action (a
+			// post-faint force-switch). With no simultaneous opponent choice the
+			// label must be masked.
+			const env = new PokemonGymEnv({ seed: [7, 7, 7, 7], obsMode: 'structured-v2', opponent: 'self' });
+			try {
+				let st = await env.resetDual();
+				let tested = false;
+				let steps = 0;
+				while (!st.done && steps < 300) {
+					const oneSeat = st.p1.needsAction !== st.p2.needsAction;
+					const a1 = st.p1.needsAction ? st.p1.mask.findIndex(v => v) : null;
+					const a2 = st.p2.needsAction ? st.p2.mask.findIndex(v => v) : null;
+					st = await env.stepDual(a1, a2);
+					if (oneSeat) {
+						assert.equal(st.info.oppAction, -1, 'one-seat step must mask the p1 label');
+						assert.equal(st.info.oppActionP2, -1, 'one-seat step must mask the p2 label');
+						tested = true;
+						break;
+					}
+					steps++;
+				}
+				assert(tested, 'expected to reach a one-seat force-switch step');
+			} finally {
+				env.destroy();
+			}
+		});
+	});
+});

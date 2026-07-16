@@ -13,6 +13,16 @@
  *   {"cmd":"valid_actions"}           → {"mask":[true,true,...]}  (length 9)
  *   {"cmd":"close"}                   → {"ok":true}  then process.exit(0)
  *
+ * `info` (M5) carries the gym's `oppAction` field(s) verbatim — this bridge
+ * forwards `PokemonGymEnv`'s `info` object as-is, so no bridge-side plumbing
+ * is needed to surface them: single-seat `step` responses include `oppAction`
+ * (the opponent's resolved simultaneous choice, in the opponent's own 9-way
+ * frame; -1 = masked); dual-seat (--selfplay) `step` responses include both
+ * `oppAction` (p1's label = p2's simultaneous choice) and `oppActionP2` (p2's
+ * label = p1's simultaneous choice). See `sim/tools/pokemon-gym.ts` for the
+ * label semantics. `models/gym_client.py`/`vec_gym_client.py` surface
+ * `oppAction` to Python callers as the snake_case `opp_action`.
+ *
  * By default obs is the M2 structured (12, 65) token observation flattened
  * to 780 floats. Pass --flat on the command line to fall back to the legacy
  * 100-dim extractFeatures() vector (M1 MLP baseline regression checks), or

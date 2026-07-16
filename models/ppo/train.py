@@ -129,6 +129,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--opp-coef",
+        type=float,
+        default=0.1,
+        help=(
+            "M5: coefficient λ for the auxiliary opponent-action-prediction "
+            "cross-entropy loss on the opp_head, computed over the gym's "
+            "per-step opp_action labels (masked steps contribute nothing). "
+            "0 disables the aux loss and reproduces the exact pre-M5 loss "
+            "path. Headed runs (opp-coef != 0) checkpoint to checkpoints/opp/ "
+            "by default (see --checkpoint-dir to override)."
+        ),
+    )
+    parser.add_argument(
         "--opponent-mix",
         type=str,
         default=None,
@@ -198,6 +211,7 @@ def _push_pending(buffer: TrajectoryBuffer, pending: dict, done: bool) -> None:
         pending["value"],
         pending["log_prob"],
         valid_mask=pending["mask"],
+        opp_action=pending.get("opp_action", -1),
     )
 
 
@@ -208,12 +222,17 @@ def main() -> None:
     checkpoint_every = args.checkpoint_every
     num_envs = args.num_envs
 
-    checkpoint_dir = (
-        Path(args.checkpoint_dir)
-        if args.checkpoint_dir
-        else Path(__file__).parent / "checkpoints"
-        / ("v2" if args.obs_v2 else "structured" if args.structured else ".")
-    )
+    if args.checkpoint_dir:
+        checkpoint_dir = Path(args.checkpoint_dir)
+    elif args.opp_coef != 0.0:
+        # M5: headed runs (aux opponent-prediction loss active) get their own
+        # checkpoint dir so they never collide with the λ=0 control runs.
+        checkpoint_dir = Path(__file__).parent / "checkpoints" / "opp"
+    else:
+        checkpoint_dir = (
+            Path(__file__).parent / "checkpoints"
+            / ("v2" if args.obs_v2 else "structured" if args.structured else ".")
+        )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
     mix = _parse_opponent_mix(args.opponent_mix) if args.opponent_mix else None
@@ -276,7 +295,7 @@ def main() -> None:
     # obs_size is derived from the actual observation rather than hardcoded,
     # so this loop works for the M1 flat vector (100), the M2 structured
     # flatten (780), and schema v2 (924) without duplicating the PPOAgent class.
-    agent = PPOAgent(obs_size=obs_size, device=args.device)
+    agent = PPOAgent(obs_size=obs_size, device=args.device, opp_coef=args.opp_coef)
     # Self-play opponents come from this run's own checkpoints unless a pool
     # is given explicitly.
     pool_dir = Path(args.selfplay_pool) if args.selfplay_pool else checkpoint_dir
@@ -291,7 +310,8 @@ def main() -> None:
         f"opponent={args.opponent_mix or args.opponent}"
         + (f" (pool: {pool_dir})" if uses_selfplay else "")
         + " | "
-        f"checkpoint every {checkpoint_every} steps",
+        f"checkpoint every {checkpoint_every} steps | "
+        f"opp_coef={args.opp_coef}",
         flush=True,
     )
 
@@ -348,6 +368,7 @@ def main() -> None:
                                 "value": float(vals[k]),
                                 "mask": p1_state["mask"][i].copy(),
                                 "reward": 0.0,
+                                "opp_action": -1,
                             }
                             a1[i] = int(acts[k])
                         total_steps += len(p1_idx)
@@ -377,6 +398,14 @@ def main() -> None:
                             continue
                         if pending[i] is not None:
                             pending[i]["reward"] += float(rewards[i])
+                            if a1[i] is not None:
+                                # This is the same step_dual() call that just
+                                # submitted a1[i] — its info["opp_action"] is
+                                # p1's label (the p2 seat's simultaneous
+                                # choice), i.e. the label for the transition
+                                # just opened above, not any older one still
+                                # accumulating reward from a prior round.
+                                pending[i]["opp_action"] = int(infos[i].get("opp_action", -1))
                         if dones[i]:
                             if pending[i] is not None:
                                 _push_pending(buffers[i], pending[i], done=True)
@@ -426,6 +455,7 @@ def main() -> None:
                             float(values[i]),
                             float(log_probs[i]),
                             valid_mask=step_masks[i],
+                            opp_action=int(infos[i].get("opp_action", -1)),
                         )
                         if dones[i]:
                             rollout_episodes += 1
@@ -461,7 +491,8 @@ def main() -> None:
                         last_value=float(last_values[i]), normalize=False
                     )
 
-            loss = agent.update(merge_buffers(buffers))
+            merged = merge_buffers(buffers)
+            loss = agent.update(merged)
             for b in buffers:
                 b.clear()
 
@@ -471,11 +502,22 @@ def main() -> None:
             win_rate = (
                 rollout_wins / rollout_episodes if rollout_episodes > 0 else float("nan")
             )
-            print(
+            log_line = (
                 f"Step {total_steps}/{total_budget} | "
                 f"Win rate (rollout): {win_rate:.2f} | "
                 f"Loss: {loss:.3f}"
             )
+            if args.opp_coef != 0.0:
+                # M5: fraction of this rollout's pushed steps with a valid
+                # (unmasked) opp_action label — the aux CE only trains on
+                # these. ppo_agent.update() doesn't expose the CE term
+                # separately from the combined loss, so coverage is the only
+                # additional diagnostic available here.
+                opp_actions_t = merged.get("opp_actions")
+                if opp_actions_t is not None and opp_actions_t.numel() > 0:
+                    coverage = float((opp_actions_t >= 0).float().mean())
+                    log_line += f" | Opp label coverage: {coverage:.2f}"
+            print(log_line)
 
     finally:
         env.close()

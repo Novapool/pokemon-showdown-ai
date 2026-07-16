@@ -33,6 +33,21 @@ TOKEN_DIM_V2 = 77
 DEBUG = False
 
 
+def with_opp_action(info: dict) -> dict:
+    """Surface the M5 opponent-action label as `opp_action` (int, -1 = masked).
+
+    The bridge forwards the gym's raw camelCase `info` object as-is (`oppAction`
+    for single-seat steps and the p1-perspective dual-seat label; `oppActionP2`
+    is the p2-perspective label, unused by the p1-only trainer). This adds the
+    snake_case `opp_action` key callers actually consume, defaulting to -1 when
+    the field is absent (e.g. sim_* responses, which predate M5 labeling).
+    Returns a shallow copy — the original response dict is left untouched.
+    """
+    info = dict(info)
+    info["opp_action"] = int(info.get("oppAction", -1))
+    return info
+
+
 def slice_structured_obs(obs_flat: np.ndarray, agent_obs_size: int, n_tokens: int = N_TOKENS) -> np.ndarray:
     """Adapt a flattened structured observation batch to an agent's obs size.
 
@@ -199,14 +214,14 @@ class GymClient:
                            if constructed with structured=False. float32
               reward     — float
               done       — bool
-              info       — dict
+              info       — dict; includes `opp_action` (M5, int, -1 = masked)
               valid_mask — list of bool, length 9
         """
         response = self._send({"cmd": "step", "action": action})
         obs = self._reshape(np.array(response["obs"], dtype=np.float32))
         reward = float(response["reward"])
         done = bool(response["done"])
-        info = response["info"]
+        info = with_opp_action(response["info"])
         mask = list(response["mask"])
         return obs, reward, done, info, mask
 
@@ -232,7 +247,9 @@ class GymClient:
         was True in the previous state, None otherwise.
 
         Returns (p1_state, p2_state, reward, done, info) — reward is from
-        p1's perspective (self-play trains the p1 seat only)."""
+        p1's perspective (self-play trains the p1 seat only). info's
+        `opp_action` (M5, int, -1 = masked) is p1's label — the p2 seat's
+        simultaneous choice this step, in p2's own 9-way action frame."""
         response = self._send({
             "cmd": "step",
             "action": None if action is None else int(action),
@@ -243,7 +260,7 @@ class GymClient:
             self._parse_seat(response["p2"]),
             float(response["reward"]),
             bool(response["done"]),
-            response["info"],
+            with_opp_action(response["info"]),
         )
 
     def valid_actions(self) -> list:

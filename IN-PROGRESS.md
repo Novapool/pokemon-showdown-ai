@@ -34,24 +34,104 @@ Full spec in `MILESTONES.md` → M5.**
 
 ### Active Tasks (M5)
 - [ ] Phase 0: commit uncommitted post-M4 tuning changes (clean tree)
-- [ ] Phase 1A: `sim/tools/pokemon-gym.ts` — opponent-frame `oppAction`
+- [x] Phase 1A: `sim/tools/pokemon-gym.ts` — opponent-frame `oppAction`
       labels in `info` (single-seat + dual-seat) + `test/tools/gym.test.js`
       coverage (move/switch mapping, force-switch masking, dual symmetry,
       locked-choice labeling)
-- [ ] Phase 1B (parallel with 1A): `models/ppo/ppo_agent.py` opp head +
+      (done 2026-07-16: labels derived omnisciently from the battle engine's
+      committed choice — `sides[opp].choice.actions[0]`: `moveSlot` → 0–3,
+      `moveid` fallback for auto-completed locked moves (recharge/multi-turn,
+      the M4 gotcha) → 0–3, switch `target` index in `side.pokemon` → 4–8;
+      −1 for wait/team-preview requests, Struggle, no-op sleep/freeze, or
+      unmappable choices. Single-seat: captured before submitting p1's choice
+      via `_captureOppLabel('p2')` (bounded I/O flush so the opponent's async
+      choice has committed). Dual-seat: symmetric `oppAction`/`oppActionP2`
+      from the caller-supplied per-seat actions (already in each seat's own
+      frame). Verified vs the opponent's actual submitted choice across
+      DamageFirst/Random/self-play seeds: 0 mismatches. 6 new tests + `./build`
+      clean + all 29 gym tests green.)
+- [x] Phase 1B (parallel with 1A): `models/ppo/ppo_agent.py` opp head +
       masked aux CE in `update()` + two-way checkpoint compat;
       `models/ppo/trajectory_buffer.py` label storage + merge
-- [ ] Phase 2C (needs 1A+1B): plumbing — `models/gym_bridge.js` (both
+      (done 2026-07-16: `opp_head = Linear(128,9)` off shared trunk; λ via
+      `update(..., opp_coef)` + `self.opp_coef` default 0.0 ⇒ bit-for-bit
+      old path, verified; masked CE with all-masked/all-λ=0 NaN guards;
+      old ckpts load with fresh head + optimizer-reset warnings, new ckpts
+      load clean; buffer `opp_action` (-1=masked) stored + carried by merge)
+- [x] Phase 2C (needs 1A+1B): plumbing — `models/gym_bridge.js` (both
       protocols), `models/gym_client.py`, `models/vec_gym_client.py`,
       `models/ppo/train.py` `--opp-coef` (default 0.1; 0 reproduces old
       loss path; checkpoints → `checkpoints/opp/`)
-- [ ] Phase 2D (parallel with 2C; needs 1B, accuracy half needs 1A):
+      (done 2026-07-16: `gym_bridge.js` already forwarded the gym's `info`
+      object verbatim in both single- and dual-seat `step` responses, so
+      `oppAction`/`oppActionP2` needed no bridge code changes — just doc
+      comments confirming the passthrough is intentional; `gym_client.py`
+      adds a `with_opp_action()` helper surfacing the snake_case
+      `opp_action` (int, -1 = masked) in `step()`/`step_dual()` info dicts,
+      reused by `vec_gym_client.py`'s `step()`/`step_dual()`; `train.py`
+      collects `opp_action` into every buffer push across all three rollout
+      paths (single-seat, opponent-mix random/damagefirst, and selfplay
+      dual-seat — the dual-seat `pending` transition is labeled from the
+      SAME `step_dual()` call that submitted the p1 action, not a later
+      one still accumulating reward), adds `--opp-coef` (default 0.1,
+      passed into `PPOAgent(...)` construction so it's persisted in
+      hparams), routes checkpoints to `checkpoints/opp/` by default when
+      `--opp-coef != 0`, and logs per-rollout opp-label coverage (only when
+      `--opp-coef != 0`, so the `--opp-coef 0` log output is byte-identical
+      to the pre-M5 path). Verified: bridge smokes (single-seat + `--selfplay`,
+      `--obs-v2`) show `opp_action` in `[-1,8]` with dual-seat labels
+      matching the actual simultaneous opponent action 100% of the time;
+      `VecGymClient` smoke same; `train.py` smokes at `--num-envs 2` —
+      `--opp-coef 0.1` (finite loss, coverage 77–96%), `--opp-coef 0`
+      (old log format, no coverage line), opponent-mix incl. selfplay at
+      `--opp-coef 0.1` (finite loss, coverage logged across all three
+      families), default checkpoint routing to `checkpoints/opp/`
+      confirmed and cleaned up, checkpoint round-trip confirms `opp_coef`
+      persisted in hparams and `opp_head` present after `PPOAgent.load()`)
+- [x] Phase 2D (parallel with 2C; needs 1B, accuracy half needs 1A):
       `models/evaluate.py` opp-accuracy reporting + `--opp-sampler`;
       `models/mcts/mcts_agent.py` head-based opponent sampler with
       policy fallback
-- [ ] Phase 3: smoke battery — TS/gym suites green, label spot-check vs
+      (done 2026-07-16: `evaluate.py` — `_checkpoint_has_opp_head()` detects a
+      headed ckpt by the saved `opp_head` key (robust to how the trainer
+      propagates `opp_coef`); PPO single-opponent eval (vec + serial) reports
+      opp-prediction top-1 accuracy = opp-head argmax vs `info["opp_action"]`
+      over unmasked (label ≥ 0) steps, printed alongside win rate (n/a when no
+      labels present, e.g. Job C plumbing absent); added `--opp-sampler
+      head|policy` (default policy) forwarded to `MCTSAgent`. `mcts_agent.py` —
+      `opp_sampler`/`has_opp_head` ctor args; `head` mode caches the opp head's
+      masked+renormalized dist on each node from the SAME trunk forward that
+      makes the PUCT prior (`_policy_value_opp` + `_head_opp_dist`), masking to
+      the opponent's legal actions (`state[opp]["mask"]`, opponent's own frame —
+      the frame the sim accepts, no remapping) and renormalizing; `_advance`
+      consumes it for the node's first simultaneous opponent choice, falling
+      back to the policy sampler for subsequent opponent-only force-switches;
+      auto-falls-back to policy (with warning) when the ckpt has no trained head
+      (via explicit `has_opp_head` from the file, else `opp_coef>0` hparam).
+      Tuned defaults (sims=100, c_puct=0.5, det=1) and the locked-choice
+      raw-policy root fallback preserved. Verified: both files compile; raw
+      obs-v2 eval of the pre-M5 v2 ckpt still runs (no accuracy line, correctly
+      no opp head). MCTS head/policy smoke on the v2 ckpt was PENDING (blocked
+      by a harness outage) — now confirmed in Phase 3 below: headless ckpt
+      warns + falls back to policy correctly; headed ckpt runs clean under
+      both `--opp-sampler head` and `--opp-sampler policy`.)
+- [x] Phase 3: smoke battery — TS/gym suites green, label spot-check vs
       DamageFirst, 4k-step train smoke (CE decreasing), `--opp-coef 0`
       regression smoke, MCTS head-sampler smoke; commit code
+      (done 2026-07-16 by tester — see "Test Results — M5 Phase 3" below.
+      All 6 steps PASS: `./build` clean; gym suite 29/29 incl. 6 new M5
+      label tests, battle-sim 13/13; bridge smokes (single- + dual-seat
+      `--obs-v2`) show `opp_action` in `[-1,8]`; 4k-step train smoke
+      (`--opp-coef 0.1`, mixed opponents) finite loss + coverage 78–96%,
+      checkpoints routed to `checkpoints/opp/`; `--opp-coef 0` smoke
+      reproduces the old log format (no coverage line) and exercises
+      checkpoint-compat (old ckpt loads into headed agent with warnings,
+      no crash); DamageFirst-only label sanity — opp-accuracy 32.4%
+      (266/822), well above the ~11–25% chance band; all four
+      `evaluate.py` load paths pass, including the previously-unverified
+      MCTS head-sampler fallback (headless ckpt warns + falls back) and
+      head/policy runs on a headed ckpt. Smoke checkpoints cleaned up;
+      code ready to commit.)
 - [ ] Phase 4: 5M-step decision run (`--obs-v2 --opponent-mix
       "selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0.1`) →
       checkpoint sweep (150/ckpt + opp acc) → raw confirmations (500R/
@@ -212,6 +292,136 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 ### Bug fixed in passing: level default
 
 `parseLevelFromDetails()` defaulted to level 50 when a details string had no explicit `L##` tag. Showdown omits the level tag entirely when it's 100 (the common case for gen1ou/gen1randombattle), so this was silently encoding real level-100 Pokémon as level 50 in both the flat and structured extractors. Default is now 100, matching Showdown's actual convention and Metamon's adapter assumption.
+
+---
+
+## Test Results — M5 Phase 3 Smoke Battery (2026-07-16)
+
+Run by the tester agent (Job 3.1) after all four Phase 1–2 builder jobs
+(A/B/C/D) completed. Nothing modified; all commands below run as-is against
+the working tree. **Overall verdict: PASS.** No routing back to any builder
+required.
+
+**1. `./build`** — TypeScript compile.
+Command: `./build`
+Exit code: `0`. No output (clean compile).
+
+**2. Gym test suite.**
+Note: `.mocharc.json`'s `spec` glob is array-typed, so yargs merges it with
+any CLI `--spec`/positional args instead of overriding — plain
+`npx mocha test/tools/gym.test.js` silently ran the full 2354-test suite.
+Used `--no-config` to scope correctly.
+Command: `npx mocha --no-config --reporter dot test/tools/gym.test.js`
+Exit code: `0`. Output: `29 passing (315ms)`. Spec listing confirms all 6
+new M5 tests present and green under `PokemonGymEnv opponent action labels
+(M5)`: move-slot mapping, deterministic oppAction sequence, locked-move
+(recharge) labeling, dual-seat symmetry, switch bench-slot mapping (4-8),
+and force-switch masking (-1).
+Command: `npx mocha --no-config --reporter dot test/tools/battle-sim.test.js`
+Exit code: `0`. Output: `13 passing (380ms)`.
+Pre-existing unrelated failure (not counted, not in scope): full-suite run
+hits `better-sqlite3` `NODE_MODULE_VERSION 137` vs required `141` in "SQLite
+worker wrapper" — a native module ABI mismatch unrelated to M5.
+
+**3. Bridge smokes (`--obs-v2`), single-seat and dual-seat.**
+No `--obs-v2`/dual-seat coverage existed in the `__main__` smokes in
+`gym_client.py`/`vec_gym_client.py`, so a throwaway script was written to
+the scratchpad (not added to the repo) exercising `GymClient(obs_v2=True,
+opponent="damagefirst")` (100 random-valid steps) and
+`GymClient(obs_v2=True, selfplay=True)` via `reset_dual()`/`step_dual()`
+(100 steps, "needs"-gated actions per seat).
+Exit code: `0`.
+Output:
+```
+=== single-seat obs_v2 ===
+reset obs shape: (12, 77)
+single-seat: 77 labeled, 23 masked, distinct values seen=[-1, 0, 1, 2, 3, 8]
+single-seat close: OK
+=== dual-seat (selfplay) obs_v2 ===
+reset_dual obs shapes: (12, 77), (12, 77)
+dual-seat: 91 labeled, 9 masked, distinct values seen=[-1, 0, 1, 2, 3, 4, 5, 6, 7, 8]
+dual-seat close: OK
+ALL SMOKE CHECKS PASSED
+```
+`opp_action` confirmed present in `info` and in `[-1, 8]` for both paths.
+
+**4. Training smoke.**
+Command: `python models/ppo/train.py --obs-v2 --opponent-mix
+"selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0.1 --num-envs 2
+--steps 4000 --rollout-steps 512 --checkpoint-every 2000`
+Exit code: `0`. Loss finite every rollout (0.163–0.226); label coverage
+logged every step, 0.78–0.96 (sane — the mixed-opponent smoke touches
+random/damagefirst/selfplay families in one short run, and coverage
+tracks family composition). Checkpoints saved to
+`models/ppo/checkpoints/opp/` as specified (`ppo_step_2001.pt`,
+`ppo_step_4001.pt`, `ppo_step_4001_final.pt`) — confirms default routing.
+Note: `train.py` logs only the combined loss plus label coverage, not a
+separately-broken-out CE term (`ppo_agent.update()` doesn't expose CE
+apart from the combined loss — see the code comment at `train.py:514`).
+This matches the task instructions given to this tester run ("assert
+finite loss and sane label coverage logging") even though the broader
+Phase-3 job description in `AGENT_JOBS.md` mentions "CE loss ... logged
+and decreasing" — flagging as an observation, not a failure, since finite
+loss + coverage was the explicit bar for this run.
+Command (control): `python models/ppo/train.py --obs-v2 --opponent-mix
+"selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0 --num-envs 2
+--steps 500 --rollout-steps 256 --checkpoint-every 500`
+Exit code: `0`. Confirmed: no "Opp label coverage" line in any log line
+(old log format reproduced exactly). Bonus: this run's self-play opponent
+sampling pulled a pre-M5 checkpoint from `checkpoints/v2/` and exercised
+checkpoint two-way compatibility live —
+`UserWarning: checkpoint has no 'opp_head'; using a freshly initialized
+opponent-prediction head (expected for pre-M5 checkpoints)` and a
+matching optimizer-reset warning, then continued without crashing.
+All smoke checkpoints from both runs cleaned up afterward (see note at
+end of this section).
+
+**5. Label/head sanity check (DamageFirst-only).**
+Command: `python models/ppo/train.py --opponent damagefirst --obs-v2
+--opp-coef 0.1 --num-envs 2 --steps 6000 --rollout-steps 512
+--checkpoint-every 6000 --checkpoint-dir <scratchpad dir>`
+Exit code: `0`. Loss decreased monotonically-ish 0.259 → 0.125 across 12
+rollouts; label coverage 0.78–0.85 throughout.
+Command: `python models/evaluate.py --model ppo --obs-v2 --checkpoint
+<smoke checkpoint>/ppo_step_6000_final.pt --battles 20 --opponent
+damagefirst`
+Exit code: `0`. Output: `Opp-prediction top-1 accuracy: 0.324 (266/822
+unmasked steps)` — well above the ~11–25% chance band for a briefly
+trained head, as expected since DamageFirst's argmax-damage choice is
+independently predictable. This is also step **6a** (raw PPO eval on a
+headed checkpoint) — the accuracy line printed correctly.
+
+**6. Eval/MCTS load paths (previously UNVERIFIED — infra outage blocked
+Job D from running these).**
+- **6a** (raw PPO eval on headed checkpoint): satisfied by the command in
+  step 5 above — accuracy line printed, exit 0.
+- **6b** (`--model mcts --opp-sampler head` on the **headless** v2
+  control checkpoint): `python models/evaluate.py --model mcts --obs-v2
+  --checkpoint models/ppo/checkpoints/v2/ppo_step_2250032.pt --opp-sampler
+  head --battles 2 --sims 20`. Exit code `0`.
+  `UserWarning: --opp-sampler head requested but the checkpoint has no
+  trained opponent head; falling back to the policy sampler` — correct
+  WARN + fallback, no crash. Summary line: `opp_sampler=policy` (the
+  effective, fallen-back value).
+- **6c** (`--model mcts --opp-sampler head` on the **headed** smoke
+  checkpoint from step 4, `checkpoints/opp/ppo_step_4001_final.pt`):
+  same command shape. Exit code `0`. No warning, ran clean. Summary line:
+  `opp_sampler=head`.
+- **6d** (regression, `--opp-sampler policy` on the same headed
+  checkpoint): exit code `0`, ran clean. Summary line:
+  `opp_sampler=policy`.
+All four eval/MCTS paths pass — this closes out the item Job D flagged as
+blocked/unverified.
+
+**Cleanup.** Smoke checkpoints created by this run were deleted afterward:
+`models/ppo/checkpoints/opp/` (entire directory — did not exist before
+this run) and `models/ppo/checkpoints/v2/ppo_step_501{,_final}.pt` (the
+two files this run added to that pre-existing directory; all other files
+in `checkpoints/v2/` are untouched). The step-5 label-sanity checkpoint
+was trained straight into the scratchpad (`--checkpoint-dir`) to begin
+with and never touched the repo. `git status` after cleanup shows no
+untracked/modified files under `models/ppo/checkpoints/` — checkpoints
+are gitignored, so this was filesystem hygiene only, not a git concern.
 
 ---
 
