@@ -154,6 +154,18 @@ def parse_args() -> argparse.Namespace:
             "Mutually exclusive with --opponent."
         ),
     )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help=(
+            "Path to a checkpoint (e.g. checkpoints/opp/ppo_step_2925396.pt) "
+            "to resume training from. Restores full agent + optimizer state, "
+            "parses the starting step count from the filename, and keeps "
+            "appending checkpoints to the same directory (overrides "
+            "--checkpoint-dir and the opp/v2/structured routing)."
+        ),
+    )
     args = parser.parse_args()
     if args.obs_v2:
         args.structured = True
@@ -222,7 +234,11 @@ def main() -> None:
     checkpoint_every = args.checkpoint_every
     num_envs = args.num_envs
 
-    if args.checkpoint_dir:
+    if args.resume:
+        # Same directory as the checkpoint being resumed, so this run keeps
+        # appending to the original sequence.
+        checkpoint_dir = Path(args.resume).parent
+    elif args.checkpoint_dir:
         checkpoint_dir = Path(args.checkpoint_dir)
     elif args.opp_coef != 0.0:
         # M5: headed runs (aux opponent-prediction loss active) get their own
@@ -295,7 +311,16 @@ def main() -> None:
     # obs_size is derived from the actual observation rather than hardcoded,
     # so this loop works for the M1 flat vector (100), the M2 structured
     # flatten (780), and schema v2 (924) without duplicating the PPOAgent class.
-    agent = PPOAgent(obs_size=obs_size, device=args.device, opp_coef=args.opp_coef)
+    if args.resume:
+        agent = PPOAgent.load(args.resume, device=args.device)
+        ckpt_obs_size = agent.trunk[0].in_features
+        if ckpt_obs_size != obs_size:
+            raise ValueError(
+                f"--resume checkpoint obs_size={ckpt_obs_size} does not match "
+                f"the environment's obs_size={obs_size} — check --obs-v2/--structured"
+            )
+    else:
+        agent = PPOAgent(obs_size=obs_size, device=args.device, opp_coef=args.opp_coef)
     # Self-play opponents come from this run's own checkpoints unless a pool
     # is given explicitly.
     pool_dir = Path(args.selfplay_pool) if args.selfplay_pool else checkpoint_dir
@@ -315,8 +340,15 @@ def main() -> None:
         flush=True,
     )
 
-    total_steps = 0
-    last_checkpoint_step = 0
+    if args.resume:
+        match = re.search(r"step_(\d+)", Path(args.resume).stem)
+        if not match:
+            raise ValueError(f"Cannot parse step count from --resume filename: {args.resume}")
+        total_steps = int(match.group(1))
+        last_checkpoint_step = total_steps
+    else:
+        total_steps = 0
+        last_checkpoint_step = 0
 
     # Episode tracking within each rollout window
     rollout_wins = 0
