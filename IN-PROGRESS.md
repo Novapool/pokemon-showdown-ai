@@ -1,10 +1,62 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 ---
 
 ## Current Work
+
+**M5 (Opponent Modeling Head) — 🔨 ACTIVE (spec finalized 2026-07-16).
+Full spec in `MILESTONES.md` → M5.**
+- Auxiliary opponent-action-prediction head (`Linear(128, 9)`) on the
+  MLP-PPO shared trunk, multi-task loss `PPO + λ·CE` (λ=0.1). Labels are
+  the opponent's resolved choice each decision point, captured
+  omnisciently in `pokemon-gym.ts` and mapped into the **opponent's own
+  9-way action frame** (moves by opponent request-slot, switches by
+  opponent bench order; label = -1 masked out of CE when no simultaneous
+  choice exists or the choice is unmappable).
+- **Primary payoff is search integration:** MCTS's opponent-action sampler
+  currently assumes the opponent plays like us (base policy on the
+  opponent's reveal-tracked obs); the head replaces that with the actual
+  opponent-action distribution, evaluated on the searcher's own obs
+  (`opp_sampler: 'policy'|'head'`, A/B'd under tuned search).
+- **Design decisions made:** obs schema **v2** base (`--obs-v2` +
+  opponent-mix recipe — boosts/volatiles are direct predictors of the
+  opponent's next action, and the M3.4 v2 checkpoint becomes the λ=0
+  control); **fresh 5M-step decision run**, not warm-started (avoids the
+  M3.2-style random-head-wrecks-mature-trunk risk; a run is only ~2h);
+  raw-policy gain explicitly *not* expected — no-regression is the gate,
+  the head-vs-policy sampler A/B under tuned MCTS is the thesis (C1–C5
+  pre-registered in `MILESTONES.md` → M5).
+- **Phase 0 first: commit the post-M4 tuning working tree** (tuned
+  `MCTSAgent`/`evaluate.py` defaults, mcts_agent cleanup, sweep/A/B logs,
+  doc updates) so M5 code starts from a clean tree.
+
+### Active Tasks (M5)
+- [ ] Phase 0: commit uncommitted post-M4 tuning changes (clean tree)
+- [ ] Phase 1A: `sim/tools/pokemon-gym.ts` — opponent-frame `oppAction`
+      labels in `info` (single-seat + dual-seat) + `test/tools/gym.test.js`
+      coverage (move/switch mapping, force-switch masking, dual symmetry,
+      locked-choice labeling)
+- [ ] Phase 1B (parallel with 1A): `models/ppo/ppo_agent.py` opp head +
+      masked aux CE in `update()` + two-way checkpoint compat;
+      `models/ppo/trajectory_buffer.py` label storage + merge
+- [ ] Phase 2C (needs 1A+1B): plumbing — `models/gym_bridge.js` (both
+      protocols), `models/gym_client.py`, `models/vec_gym_client.py`,
+      `models/ppo/train.py` `--opp-coef` (default 0.1; 0 reproduces old
+      loss path; checkpoints → `checkpoints/opp/`)
+- [ ] Phase 2D (parallel with 2C; needs 1B, accuracy half needs 1A):
+      `models/evaluate.py` opp-accuracy reporting + `--opp-sampler`;
+      `models/mcts/mcts_agent.py` head-based opponent sampler with
+      policy fallback
+- [ ] Phase 3: smoke battery — TS/gym suites green, label spot-check vs
+      DamageFirst, 4k-step train smoke (CE decreasing), `--opp-coef 0`
+      regression smoke, MCTS head-sampler smoke; commit code
+- [ ] Phase 4: 5M-step decision run (`--obs-v2 --opponent-mix
+      "selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0.1`) →
+      checkpoint sweep (150/ckpt + opp acc) → raw confirmations (500R/
+      200DF, top 3–4) → tuned-MCTS head-vs-policy sampler A/B (500 DF +
+      500 R per arm) → record verdict vs C1–C5 in `MILESTONES.md`
 
 **Search-knob sweep (post-M4 step 1) — ✅ COMPLETE 2026-07-15, decisive.
 New operating point: sims=100, c_puct=0.5, det=1.**
@@ -29,14 +81,12 @@ New operating point: sims=100, c_puct=0.5, det=1.**
   valid M5/M6 base; **v1 stays the default**; v2 is a live option for M5.
   Logs: `models/mcts/results/sweep/v2ab_*.log`.
 
-**Next up: M5 (opponent modeling) — awaiting go-ahead / scoping.**
-- Post-M4 steps 1–2 done; M5's prediction head plugs into the search's
-  opponent-action sampler (currently the base policy on the opponent's
-  reveal-tracked obs). Obs-schema choice (v1 vs v2) is an M5 design
-  decision given the A/B tie.
-- Uncommitted working tree: mcts_agent.py cleanup + tuned defaults
-  (`MCTSAgent`, `evaluate.py`), doc updates, sweep/A/B logs — ready to
-  commit as the post-M4 tuning checkpoint.
+**Post-M4 steps 1–2 (knob sweep, v2 A/B) — both complete above; M5 is now
+scoped and active (see top of Current Work).** The open obs-schema question
+from the A/B tie is resolved: M5 trains on v2 (decision + rationale in
+`MILESTONES.md` → M5). The uncommitted post-M4 working tree (mcts_agent.py
+cleanup + tuned defaults in `MCTSAgent`/`evaluate.py`, doc updates,
+sweep/A/B logs) is M5 Phase 0 — commit it before any M5 code lands.
 
 **M4 — ✅ complete 2026-07-15, POSITIVE RESULT. Next up: M5 (opponent modeling)
 or search tuning.**
@@ -166,6 +216,26 @@ The original M2 plan called for a boost tracker (`|-boost|`/`|-unboost|`) feedin
 ---
 
 ## Active Plan
+
+**M5 Execution Plan (2026-07-16) — ACTIVE:**
+
+Phase 0 (commit the post-M4 tuning tree) →
+Phase 1 [**A:** gym opponent-frame labels + TS tests ∥ **B:** PPO opp head +
+buffer] →
+Phase 2 [**C:** bridge/clients/trainer plumbing ∥ **D:** evaluate.py
+opp-accuracy + MCTS head sampler] →
+Phase 3 (smoke battery + code commit) →
+Phase 4 (5M-step v2 decision run → sweep → raw confirmations → tuned-MCTS
+head-vs-policy sampler A/B → verdict vs pre-registered C1–C5).
+
+Full spec — design decisions (v2 base, fresh run, label grounding in the
+opponent's action frame, CE masking rules, sampler integration), file list,
+protocol, and success criteria — in `MILESTONES.md` → M5. Task-level
+checklist in Active Tasks (M5) above. Pre-registered contingencies: sweep
+band < 45% vs Random → one rerun at λ=0.05; opp accuracy vs DamageFirst
+< 25% → label bug, fix and rerun; nothing else.
+
+---
 
 **Post-M3 roadmap (decided 2026-07-14): M3.1 → M3.2 → M3.3, then resume M4+**
 
@@ -411,21 +481,21 @@ None. All components verified and working.
 ### M3.1 / M3.2 — Complete
 ✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
 
-### Immediate (post-M4)
-M4 is closed (positive result — see Current Work). Candidate next steps, in
-rough order of value-per-effort:
-1. **Search-knob sweep** (cheap, hours): `--sims {50,100,200,400}`,
-   `--c-puct {0.5,1.0,1.5,2.5}`, determinizations {1,2,4,8} vs Random +
-   DamageFirst at 150–200 battles each; likely closes the vs-Random gap and
-   sets the operating point for M5/M6
-2. **v2-checkpoint A/B** (pre-planned in M3.4): same battery on
-   `models/ppo/checkpoints/v2/ppo_step_2250032.pt` — does the richer obs
-   matter more once search is attached?
-3. **M5 (opponent modeling)**: auxiliary head predicting the opponent's next
-   action; plugs directly into the search's opponent-action sampler (currently
-   the policy itself on the opponent's obs)
-4. Longer term: AlphaZero-style fine-tuning — retrain the value/policy net on
-   MCTS-played games (MILESTONES → M4 "Unblocks")
+### Immediate (M5)
+Post-M4 steps 1–2 (knob sweep, v2 A/B) are done; M5 is scoped and active.
+In order:
+1. **Phase 0 — commit the post-M4 tuning working tree** (tuned
+   `MCTSAgent`/`evaluate.py` defaults, mcts_agent cleanup, docs, sweep/A/B
+   logs). Nothing else starts until the tree is clean.
+2. **Phase 1 build (two parallel jobs):** gym opponent-frame labels + tests
+   (`sim/tools/pokemon-gym.ts`, `test/tools/gym.test.js`) ∥ PPO opp head +
+   buffer (`models/ppo/ppo_agent.py`, `models/ppo/trajectory_buffer.py`).
+3. Then Phases 2–4 per the Active Plan / `MILESTONES.md` → M5 (plumbing +
+   trainer ∥ eval + MCTS sampler → smokes → 5M-step v2 decision run and
+   pre-registered eval battery ending in the head-vs-policy sampler A/B
+   under tuned search).
+4. Longer term (unchanged): M6 ships the best MCTS config; AlphaZero-style
+   fine-tuning on MCTS-played games (MILESTONES → M4 "Unblocks")
 
 ### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention

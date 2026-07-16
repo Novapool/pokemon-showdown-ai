@@ -848,44 +848,184 @@ search, it's 60/40 better than the raw policy at 88ms/move)
 
 ---
 
-## M5: Opponent Modeling Head ⬜ AFTER M4
+## M5: Opponent Modeling Head 🔨 IN PROGRESS
 
-**Status:** ⬜ Not Started
-**Architecture note (2026-07-14):** per the M3.2 decision, the auxiliary head
-attaches to the MLP-PPO trunk's 128-dim features, not the transformer's.
-**Goals:** Add an auxiliary head to the policy network that predicts the opponent's
-next action. Train with a multi-task loss (PPO + opponent prediction). Use to
-improve the policy's anticipation of opposing moves.
+**Status:** 🔨 In progress (spec finalized 2026-07-16).
+**Architecture note:** the original M5 section predated the M3.2 decision and
+referenced the retired transformer stack. Everything below targets the
+**MLP-PPO** stack (`models/ppo/ppo_agent.py`, 128-dim shared trunk).
 
-### Design
+**Goals:** Add an auxiliary opponent-action-prediction head to the MLP-PPO
+trunk, trained with a multi-task loss (PPO + λ·CE on the opponent's actual
+resolved action — free supervised signal, observable from the omniscient
+stream in `sim/tools/pokemon-gym.ts`). Two payoffs, in order of expected value:
 
-The omniscient stream sees both players' choices. After each turn resolves, the
-opponent's choice is observable. This provides free supervised signal.
+1. **Search integration (primary).** MCTS's opponent-action sampler
+   (`models/mcts/mcts_agent.py::_sample_opponent_action`) currently evaluates
+   the *base policy* on the opponent's reveal-tracked obs — i.e., it assumes
+   the opponent plays like us. A head trained on the opponent's *actual*
+   action distribution replaces that assumption with data.
+2. **Representation shaping (secondary).** The aux loss forces the shared
+   trunk to encode opponent-predictive state. Given that four independent
+   5M-step runs (fixed-opponent, transformer, self-play, v2+mix) all landed
+   in the same 51–57%-vs-Random band, a raw-policy gain is *not* expected —
+   no-regression is the gate; the search criterion is where M5 wins or loses.
 
+### Design Decisions (made 2026-07-16)
+
+**Base config: obs schema v2** (`--obs-v2`, 77-dim tokens with
+boosts/volatiles), fresh 5M-step run with the M3.4 opponent-mix recipe
+(`selfplay=0.5,damagefirst=0.3,random=0.2`). Rationale:
+- The post-M4 v1-vs-v2 A/B under tuned MCTS was a tie with v2 nominally ahead
+  on both opponents (82.6%/70.2% vs 81.2%/67.2%) — choosing v2 costs nothing.
+- The prediction target specifically benefits from v2's extra state: boost
+  stages, screens, Substitute, and the toxic counter are direct predictors of
+  what the opponent does next. Training an opponent-prediction head on a
+  trunk that is blind to volatiles caps head accuracy for no reason.
+- The M3.4 v2 run (same schema, same opponent-mix recipe, no head) becomes
+  the natural λ=0 control: `models/ppo/checkpoints/v2/ppo_step_2250032.pt`
+  (raw 54%R/46%DF; tuned-MCTS 82.6%R/70.2%DF). v1
+  (`selfplay/ppo_step_4750059.pt`) remains the repo-wide default elsewhere;
+  M5 changes no M4 defaults.
+- **Fresh run, not warm-started** from the v2 checkpoint: the hypothesized
+  mechanism is representation shaping *during* training, and grafting a
+  randomly initialized head onto a mature trunk risks the same
+  early-updates-damage-the-trunk failure M3.2 diagnosed. A 5M-step run is
+  ~2h at 8 envs — warm-starting saves nothing worth that risk.
+
+**Head architecture** (`models/ppo/ppo_agent.py`):
 ```
-Transformer context vector (128-dim)
-    └─ policy head:   Linear(128, 9)   — own action logits  [PPO loss]
-    └─ value head:    Linear(128, 1)   — state value        [PPO value loss]
-    └─ opp_pred head: Linear(128, 9)  — opponent action     [cross-entropy]
+shared trunk (obs → 128-dim features)
+  ├─ policy head:  Linear(128, 9)  — own action logits      [PPO loss]
+  ├─ value head:   Linear(128, 1)  — state value            [PPO value loss]
+  └─ opp head:     Linear(128, 9)  — opponent action logits [CE loss]
 
-Total loss = PPO_loss + λ × CE(opp_pred, actual_opp_action)
-λ = 0.1 (tune: 0.05–0.3)
+Total loss = PPO_loss + λ · CE(opp_logits, opp_action_label)
+λ = 0.1 default (tune 0.05–0.3 only if the pre-registered contingency fires)
 ```
+CE is computed only over steps with a valid label (grounding below); masked
+steps contribute zero. Checkpoint compatibility both directions: old
+checkpoints load with a freshly initialized head (warn, don't fail); new
+checkpoints must load cleanly in code paths that never touch the head
+(`evaluate.py` raw eval, `mcts_agent.py` policy-sampler mode).
 
-The opponent action label is gathered from the omniscient stream in `pokemon-gym.ts`
-after each turn and passed back via the `info` dict.
+**Label grounding (the load-bearing detail).** The gym action space is
+9-discrete *from the acting side's perspective*: 0–3 = moves in request-slot
+order, 4–8 = switches in bench order. The label attached to each of p1's
+decision points is the opponent's resolved simultaneous choice, mapped into
+the **opponent's own action frame** — the exact 9-way index the opponent
+would have submitted were it a gym player. That frame is precisely what the
+MCTS sampler needs: it submits opponent-frame indices for the opponent seat
+of the sim. Grounding, computed in `sim/tools/pokemon-gym.ts` (which has
+omniscient access to both sides' requests):
+- **Move:** match the resolved move ID against the opponent's active
+  request's `moves` array → index 0–3.
+- **Switch:** match the switched-in Pokémon against the opponent's request
+  `side.pokemon` bench ordering → index 4–8.
+- **Masked (label = -1, excluded from CE):** no simultaneous opponent choice
+  exists at this decision point (e.g., a p1-only force-switch), Struggle/
+  pass, or any choice that doesn't map cleanly to a slot (Transform/Disable
+  request anomalies). Engine-auto-completed choices (sleep/recharge/locked
+  moves — `side.isChoiceDone()`, the M4 gotcha) **are** labeled: they're
+  real, known outcomes and exactly what the search sampler must reproduce;
+  caveat recorded that they inflate headline accuracy.
+- **Dual-seat self-play:** symmetric — each seat's transition is labeled
+  with the other seat's simultaneous choice.
+- **Documented approximation:** switch labels 4–8 index the opponent's
+  *true* bench order, which p1 cannot fully observe; under determinized
+  search, unrevealed-slot indices are noise by construction — the same class
+  of approximation M4's determinizer already accepts. At sim time the head's
+  distribution is masked to the sim opponent's *legal* actions and
+  renormalized before sampling.
+
+**MCTS integration** (`models/mcts/mcts_agent.py`): an `opp_sampler:
+'policy' | 'head'` option. Head mode evaluates the opp head on the
+*searcher's* obs at the node — already computed for the policy prior, so
+this is *cheaper* than policy mode (which extracts and forward-passes the
+opponent's reveal-tracked obs) — masks to the sim's legal opponent actions,
+renormalizes, samples. Falls back to policy mode when the loaded checkpoint
+has no head.
 
 ### Files to Modify
 | File | Change |
 |------|--------|
-| `sim/tools/pokemon-gym.ts` | Parse opponent's choice from omniscient stream; add `opp_action` to `info` |
-| `models/transformer/transformer_agent.py` | Add `opp_action_head`, expose `opp_pred` in forward pass |
-| `models/transformer/train.py` | Collect `opp_action` from `info`; add auxiliary loss term |
+| `sim/tools/pokemon-gym.ts` | Capture opponent's resolved choice per decision point; map to opponent-frame 9-way label; `oppAction` (int, -1 = masked) in `info` for single-seat and dual-seat paths |
+| `test/tools/gym.test.js` | Label correctness vs scripted opponents: move-slot and switch-slot mapping, force-switch masking, dual-seat symmetry, locked-choice labeling |
+| `models/gym_bridge.js` | Pass `oppAction` through both single and dual (`--selfplay`) protocols |
+| `models/gym_client.py` / `models/vec_gym_client.py` | Surface `opp_action` in step `info` dicts |
+| `models/ppo/ppo_agent.py` | `opp_head`, forward exposure, masked aux CE in `update()`, two-way checkpoint compatibility |
+| `models/ppo/trajectory_buffer.py` | Store per-step `opp_action` labels; `merge_buffers()` support |
+| `models/ppo/train.py` | Collect labels from `info`; `--opp-coef` (default 0.1; 0 disables and must reproduce the old loss path); checkpoints → `checkpoints/opp/`; log CE + label coverage per rollout |
+| `models/evaluate.py` | Opp-prediction top-1 accuracy reporting on headed checkpoints; `--opp-sampler head\|policy` for `--model mcts` |
+| `models/mcts/mcts_agent.py` | Head-based opponent sampler (design above) |
 
-### Success Criteria
-- Opponent action prediction accuracy > 40% (random baseline ≈ 25% for 4-move space)
-- Policy trained with opponent head beats policy without it by ≥ 3% vs DamageFirstAI
-- Auxiliary loss weight tuned: policy performance does not regress vs PPO-only baseline
+### Build Phasing (parallelizable)
+- **Phase 0 (pre-req):** commit the uncommitted post-M4 tuning working tree
+  (tuned `MCTSAgent`/`evaluate.py` defaults, mcts_agent cleanup, sweep/A/B
+  logs and doc updates) so M5 code starts from a clean tree.
+- **Phase 1 (two parallel jobs):** **A** — gym labels + TS tests
+  (`pokemon-gym.ts`, `gym.test.js`). **B** — agent head + buffer
+  (`ppo_agent.py`, `trajectory_buffer.py`). Disjoint files; the interface
+  between them is a single int in `info`.
+- **Phase 2 (two parallel jobs, after Phase 1):** **C** — plumbing + trainer
+  (`gym_bridge.js`, `gym_client.py`, `vec_gym_client.py`, `train.py`; needs
+  A+B). **D** — eval + MCTS sampler (`evaluate.py`, `mcts_agent.py`; needs
+  B; the accuracy-reporting half also needs A).
+- **Phase 3 (smoke battery):** full TS/gym test suites green; label
+  spot-check vs DamageFirstAI (its argmax-damage choice is independently
+  predictable from the log); 4k-step training smoke with `--opp-coef 0.1`
+  (CE decreasing, label coverage sane); `--opp-coef 0` regression smoke;
+  MCTS head-sampler smoke on the smoke checkpoint. Commit code.
+- **Phase 4:** decision run + eval battery (protocol below).
+
+### Training + Evaluation Protocol (one decision run, pre-registered)
+1. **Decision run:** `models/ppo/train.py --obs-v2 --opponent-mix
+   "selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0.1
+   --steps 5000000 --num-envs 8` → `models/ppo/checkpoints/opp/`.
+2. **Sweep:** every checkpoint, 150 battles vs Random + opp accuracy each.
+3. **Raw confirmations:** top 3–4 checkpoints at 500 vs Random / 200 vs
+   DamageFirst; opp accuracy over 200 battles vs DamageFirst; optional
+   seat-balanced raw h2h vs the v2 control checkpoint.
+4. **MCTS battery (primary):** best checkpoint under tuned search (sims=100,
+   c_puct=0.5, det=1): head-sampler vs policy-sampler A/B — 500 vs
+   DamageFirst + 500 vs Random per arm; latency measured.
+5. **Contingencies (pre-registered, no other reruns):** sweep band collapses
+   below 45% vs Random → one rerun at λ=0.05; opp accuracy vs DamageFirst
+   < 25% → treat as a label bug, fix, rerun.
+
+### Success Criteria (pre-registered 2026-07-16)
+The original criteria (>40% accuracy; +≥3pp vs DamageFirst over a no-head
+baseline; no regression) were written pre-M3.2 against the transformer and
+before the current numbers existed (raw 57%R/46%DF; tuned MCTS 81.2%R/67.2%DF
+on v1, 82.6%/70.2% on v2). Recalibrated:
+- **C1 (head learns):** opp-prediction top-1 accuracy ≥ 40% over 200 eval
+  battles vs DamageFirstAI (legal-action chance ≈ 15–25%; DamageFirst is
+  near-deterministic, so comfortably clearing 40% is expected if the labels
+  are grounded correctly). Self-play and vs-Random accuracy reported for
+  context only — vs Random is chance-capped by the opponent's own
+  uniformity and is not a criterion.
+- **C2 (no raw regression — hard gate):** best M5 checkpoint raw ≥ 50% vs
+  Random (500) and ≥ 42% vs DamageFirst (200) — within ~1σ of the v2
+  control's 54%/46%. A raw *gain* is not required (four prior runs say it
+  won't happen); +≥3pp vs DamageFirst over the control is a bonus signal,
+  not a bar.
+- **C3 (primary — search integration):** tuned MCTS over the *same* M5
+  checkpoint, head-sampler vs policy-sampler: **≥ +3pp vs DamageFirstAI at
+  500 battles per arm.** This isolates the sampler as the only difference.
+- **C4 (non-inferiority to standing best):** tuned MCTS + head-sampler ≥ 70%
+  vs DamageFirstAI (500) — matches/beats the v2-MCTS baseline (70.2%), so
+  shipping the head costs nothing against the current best agent.
+- **C5 (latency):** head-sampler mean decision latency ≤ policy-sampler's
+  (~85ms/move expected, head mode should be cheaper); hard ceiling 150ms.
+
+Verdict rule: C3 is the milestone's thesis. C2 is a hard gate — a regressed
+policy fails M5 regardless of C3. A C1 failure makes the result
+uninterpretable (fix labels rather than lowering the bar).
+
+### Unblocks
+M6 (the live bot ships the best MCTS config, head-sampler or not);
+AlphaZero-style fine-tuning (a calibrated opponent model improves the quality
+of search-generated training data).
 
 ---
 
@@ -915,14 +1055,13 @@ track Elo rating.
 Battle state
     │
     ▼
-extractFeaturesStructured()      [M2]
-    │  (12 Pokémon tokens × 65 features each)
+extractFeaturesStructured()      [M2; v2 schema M3.4]
+    │  (12 Pokémon tokens × 65 features each; 77 with --obs-v2)
     ▼
-TransformerEncoder (2L, 4H, d=128)  [M3]
-    │  mean-pool → 128-dim context
+MLP-PPO shared trunk (flattened obs → 128-dim)  [M2; transformer retired per M3.2]
     ├──▶ Policy head (128 → 9 logits)
     ├──▶ Value head  (128 → 1 scalar)
-    └──▶ Opp pred   (128 → 9 logits)   [M5]
+    └──▶ Opp head   (128 → 9 logits)   [M5]
     │
     ▼  [M4]
 MCTS (UCT, N=100, determinized)
@@ -963,5 +1102,5 @@ Best action
 | M3.3: Self-Play + Opponents | ✅ | Self-play fixed training stability; peer of M2 (52.4% h2h), no DamageFirst transfer | M3.4 |
 | M3.4: Policy Ceiling | ✅ | Negative result — schema v2 + opponent mix trains stably but confirms as an M2/M3.3 peer (54%/46%/48% h2h) | M4, M5 |
 | M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
-| M5: Opponent Modeling | ⬜ | Opp-prediction auxiliary head | M6 |
+| M5: Opponent Modeling | 🔨 | Opp-prediction aux head on the MLP-PPO trunk + head-driven MCTS opponent sampler | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot | — |
