@@ -18,7 +18,11 @@ Running record of every evaluated model/run in this project. Evaluation is
 | Transformer PPO, warm-started, M3.2 fixes (value warmup + BC KL-anchor + real masks) | 5.0M | holds 44–55% through 3.5M (no collapse); best confirmed **53% (263/500)** @ 500k; decays to 25% by 5M as the anchor anneals away | **39% (77/200)** @ 500k | ❌ Parity vs Random at best, behind vs DamageFirst → **transformer retired (M3.2 decision); M4+ proceeds on MLP-PPO** |
 | MLP-PPO self-play (M3.3 best) | 4.75M | **57% (287/500)** | 46% (91/200) | 🟨 First stable run; peer of M2 (52.4% h2h over 1000); no DamageFirst transfer (`models/ppo/checkpoints/selfplay/ppo_step_4750059.pt`) |
 | MLP-PPO schema-v2 + opponent mix (M3.4 best) | 2.25M | 54% (272/500) | 46% (92/200) | ❌ M2/M3.3 peer (48.0% h2h vs M3.3 best); obs richness + opponent mix ruled out as bottleneck |
-| **MCTS over M3.3 best (M4)** — 100 sims, 4 determinizations | inference-time | **66% (330/500)** | **56% (113/200)** | ✅ **Current best agent.** Beats its own base checkpoint 60.2% (602/1000) seat-balanced h2h; 84–88ms/move. First clear improvement since M2 |
+| MCTS over M3.3 best (M4) — original defaults (100 sims, det=4, c_puct=1.5) | inference-time | 66% (330/500) | 56% (113/200) | ✅ Positive result. Beats its own base checkpoint 60.2% (602/1000) seat-balanced h2h; 84–88ms/move. First clear improvement since M2 |
+| MCTS over M3.3 best — tuned knobs (post-M4 sweep: det=1, c_puct=0.5) | inference-time | 81.2% (406/500) | 67.2% (336/500) | ✅ Tuned operating point (one deep tree, trusted prior) |
+| MCTS over M3.4 v2 best (post-M4 A/B) | inference-time | 82.6% (413/500) | 70.2% (351/500) | 🟨 Statistical tie with v1 under search (raw v2 trailed raw v1 — richer obs matter more with lookahead) |
+| MLP-PPO + opp-prediction aux head, raw (M5 final) | 5.0M | 57% (285/500) | 41.5% (83/200) | 🟨 Raw peer of M2/M3.3/M3.4 (fifth 5M-class run in the 51–57% band); head accuracy 35.8% vs DamageFirst |
+| **MCTS over M5 final (policy sampler, tuned knobs)** | inference-time | **86.0% (430/500)** | **72.6% (363/500)** | ✅ **Current best agent.** Nominally ahead of the v2-MCTS config on both opponents (within ~1σ). Head *sampler* retired: 70.4% DF / 85.8% R — parity with the policy sampler (M5 thesis negative), though 57ms vs 59–64ms/move. Checkpoint: `models/ppo/checkpoints/opp/ppo_step_5000001_final.pt` |
 
 ## Reference points
 
@@ -42,7 +46,11 @@ Running record of every evaluated model/run in this project. Evaluation is
   `models/transformer/checkpoints/m32/train.log`.
 - vs-DamageFirst numbers only exist from M3.3 onward (the opponent was built
   then). Backfill for older checkpoints if a comparison is ever needed.
-- The M4 MCTS row is not a new network — it is the M3.3 checkpoint with
+- The MCTS rows are not new networks — they are PPO checkpoints with
   determinized UCT search at inference time (`evaluate.py --model mcts`).
-  Search knobs (sims/c_puct/determinizations) are untuned defaults; eval
-  logs in `models/mcts/results/`.
+  The tuned operating point (sims=100, det=1, c_puct=0.5, ~57–85ms/move) is
+  the default since the post-M4 sweep; eval logs in `models/mcts/results/`
+  (M5 sampler A/B: `m5_ab_*.log`).
+- The M5 aux head shaped the trunk (best search-amplified numbers to date)
+  but its *sampler* did not beat the policy sampler inside search — see
+  `MILESTONES.md` → M5 → Reading.

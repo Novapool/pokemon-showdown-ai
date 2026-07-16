@@ -6,8 +6,27 @@ Last updated: 2026-07-16
 
 ## Current Work
 
-**M5 (Opponent Modeling Head) — 🔨 ACTIVE (spec finalized 2026-07-16).
-Full spec in `MILESTONES.md` → M5.**
+**M5 (Opponent Modeling Head) — ✅ COMPLETE 2026-07-16. Thesis negative,
+new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**
+- **C3 (the thesis) failed:** under tuned MCTS, sampling opponent actions
+  from the trained head is parity-to-worse vs the existing policy sampler
+  (70.4% vs 72.6% on DamageFirst, −2.2pp against a ≥+3pp bar). C2/C4/C5 ✅,
+  C1 ❌ (35.8% accuracy vs the 40% bar; above the 25% label-bug floor —
+  reads as a partial-observability ceiling, labels were oracle-verified).
+- **Side finding — new best agent:** the M5 checkpoint under standard
+  policy-sampler tuned MCTS confirms **72.6% (363/500) vs DamageFirst /
+  86.0% (430/500) vs Random** — nominally ahead of the prior best (v2:
+  70.2%/82.6%) on both, within ~1σ. Consistent with the aux loss shaping
+  the trunk (secondary hypothesis) even though the sampler didn't win.
+  Checkpoint: `models/ppo/checkpoints/opp/ppo_step_5000001_final.pt`.
+  `docs/MODEL-COMPARISON.md` ledger updated.
+- **Decision:** `--opp-sampler policy` stays the default; head mode kept
+  (it's cheaper, 57ms vs 59–64ms). The opp head stays in the training
+  recipe. M6 ships the M5 checkpoint (or ladder-A/Bs it vs the v2 control).
+- Remaining before M6: post-run cleanup pass (code-simplifier findings
+  below), commit results/docs.
+
+**Previous: M5 build (all phases complete, committed `ffd14e275`).**
 - Auxiliary opponent-action-prediction head (`Linear(128, 9)`) on the
   MLP-PPO shared trunk, multi-task loss `PPO + λ·CE` (λ=0.1). Labels are
   the opponent's resolved choice each decision point, captured
@@ -33,7 +52,9 @@ Full spec in `MILESTONES.md` → M5.**
   doc updates) so M5 code starts from a clean tree.
 
 ### Active Tasks (M5)
-- [ ] Phase 0: commit uncommitted post-M4 tuning changes (clean tree)
+- [x] Phase 0: commit uncommitted post-M4 tuning changes (clean tree)
+      (done 2026-07-16: the tuning code/logs were already in `84750027c`;
+      the M5 plan docs committed as `0127bf3f1`)
 - [x] Phase 1A: `sim/tools/pokemon-gym.ts` — opponent-frame `oppAction`
       labels in `info` (single-seat + dual-seat) + `test/tools/gym.test.js`
       coverage (move/switch mapping, force-switch masking, dual symmetry,
@@ -131,12 +152,34 @@ Full spec in `MILESTONES.md` → M5.**
       `evaluate.py` load paths pass, including the previously-unverified
       MCTS head-sampler fallback (headless ckpt warns + falls back) and
       head/policy runs on a headed ckpt. Smoke checkpoints cleaned up;
-      code ready to commit.)
-- [ ] Phase 4: 5M-step decision run (`--obs-v2 --opponent-mix
-      "selfplay=0.5,damagefirst=0.3,random=0.2" --opp-coef 0.1`) →
-      checkpoint sweep (150/ckpt + opp acc) → raw confirmations (500R/
-      200DF, top 3–4) → tuned-MCTS head-vs-policy sampler A/B (500 DF +
-      500 R per arm) → record verdict vs C1–C5 in `MILESTONES.md`
+      code committed as `ffd14e275`.)
+- [x] Phase 4: 5M-step decision run → sweep → confirmations → sampler A/B →
+      verdict recorded (done 2026-07-16). Run trained stably to 5,000,001
+      steps (externally stopped at 2.93M and resumed — `--resume` added to
+      `models/ppo/train.py` for this, commit `589d8bf1e`; pool seeded with
+      M2 + M3.3 best per the M3.4 recipe). 21-checkpoint sweep: 40→50–59%
+      band, no collapse (`sweep_results.txt`). Confirmations
+      (`confirm_results.txt`): best raw 57% (285/500) vs Random @ 5.0M final /
+      44% (88/200) vs DamageFirst @ 3.0M; best opp accuracy 35.8% vs DF.
+      Sampler A/B (tuned MCTS, 500/arm/opponent, `models/mcts/results/
+      m5_ab_*.log`): head 70.4% DF / 85.8% R vs policy 72.6% DF / 86.0% R —
+      **C3 thesis negative (−2.2pp, parity)**; C2/C4/C5 ✅, C1 ❌ (35.8% vs
+      40% bar). Side finding: **M5 final + policy-sampler MCTS is the new
+      best agent (72.6% DF / 86.0% R)**. Full verdict in `MILESTONES.md` → M5.
+- [ ] Post-run cleanup pass (code-simplifier review of `ffd14e275`,
+      2026-07-16 — no blockers, apply after the decision run):
+      (1) medium: `evaluate.py` `_checkpoint_has_opp_head()` re-torch.loads
+      the checkpoint `PPOAgent.load()` already parsed — set
+      `agent.has_opp_head` inside `load()` instead; (2) medium: dual-seat
+      `oppActionP2` has zero consumers (p1-only trainer) and stays camelCase
+      in info — delete or snake_case-alias it; (3) medium:
+      `_opponentActionLabel()`'s blanket try/catch + the 3×`setImmediate`
+      retry in `_captureOppLabel()` collapse real errors and lost timing
+      races into the same masked -1 as "no simultaneous choice" — narrow
+      the catch/log unexpected errors so label-coverage drops stay
+      diagnosable; (4) low: merge `_policy_value()`/`_policy_value_opp()`
+      duplication in `mcts_agent.py`; (5) low: `_run_battles*` positional
+      tuple growth in `evaluate.py`
 
 **Search-knob sweep (post-M4 step 1) — ✅ COMPLETE 2026-07-15, decisive.
 New operating point: sims=100, c_puct=0.5, det=1.**
@@ -691,21 +734,23 @@ None. All components verified and working.
 ### M3.1 / M3.2 — Complete
 ✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
 
-### Immediate (M5)
-Post-M4 steps 1–2 (knob sweep, v2 A/B) are done; M5 is scoped and active.
-In order:
-1. **Phase 0 — commit the post-M4 tuning working tree** (tuned
-   `MCTSAgent`/`evaluate.py` defaults, mcts_agent cleanup, docs, sweep/A/B
-   logs). Nothing else starts until the tree is clean.
-2. **Phase 1 build (two parallel jobs):** gym opponent-frame labels + tests
-   (`sim/tools/pokemon-gym.ts`, `test/tools/gym.test.js`) ∥ PPO opp head +
-   buffer (`models/ppo/ppo_agent.py`, `models/ppo/trajectory_buffer.py`).
-3. Then Phases 2–4 per the Active Plan / `MILESTONES.md` → M5 (plumbing +
-   trainer ∥ eval + MCTS sampler → smokes → 5M-step v2 decision run and
-   pre-registered eval battery ending in the head-vs-policy sampler A/B
-   under tuned search).
-4. Longer term (unchanged): M6 ships the best MCTS config; AlphaZero-style
-   fine-tuning on MCTS-played games (MILESTONES → M4 "Unblocks")
+### M5 — Complete
+✅ Done (2026-07-16). Thesis negative (head sampler = policy sampler under
+search); side finding: **new best agent = tuned MCTS (policy sampler) over
+`models/ppo/checkpoints/opp/ppo_step_5000001_final.pt`** (72.6% DF / 86.0% R).
+Verdict + reading in `MILESTONES.md` → M5.
+
+### Immediate (post-M5)
+1. **Post-run cleanup pass** — apply the code-simplifier findings from the
+   `ffd14e275` review (listed in Active Tasks above): dedupe the checkpoint
+   head-detection load, decide keep-or-cut on `oppActionP2`, narrow the
+   label-capture catch, minor dedups.
+2. **M6 (server integration & ladder)** — ship the M5 checkpoint with tuned
+   policy-sampler MCTS (~60ms/move, well inside M6's 2s budget); optionally
+   ladder-A/B vs the v2 control checkpoint.
+3. Longer term (unchanged): AlphaZero-style fine-tuning on MCTS-played games
+   (MILESTONES → M4 "Unblocks") — now with a stronger search agent to
+   generate data.
 
 ### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention

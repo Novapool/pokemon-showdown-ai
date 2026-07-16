@@ -1,0 +1,41 @@
+=== models/ppo/checkpoints/opp/ppo_step_1250170.pt | vs random 500 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_1250170.pt
+Battles: 500
+Win rate vs RandomPlayerAI: 0.53 (266/500)
+Opp-prediction top-1 accuracy: 0.258 (5712/22115 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_1250170.pt | vs damagefirst 200 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_1250170.pt
+Battles: 200
+Win rate vs DamageFirstAI: 0.39 (77/200)
+Opp-prediction top-1 accuracy: 0.321 (1771/5521 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_3000407.pt | vs random 500 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_3000407.pt
+Battles: 500
+Win rate vs RandomPlayerAI: 0.55 (273/500)
+Opp-prediction top-1 accuracy: 0.251 (4820/19188 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_3000407.pt | vs damagefirst 200 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_3000407.pt
+Battles: 200
+Win rate vs DamageFirstAI: 0.44 (88/200)
+Opp-prediction top-1 accuracy: 0.298 (1640/5508 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_5000001_final.pt | vs random 500 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_5000001_final.pt
+Battles: 500
+Win rate vs RandomPlayerAI: 0.57 (285/500)
+Opp-prediction top-1 accuracy: 0.259 (4941/19087 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_5000001_final.pt | vs damagefirst 200 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_5000001_final.pt
+Battles: 200
+Win rate vs DamageFirstAI: 0.41 (83/200)
+Opp-prediction top-1 accuracy: 0.358 (2000/5593 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_2500346.pt | vs random 500 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_2500346.pt
+Battles: 500
+Win rate vs RandomPlayerAI: 0.56 (278/500)
+Opp-prediction top-1 accuracy: 0.259 (4876/18793 unmasked steps)
+=== models/ppo/checkpoints/opp/ppo_step_2500346.pt | vs damagefirst 200 ===
+Model: ppo | Checkpoint: models/ppo/checkpoints/opp/ppo_step_2500346.pt
+Battles: 200
+Win rate vs DamageFirstAI: 0.41 (81/200)
+Opp-prediction top-1 accuracy: 0.342 (2023/5918 unmasked steps)
+CONFIRM DONE
