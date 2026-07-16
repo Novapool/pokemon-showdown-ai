@@ -29,9 +29,10 @@ import type { PokemonSet } from '../teams';
 import {
 	ObservationTrackers, actionToChoice, parseProgressLines, validActionsForRequest,
 } from './pokemon-gym';
-import type { GymSnapshot, ObsMode } from './pokemon-gym';
+import type { GymSnapshot, ObsMode, TrackerSnapshot } from './pokemon-gym';
 import {
 	extractFeatures, extractFeaturesStructured, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2,
+	parseHpRatio, parseStatus, parseLevelFromDetails, BOOST_ORDER,
 } from './feature-extractor';
 
 export interface SimSeatState {
@@ -48,6 +49,23 @@ export interface SimStepResult {
 	reward: number;
 	done: boolean;
 	info: { winner?: string, turns?: number, illegalMove?: boolean };
+}
+
+/**
+ * Everything a remote (ladder) client knows about its battle — enough to
+ * reconstruct a local engine battle for search (M6 P2). Unlike GymSnapshot
+ * there is no engine state: the battle lives on the server.
+ */
+export interface TrackedBattleInput {
+	formatid: string;
+	/** The searcher's seat in the remote battle. */
+	seat: 'p1' | 'p2';
+	/** The searcher's latest actionable MOVE request (not a force-switch). */
+	request: ChoiceRequest;
+	/** The client's tracker snapshot (reveal + volatiles, both sides). */
+	trackers: TrackerSnapshot;
+	turnCount: number;
+	obsMode?: ObsMode;
 }
 
 export interface SimOptions {
@@ -125,6 +143,168 @@ export class BattleSim {
 			);
 		}
 		return sim;
+	}
+
+	/**
+	 * Build a sim by RECONSTRUCTING a battle the client only observes remotely
+	 * (M6 P2 — search on the ladder, where no local engine battle exists).
+	 *
+	 * The searcher's own side is rebuilt from its request JSON (true species/
+	 * levels/movesets/conditions); the opponent's side from the tracker's
+	 * revealed records, with generator-sampled sets filling unrevealed slots
+	 * and generator movesets backfilling revealed mons' unseen moves. Tracked
+	 * state (HP ratios, statuses, faints, boosts, screens/Sub/Leech Seed,
+	 * toxic counter) is then patched onto the fresh battle.
+	 *
+	 * Documented approximations, beyond M4's determinization ones:
+	 *  - Stats/EVs come from the format generator's conventions, so absolute
+	 *    HP can differ from the remote battle; HP *ratios* are preserved,
+	 *    which is all the obs schema encodes.
+	 *  - Hidden counters are defaulted (sleep turns ~ mid-range, Substitute
+	 *    at full sub HP); PP is full except the searcher's active (request).
+	 *  - Locked states (Wrap/Hyper Beam recharge/multi-turn moves) are NOT
+	 *    reproduced — callers should answer locked/force-switch requests with
+	 *    the raw policy and only search clean move requests (`request` must
+	 *    be a move request; anything else throws).
+	 */
+	static fromTracked(input: TrackedBattleInput, options: SimOptions = {}): BattleSim {
+		const request = input.request as AnyObject;
+		if (!request || request.wait || request.forceSwitch || !request.active) {
+			throw new Error('BattleSim.fromTracked: `request` must be an actionable move request');
+		}
+		const obsMode = input.obsMode ?? 'structured-v2';
+		const trackers = ObservationTrackers.fromSnapshot(input.trackers);
+		const mySide = input.seat;
+		const oppSide = mySide === 'p1' ? 'p2' : 'p1';
+		const seed = options.seed !== undefined ? seedFromInt(options.seed) : PRNG.generateSeed();
+		const samplePrng = new PRNG(
+			options.seed !== undefined ? seedFromInt(options.seed + 0x5f356495) : null);
+		const generator = Teams.getGenerator(input.formatid, samplePrng) as AnyObject;
+
+		const setFor = (species: string, level: number, name: string, moves?: string[]): PokemonSet => {
+			const sampled = generator.randomSet(species);
+			const set = { ...sampled, name, level } as unknown as PokemonSet;
+			if (moves?.length) {
+				const merged = [...moves];
+				for (const move of sampled.moves as string[]) {
+					if (merged.length >= 4) break;
+					if (!merged.includes(move)) merged.push(move);
+				}
+				set.moves = merged.slice(0, 4);
+			}
+			return set;
+		};
+
+		// --- Own team: true species/levels/movesets from the request ---------
+		const ownConditions = new Map<string, string>();
+		const ownTeam: PokemonSet[] = (request.side.pokemon as AnyObject[]).map(poke => {
+			const nickname = String(poke.ident).slice(String(poke.ident).indexOf(':') + 1).trim();
+			const species = String(poke.details).split(',')[0].trim();
+			const level = parseLevelFromDetails(poke.details);
+			ownConditions.set(nickname, poke.condition);
+			return setFor(species, level, nickname, (poke.moves as string[]).slice(0, 4));
+		});
+
+		// --- Opponent team: revealed records + sampled unrevealed slots ------
+		const oppRecords = trackers.revealRecords[oppSide];
+		const oppOrder = trackers.revealOrder[oppSide];
+		const oppTeam: PokemonSet[] = [];
+		const usedSpecies = new Set<string>();
+		// Active revealed mon first, so the initial switch-in matches the field.
+		const orderedNicks = [...oppOrder].sort((a, b) =>
+			Number(oppRecords.get(b)!.active) - Number(oppRecords.get(a)!.active));
+		for (const nickname of orderedNicks) {
+			const record = oppRecords.get(nickname)!;
+			const species = record.details.split(',')[0].trim();
+			oppTeam.push(setFor(species, parseLevelFromDetails(record.details), nickname, record.moves));
+			usedSpecies.add(toID(species));
+		}
+		let guard = 20;
+		while (oppTeam.length < 6 && guard-- > 0) {
+			for (const set of generator.getTeam() as PokemonSet[]) {
+				if (oppTeam.length >= 6) break;
+				if (usedSpecies.has(toID(set.species))) continue;
+				oppTeam.push(set);
+				usedSpecies.add(toID(set.species));
+			}
+		}
+		if (oppTeam.length < 6) {
+			throw new Error('BattleSim.fromTracked: could not fill the opponent team');
+		}
+
+		// --- Fresh local battle (initial switch-ins fire immediately) --------
+		const battle = new Battle({
+			formatid: input.formatid as any,
+			seed,
+			[mySide]: { name: 'searcher', team: ownTeam },
+			[oppSide]: { name: 'opponent', team: oppTeam },
+		} as any);
+
+		// --- Patch tracked per-Pokémon state ---------------------------------
+		const conditionFor = (seat: 'p1' | 'p2', name: string): string | undefined => {
+			if (seat === mySide) return ownConditions.get(name);
+			return oppRecords.get(name)?.condition;
+		};
+		for (const seat of ['p1', 'p2'] as const) {
+			const side = battle.sides[seat === 'p1' ? 0 : 1];
+			for (const pokemon of side.pokemon) {
+				const condition = conditionFor(seat, pokemon.set.name);
+				if (condition === undefined) continue; // unrevealed: untouched
+				const ratio = parseHpRatio(condition);
+				if (ratio <= 0) {
+					pokemon.hp = 0;
+					pokemon.fainted = true;
+					pokemon.status = '' as any;
+					side.pokemonLeft--;
+					continue;
+				}
+				pokemon.hp = Math.max(1, Math.round(ratio * pokemon.maxhp));
+				const status = parseStatus(condition);
+				if (status) {
+					pokemon.status = status as any;
+					// Mid-range residual sleep counter; exact remote value is hidden.
+					pokemon.statusState = { id: status, target: pokemon, ...(status === 'slp' ? { time: 3 } : {}) } as any;
+				}
+			}
+			// Active-only volatile state (everything resets on switch in gen1).
+			const active = side.active[0];
+			const vol = trackers.volatiles[seat];
+			if (active && !active.fainted && vol) {
+				for (const stat of BOOST_ORDER) {
+					const stage = vol.boosts[stat] ?? 0;
+					if (stage && stat in active.boosts) (active.boosts as AnyObject)[stat] = stage;
+				}
+				if (vol.reflect) active.addVolatile('reflect');
+				if (vol.lightScreen) active.addVolatile('lightscreen');
+				if (vol.leechSeed) active.addVolatile('leechseed');
+				if (vol.substitute) {
+					active.addVolatile('substitute');
+					if (active.volatiles['substitute']) {
+						active.volatiles['substitute'].hp = Math.floor(active.maxhp / 4);
+					}
+				}
+				if (vol.toxicCounter > 0 && active.status === 'tox' as any) {
+					active.addVolatile('residualdmg');
+					if (active.volatiles['residualdmg']) {
+						active.volatiles['residualdmg'].counter = vol.toxicCounter;
+					}
+				}
+			}
+		}
+
+		battle.turn = input.turnCount;
+
+		// Bench/HP/status changed under the engine — regenerate both requests
+		// so masks and request JSONs reflect the patched state (same pattern
+		// as _determinize()).
+		if (!battle.ended && battle.requestState) {
+			const requests = battle.getRequests(battle.requestState);
+			for (const [i, s] of battle.sides.entries()) {
+				if (s.activeRequest !== null) s.activeRequest = requests[i];
+			}
+		}
+
+		return new BattleSim(battle, trackers, obsMode, input.turnCount);
 	}
 
 	/**
