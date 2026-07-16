@@ -40,9 +40,11 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       Run 2 added `--value-bc-coef` (outcome-trained value head, 62/67%
       sign-acc — needed for search; plain policy-BC leaves the value head
       at init, crippling MCTS): raw unchanged (22%R / 14.5%DF).
-      **MCTS over the BC net: ~50% vs DF through 50 battles (raw 14.5%) —
-      search lifts it massively but below the 72.6% bar.** Full 500+500
-      battery running (`models/mcts/results/m55_bc_mcts_*.log`).
+      **MCTS over the BC net (final, 500+500): 56.2% vs Random / 45.0% vs
+      DamageFirst** (`models/mcts/results/m55_bc_mcts_*.log`) — search lifts
+      the BC net hugely (raw 22%/14.5%) but BC-only is decisively below the
+      72.6%DF/86.0%R bars. BC-only verdict: negative; the fine-tune is the
+      remaining shot.
       **Contingency triggered:** M3.2 fixes ported to `models/ppo/train.py`
       (`--pretrain-checkpoint`, `--value-warmup-steps`, `--bc-anchor`
       constant-coef) — 5M-step anchored fine-tune running
