@@ -1100,23 +1100,94 @@ of search-generated training data).
 
 ---
 
-## M6: Server Integration & Ladder ⬜ AFTER M4+M5
+## M5.5: Human Replay Data + BC for the MLP 🟨 IN PROGRESS
 
-**Status:** ⬜ Not Started
-**Goals:** Connect trained model to live Pokemon Showdown server, accept challenges,
-track Elo rating.
+**Status:** 🟨 In progress (started 2026-07-16). Phases 1–3 (scraper, gen1ou
+bulk bootstrap, adapter + round-trip tests, BC trainer) built, smoke-verified,
+and committed; Phase 4 (full BC run + eval battery) pending data-collection
+completion.
+**Goals:** The best agent to date (M5 ckpt + tuned MCTS) has never trained on
+human data — the 119k Metamon replays (M2.5) fed only the retired transformer,
+and they're gen1ou, not the competitive format. Get real human games into the
+MLP-PPO stack.
 
-### What to Build
-- `server/bot-client.ts` — WebSocket connection to `sim.smogon.com` or local server
-- Battle state mapper: Showdown protocol lines → structured `(12, 65)` token obs
-- Inference service: load transformer checkpoint, respond within 2s latency budget
-- `server/elo-ladder.ts` — per-match rating updates, CSV history
+**Project decision (2026-07-16):** the competitive target stays
+**gen1randombattle** (ladder, eval batteries, MCTS determinizer unchanged),
+but training data is **multi-format**: high-Elo gen1randombattle replays PLUS
+high-level gen1ou games — "show it how pros play with real teams while keeping
+it flexible but strong." Per-format sampling weights are the tuning knob if OU
+data hurts randbats play. Team-specific fine-tuning (one fixed OU team) is a
+noted future follow-up, out of scope.
 
-### Success Criteria
-- Bot connects and accepts challenges without crashing
-- Decision latency < 2s per move
-- ≥ 60% win rate vs random human/bot opponents on ladder
-- Runs ≥ 100 consecutive battles without crashing
+### What Was Built (2026-07-16)
+| Piece | Detail |
+|---|---|
+| `scripts/scrape_replays.py` | Public replay-API scraper (`search.json` + `<id>.log`), `--formats gen1randombattle,gen1ou` with per-format `=minrating` (default 1300, unrated skipped); top-up mode stops when caught up; `--backfill` resumes from the deepest cursor; gzipped logs + `manifest.csv` under `data/replays/<fmt>/` (gitignored); rating-bucket census / `--dry-run` |
+| `scripts/bootstrap_gen1ou_replays.py` | Bulk-imports raw gen1 logs from HF `jakegrigsby/metamon-raw-replays` — streams only parquet shards 34–36 (where a row-group-stats scan found all gen1* rows) instead of the 5.7GB dump. **98,349 gen1ou logs imported** (10.0k rated ≥1300; 55.9k unrated incl. Smogon tournament games) |
+| `sim/tools/replay-adapter.ts` | Replay log → per-decision `(obs, action)` for BOTH seats, using the live gym's own `ObservationTrackers` + `extractFeaturesStructured` (v2) — obs conventions identical to `PokemonGymEnv` by construction. Labels use the M2.5 alphabetical-slot invariant (replays have no request JSON); two-pass parse reconstructs own-side full-game rosters/movesets; own PP ≈ base PP − observed uses; `\|cant\|` decisions dropped (choice unknowable); simultaneous turn decisions cross-linked as M5 opp-head labels |
+| `models/replay_adapter_cli.js` | Batch converter → `data/replay_trajs/<fmt>/shard-*.jsonl.gz` (streamed gzip, base64 float32 obs). Coverage: 91% randbats / 86% gen1ou (gap = sleep/para `\|cant\|` turns, unknowable by design) |
+| `test/tools/replay-adapter.test.js` | 7 tests, incl. the load-bearing round-trip: a gym battle re-parsed from its own omniscient log yields **byte-identical opponent tokens + volatile dims** at matched decision points; move/switch label↔slot invariants vs dex data; opp-label symmetry; nicknamed OU teams |
+| `models/bc_pretrain_mlp.py` | BC of `PPOAgent` (v2 obs, 924-dim): CE on policy head + opp head (λ=0.1, real human opponent labels) through the shared trunk; value head untouched; weighted multi-format interleave; per-format held-out validation accuracy; rated ≥ `--min-rating` OR tournament-prefixed unrated; saves via `PPOAgent.save()` — `evaluate.py`/MCTS consume it unchanged (verified live) |
+
+### Pre-Registered Success Criteria
+- ✅ Scraper ≥ 10k high-Elo games collected — met via the gen1ou bootstrap
+  (10.0k rated ≥1300 + 55.9k tournament games); randbats backfill ongoing
+- ✅ Adapter round-trip test green; label coverage ≥ 90% on gen1randombattle
+  (91%; gen1ou's 86% is explained by unknowable `|cant|` turns, not label bugs)
+- ⬜ BC top-1 accuracy meaningfully above the ~11% chance floor (M2.5
+  reference: 50.5% on gen1ou with the transformer)
+- ⬜ **Bar to beat:** tuned-MCTS (sims=100, c_puct=0.5, det=1) over the
+  BC (or BC→PPO-fine-tuned) checkpoint ≥ **72.6% vs DamageFirst / 86.0% vs
+  Random** (current best), and seat-balanced h2h > 50% vs the M5 best. A clean
+  negative is recorded like M3/M3.4 and M6 ships the M5 checkpoint.
+- Contingency: if BC-only is promising but short, port `--bc-anchor` /
+  `--value-warmup-steps` (M3.2 fixes, currently transformer-only) to
+  `models/ppo/train.py` and run one 5M-step anchored fine-tune on the M5
+  opponent-mix recipe. No other reruns.
+
+### Unblocks
+M6 ships whichever checkpoint wins this battery; the data pipeline also
+ingests the M6 bot's own ladder games (`data/replays/self_ladder/`).
+
+---
+
+## M6: Server Integration & Ladder ⬜ NEXT (spec revised 2026-07-16)
+
+**Status:** ⬜ Not started. Rewritten post-M5: the original spec predated the
+M3.2 transformer retirement and M4 search. Ships the M5 checkpoint
+(`models/ppo/checkpoints/opp/ppo_step_5000001_final.pt`) with tuned
+policy-sampler MCTS, or the M5.5 winner if that battery beats it.
+**Clarified:** the ladder needs no recruited humans — matchmaking supplies
+opponents, and gen1randombattle is one of Showdown's most active ladders.
+Every ladder game is also a human-opponent trajectory for the M5.5 pipeline.
+
+### Phase 1 — Raw-policy bot (no search; trivially inside the 2s budget)
+- `tools/ladder-bot/` (TS): websocket client to the official server
+  (`action.php` challstr login; registered bot account; config for
+  server/format/battle count). Protocol → obs is code reuse: `|request|` JSON
+  gives full own-side state, public log lines feed `ObservationTrackers` —
+  the same two inputs `PokemonGymEnv` consumes.
+- Inference: the bot spawns `models/infer_server.py` (reverse of
+  `gym_bridge.js` — Python stdio server loading `PPOAgent`; obs+mask in,
+  action out), keeping PyTorch out of Node and checkpoint loading verbatim.
+- Every game's log saved to `data/replays/self_ladder/`.
+- Local server first (`node pokemon-showdown start --no-security`), then
+  official ladder with conservative pacing (one battle at a time).
+
+### Phase 2 — Search on ladder (the novel component; after Phase 1 is stable)
+- MCTS needs a local engine `Battle` to clone; a remote game has none. Add
+  `BattleSim.fromTracked(...)`: construct a local gen1randombattle battle from
+  our full known team (request JSON) + determinized opponent (existing
+  determinizer), then patch tracked state (HP, status, boosts/volatiles).
+  Extends the determinization approximation M4 already accepts.
+- `models/mcts/mcts_agent.py` then runs unchanged (57–85ms/move ≪ 2s).
+
+### Success Criteria (replacing the stale originals)
+- Bot completes ≥ 100 consecutive official-ladder battles without
+  crash/timeout losses
+- Decision latency < 2s per move (Phase 1 trivially; Phase 2 measured)
+- Elo tracked and reported (peak + stable band) — no fixed win-rate bar; the
+  ladder IS the external measurement M0–M5 never had
 
 ---
 
@@ -1174,4 +1245,5 @@ Best action
 | M3.4: Policy Ceiling | ✅ | Negative result — schema v2 + opponent mix trains stably but confirms as an M2/M3.3 peer (54%/46%/48% h2h) | M4, M5 |
 | M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
 | M5: Opponent Modeling | ✅ | Thesis negative (head sampler = policy sampler, −2.2pp); side finding: **new best agent** — M5 ckpt + policy-sampler MCTS 72.6% DF / 86.0% R | M6 |
-| M6: Server Integration | ⬜ | Live ladder bot | — |
+| M5.5: Human Replay Data + BC | 🟨 | Replay scraper + gen1ou bulk import (98k logs) + gym-parity replay adapter + MLP BC trainer; full run + battery pending | M6 |
+| M6: Server Integration | ⬜ | Live ladder bot (raw policy first, then MCTS via `BattleSim.fromTracked`) | — |

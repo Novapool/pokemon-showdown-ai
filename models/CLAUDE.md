@@ -12,7 +12,9 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `dqn/` | Deep Q-Network agent (`dqn_agent.py`, `replay_buffer.py`, `train.py`, `checkpoints/`) |
 | `ppo/` | PPO agent (`ppo_agent.py`, `trajectory_buffer.py`, `train.py`, `checkpoints/`) |
 | `metamon_adapter.py` | Streams Metamon human-replay trajectories as `(obs (12,65), action, done)`; M2.5 |
-| `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays; saves to `checkpoints/bc_pretrain_gen1ou.pt` |
+| `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays (transformer, M2.5); saves to `checkpoints/bc_pretrain_gen1ou.pt` |
+| `replay_adapter_cli.js` | M5.5: batch-converts scraped replay logs (`data/replays/<fmt>/`) into BC shards (`data/replay_trajs/<fmt>/shard-*.jsonl.gz`) via `sim/tools/replay-adapter.ts` (v2 obs, both seats, opp-head labels) |
+| `bc_pretrain_mlp.py` | M5.5: BC of the MLP `PPOAgent` (v2 obs) on replay shards — multi-format weighted (gen1randombattle+gen1ou), `--min-rating` + tournament-unrated filter, opp-head aux CE; saves `checkpoints/bc_mlp_gen1.pt` (a normal PPO checkpoint) |
 | `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
 | `mcts/` | `mcts_agent.py` — inference-time determinized UCT over a PPO checkpoint (M4); `results/` — eval battery logs |
 | `checkpoints/` | BC pretraining checkpoints |
@@ -58,6 +60,15 @@ python models/ppo/train.py --structured --steps 2600000 --rollout-steps 512 --ch
 # BC pretraining (M2.5) — download dataset once, then train
 bash scripts/download_metamon.sh
 python models/bc_pretrain.py --epochs 5 --format gen1ou --checkpoint_dir models/checkpoints
+
+# M5.5: human-replay BC for the MLP — scrape/bootstrap logs, convert, train
+python scripts/scrape_replays.py                     # top-up gen1randombattle+gen1ou (rated >=1300)
+python scripts/scrape_replays.py --backfill --max-replays 10000   # page back into history
+python scripts/bootstrap_gen1ou_replays.py           # 98k historical gen1ou logs from HF (once)
+node models/replay_adapter_cli.js --format gen1randombattle --shard-size 1000
+node models/replay_adapter_cli.js --format gen1ou --shard-size 1000
+python models/bc_pretrain_mlp.py --epochs 5          # -> models/checkpoints/bc_mlp_gen1.pt
+python models/bc_pretrain_mlp.py --max-shards 2 --epochs 1   # smoke test
 
 # Transformer PPO (M3) — always structured (12,65) obs, no --structured flag.
 # Both from-scratch and warm-started runs are needed to compare against the

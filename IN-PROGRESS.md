@@ -6,7 +6,42 @@ Last updated: 2026-07-16
 
 ## Current Work
 
-**M5 (Opponent Modeling Head) — ✅ COMPLETE 2026-07-16. Thesis negative,
+**M5.5 (Human Replay Data + BC for the MLP) — 🟨 ACTIVE 2026-07-16.
+Full spec + pre-registered criteria in `MILESTONES.md` → M5.5.**
+
+Project decision: competitive target stays **gen1randombattle**; training
+data is multi-format — high-Elo (≥1300) randbats replays + high-level gen1ou
+("how pros play with real teams"), per-format sampling weights as the knob.
+Future follow-up (out of scope): fine-tune on one specific OU team.
+
+### Active Tasks (M5.5)
+- [x] Phase 1: `scripts/scrape_replays.py` — public replay-API scraper
+      (top-up + `--backfill` modes, per-format rating floors, manifest,
+      census). Smoke-verified all modes; committed `880eee5ff`.
+- [x] Phase 1b: `scripts/bootstrap_gen1ou_replays.py` — 98,349 gen1ou raw
+      logs bulk-imported from HF metamon-raw-replays (only parquet shards
+      34–36 carry gen1* rows; 10.0k rated ≥1300, 55.9k unrated incl.
+      tournament games). Committed `d2c5e0bf1`.
+- [x] Phase 2: `sim/tools/replay-adapter.ts` + `models/replay_adapter_cli.js`
+      + `test/tools/replay-adapter.test.js` (7 tests incl. byte-identical
+      gym round-trip). Coverage 91% randbats / 86% gen1ou. Committed
+      `5a670798a`.
+- [x] Phase 3: `models/bc_pretrain_mlp.py` — smoke: 1 epoch on 2 shards →
+      val acc 0.319 / opp-acc 0.300 (chance ~0.11); checkpoint plays via
+      `evaluate.py --obs-v2` unchanged. Committed `875c1aa77`.
+- [ ] Data collection (running in background): full gen1ou→trajectory
+      conversion (98k battles); gen1randombattle high-Elo backfill
+      (`--backfill --max-replays 12000`, rate-limited — re-run/backfill more
+      across sessions as needed; ~20% of rated ladder games clear 1300).
+- [ ] Phase 4: full BC run (both formats, weighted) → eval battery: raw +
+      tuned MCTS vs Random(500)/DamageFirst(500) + seat-balanced h2h vs the
+      M5 best. Bar: ≥72.6% DF / 86.0% R. Contingency: port
+      `--bc-anchor`/`--value-warmup-steps` to `models/ppo/train.py`, one
+      anchored 5M-step fine-tune. Verdict → MILESTONES.
+- [ ] M6 Phase 1 (parallel-safe): `tools/ladder-bot/` + `models/infer_server.py`
+      per the revised M6 spec in MILESTONES.
+
+**Previous: M5 (Opponent Modeling Head) — ✅ COMPLETE 2026-07-16. Thesis negative,
 new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**
 - **C3 (the thesis) failed:** under tuned MCTS, sampling opponent actions
   from the trained head is parity-to-worse vs the existing policy sampler
