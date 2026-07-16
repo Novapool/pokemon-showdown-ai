@@ -82,4 +82,8 @@ output/
 # Metamon (M2.5 BC pretraining) — vendored install + downloaded dataset
 vendor/
 data/metamon_cache/
+
+# M5.5 human-replay data pipeline (scraped logs + derived trajectories)
+data/replays/
+data/replay_trajs/
 models/transformer/checkpoints/m32/train.log
