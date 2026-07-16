@@ -33,11 +33,25 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       conversion (98k battles); gen1randombattle high-Elo backfill
       (`--backfill --max-replays 12000`, rate-limited — re-run/backfill more
       across sessions as needed; ~20% of rated ladder games clear 1300).
-- [ ] Phase 4: full BC run (both formats, weighted) → eval battery: raw +
-      tuned MCTS vs Random(500)/DamageFirst(500) + seat-balanced h2h vs the
-      M5 best. Bar: ≥72.6% DF / 86.0% R. Contingency: port
-      `--bc-anchor`/`--value-warmup-steps` to `models/ppo/train.py`, one
-      anchored 5M-step fine-tune. Verdict → MILESTONES.
+- [~] Phase 4 (in flight, 2026-07-16): **BC runs done.** Run 1 (policy+opp
+      heads): val acc 49.7% randbats / 53.1% gen1ou (chance ~11%), opp-acc
+      ~35% — but raw play only 20% vs Random / 20.5% vs DamageFirst; ~50%
+      human-imitation accuracy does NOT transfer to raw play vs bots.
+      Run 2 added `--value-bc-coef` (outcome-trained value head, 62/67%
+      sign-acc — needed for search; plain policy-BC leaves the value head
+      at init, crippling MCTS): raw unchanged (22%R / 14.5%DF).
+      **MCTS over the BC net: ~50% vs DF through 50 battles (raw 14.5%) —
+      search lifts it massively but below the 72.6% bar.** Full 500+500
+      battery running (`models/mcts/results/m55_bc_mcts_*.log`).
+      **Contingency triggered:** M3.2 fixes ported to `models/ppo/train.py`
+      (`--pretrain-checkpoint`, `--value-warmup-steps`, `--bc-anchor`
+      constant-coef) — 5M-step anchored fine-tune running
+      (`models/ppo/checkpoints/bcft/`, pool seeded M2+M3.3-best, M5
+      opponent-mix recipe). Then: sweep, confirmations, MCTS battery on the
+      best fine-tuned ckpt, verdict → MILESTONES.
+      Side note: the human-data opp head reads DamageFirst at only ~19-24%
+      (vs the bot-trained M5 head's 30-36%) — the M5 "mixture
+      miscalibration" reading, confirmed from the other direction.
 - [ ] M6 Phase 1 (parallel-safe): `tools/ladder-bot/` + `models/infer_server.py`
       per the revised M6 spec in MILESTONES.
 
