@@ -1100,12 +1100,13 @@ of search-generated training data).
 
 ---
 
-## M5.5: Human Replay Data + BC for the MLP 🟨 IN PROGRESS
+## M5.5: Human Replay Data + BC for the MLP ✅ COMPLETE — POSITIVE RESULT, NEW BEST AGENT
 
-**Status:** 🟨 In progress (started 2026-07-16). Phases 1–3 (scraper, gen1ou
-bulk bootstrap, adapter + round-trip tests, BC trainer) built, smoke-verified,
-and committed; Phase 4 (full BC run + eval battery) pending data-collection
-completion.
+**Status:** ✅ Complete 2026-07-16. **The human-data pipeline (BC on replays →
+anchored PPO fine-tune → tuned MCTS) produced the project's new best agent**,
+beating the bot-trained M5 lineage on every pre-registered measure. BC alone
+was decisively negative (raw 22% vs Random; 56.2%/45.0% under search); the
+M3.2-fixes contingency fine-tune is what converted the human prior into a win.
 **Goals:** The best agent to date (M5 ckpt + tuned MCTS) has never trained on
 human data — the 119k Metamon replays (M2.5) fed only the retired transformer,
 and they're gen1ou, not the competitive format. Get real human games into the
@@ -1129,21 +1130,59 @@ noted future follow-up, out of scope.
 | `test/tools/replay-adapter.test.js` | 7 tests, incl. the load-bearing round-trip: a gym battle re-parsed from its own omniscient log yields **byte-identical opponent tokens + volatile dims** at matched decision points; move/switch label↔slot invariants vs dex data; opp-label symmetry; nicknamed OU teams |
 | `models/bc_pretrain_mlp.py` | BC of `PPOAgent` (v2 obs, 924-dim): CE on policy head + opp head (λ=0.1, real human opponent labels) through the shared trunk; value head untouched; weighted multi-format interleave; per-format held-out validation accuracy; rated ≥ `--min-rating` OR tournament-prefixed unrated; saves via `PPOAgent.save()` — `evaluate.py`/MCTS consume it unchanged (verified live) |
 
-### Pre-Registered Success Criteria
+### Pre-Registered Success Criteria — Final
 - ✅ Scraper ≥ 10k high-Elo games collected — met via the gen1ou bootstrap
-  (10.0k rated ≥1300 + 55.9k tournament games); randbats backfill ongoing
+  (10.0k rated ≥1300 + 55.9k tournament games); randbats backfill additionally
+  delivered ~12k more high-Elo randbats logs on 2026-07-16
 - ✅ Adapter round-trip test green; label coverage ≥ 90% on gen1randombattle
   (91%; gen1ou's 86% is explained by unknowable `|cant|` turns, not label bugs)
-- ⬜ BC top-1 accuracy meaningfully above the ~11% chance floor (M2.5
-  reference: 50.5% on gen1ou with the transformer)
-- ⬜ **Bar to beat:** tuned-MCTS (sims=100, c_puct=0.5, det=1) over the
-  BC (or BC→PPO-fine-tuned) checkpoint ≥ **72.6% vs DamageFirst / 86.0% vs
-  Random** (current best), and seat-balanced h2h > 50% vs the M5 best. A clean
-  negative is recorded like M3/M3.4 and M6 ships the M5 checkpoint.
-- Contingency: if BC-only is promising but short, port `--bc-anchor` /
-  `--value-warmup-steps` (M3.2 fixes, currently transformer-only) to
-  `models/ppo/train.py` and run one 5M-step anchored fine-tune on the M5
-  opponent-mix recipe. No other reruns.
+- ✅ BC top-1 accuracy meaningfully above the ~11% chance floor: **49.7%
+  (randbats) / 53.1% (gen1ou)** held-out validation, opp-head ~35%
+- ✅ **Bar to beat — CLEARED by the fine-tuned checkpoint:** tuned-MCTS
+  (sims=100, c_puct=0.5, det=1) over `bcft/ppo_step_5000000_final.pt`:
+  **90.6% (453/500) vs Random / 79.2% (396/500) vs DamageFirst** vs the bars
+  of 86.0%/72.6% (+4.6pp / +6.6pp, both outside noise at n=500); seat-balanced
+  h2h vs the M5 best checkpoint: **78.4% (392/500) combined — 77.6% (194/250)
+  as p1 (run in 2×125 fresh-process chunks, see known issue below) / 79.2%
+  (198/250) as p2** — far above the 50% bar.
+- ✅ Contingency exercised as pre-registered: BC-only was negative (raw 22%R /
+  14.5%DF; MCTS 56.2%R / 45.0%DF — `models/mcts/results/m55_bc_mcts_*.log`),
+  so the M3.2 fixes (`--pretrain-checkpoint`, `--value-warmup-steps`,
+  `--bc-anchor` constant 0.05) were ported to `models/ppo/train.py` and ONE
+  5M-step anchored fine-tune ran on the M5 opponent-mix recipe. No other reruns.
+
+### Phase 4 Results (2026-07-16)
+| Stage | vs Random | vs DamageFirst | Notes |
+|---|---|---|---|
+| BC raw (run 2, value-BC) | 22% | 14.5% | ~50% human-imitation acc doesn't transfer to raw bot play |
+| BC + tuned MCTS | 56.2% (281/500) | 45.0% (225/500) | search lifts hugely, still below bars |
+| Fine-tune raw (final 5M) | 54.6% (273/500) | 42.0% (84/200) | sweep band 35–58%, no collapse; first BC→RL transfer that improves |
+| **Fine-tune + tuned MCTS** | **90.6% (453/500)** | **79.2% (396/500)** | **new best agent** |
+
+Fine-tune recipe: warm-start `bc_mlp_gen1.pt` → PPO 5M steps, v2 obs,
+opponent-mix selfplay/damagefirst/random 0.5/0.3/0.2 (pool seeded M2 +
+M3.3-best), value warmup 200k, BC KL-anchor coef 0.05 constant, opp-coef 0.1.
+Checkpoint: `models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt`.
+Search latency at the new operating point: ~180–200ms mean / ~370ms p95 per
+searched decision (higher than M5's ~60ms — the run shared the machine with
+the replay scraper; still far inside M6's 2s budget).
+Reading: neither ingredient suffices alone (BC ceiling ~56% under search;
+bot-trained RL lineage ceiling ~72.6% DF) — the human prior plus anchored RL
+plus search compounds. Side note confirmed again: the human-data opp head
+reads DamageFirst at only ~21–26% (bot-trained M5 head: 30–36%) — mixture
+miscalibration, as in M5.
+
+### Known issue (logged 2026-07-16): h2h `sim_fork` crash
+The MCTS-vs-checkpoint h2h `--mcts-seat p1` arm crashed TWICE, both times
+around battle 130–150, on a Node-side `sim_fork` error ("Cannot read
+properties of undefined (reading 'id')" — thrown inside
+`BattleSim.fork()`'s serialize/fromSnapshot path; the bridge forwards only
+the message, not the stack). Both 500-battle vs-bot battery arms and the
+250-battle p2 h2h arm ran clean, so it's specific to the h2h+search p1
+path and looks like slow state buildup, not a random per-decision fault.
+Workaround used: run the arm in fresh-process chunks. Root-cause TODO for
+M6 (the ladder bot runs long sessions): add stack forwarding to
+`gym_bridge.js` error responses and a fork-crash repro harness.
 
 ### Unblocks
 M6 ships whichever checkpoint wins this battery; the data pipeline also
@@ -1154,9 +1193,10 @@ ingests the M6 bot's own ladder games (`data/replays/self_ladder/`).
 ## M6: Server Integration & Ladder ⬜ NEXT (spec revised 2026-07-16)
 
 **Status:** ⬜ Not started. Rewritten post-M5: the original spec predated the
-M3.2 transformer retirement and M4 search. Ships the M5 checkpoint
-(`models/ppo/checkpoints/opp/ppo_step_5000001_final.pt`) with tuned
-policy-sampler MCTS, or the M5.5 winner if that battery beats it.
+M3.2 transformer retirement and M4 search. **Ships the M5.5 winner
+(`models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt`) with tuned
+policy-sampler MCTS** (M5.5 battery beat the M5 checkpoint on every measure;
+the M5 ckpt `opp/ppo_step_5000001_final.pt` remains the ladder-A/B control).
 **Clarified:** the ladder needs no recruited humans — matchmaking supplies
 opponents, and gen1randombattle is one of Showdown's most active ladders.
 Every ladder game is also a human-opponent trajectory for the M5.5 pipeline.
@@ -1245,5 +1285,5 @@ Best action
 | M3.4: Policy Ceiling | ✅ | Negative result — schema v2 + opponent mix trains stably but confirms as an M2/M3.3 peer (54%/46%/48% h2h) | M4, M5 |
 | M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
 | M5: Opponent Modeling | ✅ | Thesis negative (head sampler = policy sampler, −2.2pp); side finding: **new best agent** — M5 ckpt + policy-sampler MCTS 72.6% DF / 86.0% R | M6 |
-| M5.5: Human Replay Data + BC | 🟨 | Replay scraper + gen1ou bulk import (98k logs) + gym-parity replay adapter + MLP BC trainer; full run + battery pending | M6 |
+| M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
 | M6: Server Integration | ⬜ | Live ladder bot (raw policy first, then MCTS via `BattleSim.fromTracked`) | — |

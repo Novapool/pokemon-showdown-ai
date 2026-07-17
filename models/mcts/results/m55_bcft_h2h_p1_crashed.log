@@ -1,0 +1,33 @@
+[mcts] search is single-env by design; ignoring --num-envs
+Battle 25/250 | running MCTS win rate: 0.88 (22/25) | search latency ms: mean 187 / p95 362 / max 624
+Battle 50/250 | running MCTS win rate: 0.86 (43/50) | search latency ms: mean 195 / p95 365 / max 624
+Battle 75/250 | running MCTS win rate: 0.84 (63/75) | search latency ms: mean 188 / p95 364 / max 624
+Battle 100/250 | running MCTS win rate: 0.82 (82/100) | search latency ms: mean 190 / p95 362 / max 624
+Battle 125/250 | running MCTS win rate: 0.82 (102/125) | search latency ms: mean 189 / p95 361 / max 624
+Traceback (most recent call last):
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/evaluate.py", line 622, in <module>
+    main()
+    ~~~~^^
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/evaluate.py", line 556, in main
+    result = _run_battles_mcts_h2h(
+        mcts, opponent_agent, args.battles, obs_v2=args.obs_v2,
+    )
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/evaluate.py", line 330, in _run_battles_mcts_h2h
+    a1 = _mcts_action(p1_state) if p1_state["needs"] else None
+         ~~~~~~~~~~~~^^^^^^^^^^
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/evaluate.py", line 319, in _mcts_action
+    action = mcts.act(env, seat["obs"].reshape(-1), seat["mask"])
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/mcts/mcts_agent.py", line 253, in act
+    self._simulate(client, root)
+    ~~~~~~~~~~~~~~^^^^^^^^^^^^^^
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/mcts/mcts_agent.py", line 379, in _simulate
+    fork = client.sim_fork(node.sim_id)
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/gym_client.py", line 334, in sim_fork
+    return self._parse_sim_state(self._send({"cmd": "sim_fork", "sim": int(sim_id)}))
+                                 ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/gym_client.py", line 190, in _send
+    return self._read()
+           ~~~~~~~~~~^^
+  File "/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown/models/gym_client.py", line 184, in _read
+    raise RuntimeError(response["error"])
+RuntimeError: Cannot read properties of undefined (reading 'id')

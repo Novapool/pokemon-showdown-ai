@@ -6,8 +6,10 @@ Last updated: 2026-07-16
 
 ## Current Work
 
-**M5.5 (Human Replay Data + BC for the MLP) — 🟨 ACTIVE 2026-07-16.
-Full spec + pre-registered criteria in `MILESTONES.md` → M5.5.**
+**M5.5 (Human Replay Data + BC for the MLP) — ✅ COMPLETE 2026-07-16.
+POSITIVE RESULT, NEW BEST AGENT** (bcft final + tuned MCTS: 90.6% R /
+79.2% DF / 78.4% h2h vs M5 best). Full verdict in `MILESTONES.md` → M5.5.
+**Next: M6 (ladder) ships `bcft/ppo_step_5000000_final.pt`.**
 
 Project decision: competitive target stays **gen1randombattle**; training
 data is multi-format — high-Elo (≥1300) randbats replays + high-level gen1ou
@@ -30,12 +32,17 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       val acc 0.319 / opp-acc 0.300 (chance ~0.11); checkpoint plays via
       `evaluate.py --obs-v2` unchanged. Committed `875c1aa77`.
 - [x] Data collection: full gen1ou→trajectory conversion done (98,349
-      battles → 8.45M decisions, 0 parse errors, 746MB). Randbats backfill
-      stopped at user request with **8,143 high-Elo logs** on disk (user:
-      "we'll resume this later") — resume any time with
-      `python3 scripts/scrape_replays.py --backfill --formats gen1randombattle --max-replays 12000 --max-pages 4000`
-      then re-run `node models/replay_adapter_cli.js --format gen1randombattle --shard-size 1000`.
-- [~] Phase 4 (in flight, 2026-07-16): **BC runs done.** Run 1 (policy+opp
+      battles → 8.45M decisions, 0 parse errors, 746MB). **Randbats backfill
+      completed 2026-07-16**: +12,051 new high-Elo logs → **20,194 on disk**
+      (log `data/replays/gen1randombattle_backfill_20260716.log`; census of
+      scanned pages: bulk of rated games sit at 1000–1299, below the 1300
+      floor — the 1300+ tail is thin, ~3.3k per ~30k scanned).
+      Re-converted: **20,133 battles → 1,161,658 decisions, 0 parse errors,
+      90.7% label coverage, 21 shards** in
+      `data/replay_trajs/gen1randombattle/`
+      (log `data/replays/gen1randombattle_adapter_20260716.log`). A future
+      BC re-run can now train on ~2.4x the randbats decisions.
+- [x] Phase 4 (done 2026-07-16): **BC runs done.** Run 1 (policy+opp
       heads): val acc 49.7% randbats / 53.1% gen1ou (chance ~11%), opp-acc
       ~35% — but raw play only 20% vs Random / 20.5% vs DamageFirst; ~50%
       human-imitation accuracy does NOT transfer to raw play vs bots.
@@ -57,8 +64,34 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       45/45 → 51% @ 1M → 53% @ 1.25M → 36/37 (dip) → 49% @ 2M. The anchored
       recipe lifts BC's 22% raw into the ~50% band — first BC→RL transfer
       in the project that improves rather than erodes.
-      Then: full sweep, confirmations, MCTS battery on the best fine-tuned
-      ckpt, verdict → MILESTONES.
+      **Run complete 2026-07-16: 5,000,000/5,000,000 steps**
+      (`ppo_step_5000000_final.pt`, 21 checkpoints incl. final; loss healthy
+      to the end, late rollout win rates 0.4–0.9 band vs the mixed pool).
+      **Full 20-checkpoint sweep (150 vs Random,
+      `bcft/sweep_results.txt`): 35–58% band, no collapse** — the anchored
+      recipe holds BC→RL gains across all 5M steps (BC raw was 22%).
+      **Confirmations (`bcft/confirm_results.txt`, 500R/200DF):** best is the
+      **final 5M checkpoint at 54.6% (273/500) vs Random / 42.0% (84/200) vs
+      DamageFirst**; 3.75M best-DF at 46.0% (92/200) with 52.4% R (within
+      noise); the 58% sweep reading @4.5M did not confirm (48.8%/34.5%).
+      Raw verdict: fine-tune ≈ M2/M3.3-class peer (50–55% band), well above
+      raw BC but not above the bot-trained lineage.
+      **Tuned-MCTS battery on the final checkpoint
+      (`models/mcts/results/m55_bcft_mcts_*.log`): 90.6% (453/500) vs
+      Random / 79.2% (396/500) vs DamageFirst — BOTH pre-registered bars
+      cleared decisively** (prior best, M5 ckpt + tuned MCTS: 86.0%/72.6%;
+      +4.6pp and +6.6pp). Human-data BC → anchored PPO fine-tune → search
+      is the first pipeline to beat the bot-trained lineage.
+      **Seat-balanced h2h, MCTS(bcft final) vs the raw M5 best checkpoint:
+      78.4% (392/500) combined — 77.6% (194/250) p1 / 79.2% (198/250) p2**
+      (`m55_bcft_h2h_*.log`; the p1 arm crashed twice ~battle 130–150 on a
+      Node `sim_fork` error and was completed as 2×125 fresh-process
+      chunks — see MILESTONES → M5.5 → Known issue; root-cause TODO for M6).
+      **VERDICT: M5.5 POSITIVE — new best agent** =
+      `models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt` + tuned
+      policy-sampler MCTS. All pre-registered criteria ✅; full write-up in
+      `MILESTONES.md` → M5.5; ledger updated in `docs/MODEL-COMPARISON.md`.
+      M6 ships this checkpoint (M5 ckpt becomes the ladder-A/B control).
       Side note: the human-data opp head reads DamageFirst at only ~19-24%
       (vs the bot-trained M5 head's 30-36%) — the M5 "mixture
       miscalibration" reading, confirmed from the other direction.

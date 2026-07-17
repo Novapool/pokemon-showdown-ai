@@ -1,0 +1,16 @@
+[mcts] search is single-env by design; ignoring --num-envs
+Battle 12/125 | running MCTS win rate: 0.83 (10/12) | search latency ms: mean 156 / p95 289 / max 460
+Battle 24/125 | running MCTS win rate: 0.79 (19/24) | search latency ms: mean 160 / p95 288 / max 460
+Battle 36/125 | running MCTS win rate: 0.75 (27/36) | search latency ms: mean 157 / p95 287 / max 460
+Battle 48/125 | running MCTS win rate: 0.77 (37/48) | search latency ms: mean 158 / p95 285 / max 460
+Battle 60/125 | running MCTS win rate: 0.80 (48/60) | search latency ms: mean 158 / p95 285 / max 460
+Battle 72/125 | running MCTS win rate: 0.79 (57/72) | search latency ms: mean 159 / p95 284 / max 460
+Battle 84/125 | running MCTS win rate: 0.80 (67/84) | search latency ms: mean 158 / p95 284 / max 460
+Battle 96/125 | running MCTS win rate: 0.81 (78/96) | search latency ms: mean 158 / p95 283 / max 460
+Battle 108/125 | running MCTS win rate: 0.81 (87/108) | search latency ms: mean 156 / p95 283 / max 460
+Battle 120/125 | running MCTS win rate: 0.79 (95/120) | search latency ms: mean 157 / p95 283 / max 460
+Battle 125/125 | running MCTS win rate: 0.79 (99/125) | search latency ms: mean 158 / p95 284 / max 460
+Model: mcts (sims=100, det=1, c_puct=0.5, determinize=True, seat=p1, opp_sampler=policy)
+Base checkpoint: models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt
+Battles: 125
+MCTS win rate vs models/ppo/checkpoints/opp/ppo_step_5000001_final.pt: 0.79 (99/125)

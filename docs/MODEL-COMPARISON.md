@@ -22,7 +22,10 @@ Running record of every evaluated model/run in this project. Evaluation is
 | MCTS over M3.3 best — tuned knobs (post-M4 sweep: det=1, c_puct=0.5) | inference-time | 81.2% (406/500) | 67.2% (336/500) | ✅ Tuned operating point (one deep tree, trusted prior) |
 | MCTS over M3.4 v2 best (post-M4 A/B) | inference-time | 82.6% (413/500) | 70.2% (351/500) | 🟨 Statistical tie with v1 under search (raw v2 trailed raw v1 — richer obs matter more with lookahead) |
 | MLP-PPO + opp-prediction aux head, raw (M5 final) | 5.0M | 57% (285/500) | 41.5% (83/200) | 🟨 Raw peer of M2/M3.3/M3.4 (fifth 5M-class run in the 51–57% band); head accuracy 35.8% vs DamageFirst |
-| **MCTS over M5 final (policy sampler, tuned knobs)** | inference-time | **86.0% (430/500)** | **72.6% (363/500)** | ✅ **Current best agent.** Nominally ahead of the v2-MCTS config on both opponents (within ~1σ). Head *sampler* retired: 70.4% DF / 85.8% R — parity with the policy sampler (M5 thesis negative), though 57ms vs 59–64ms/move. Checkpoint: `models/ppo/checkpoints/opp/ppo_step_5000001_final.pt` |
+| MCTS over M5 final (policy sampler, tuned knobs) | inference-time | 86.0% (430/500) | 72.6% (363/500) | ✅ Best of the bot-trained lineage; M6 ladder-A/B control. Head *sampler* retired: 70.4% DF / 85.8% R — parity with the policy sampler (M5 thesis negative). Checkpoint: `models/ppo/checkpoints/opp/ppo_step_5000001_final.pt` |
+| MLP BC on human replays, raw (M5.5 run 2) | BC only | 22% | 14.5% | ❌ ~50% human-imitation val acc doesn't transfer to raw bot play; under tuned MCTS: 56.2% R / 45.0% DF — search helps hugely but BC-only is far below the bars |
+| MLP-PPO BC-warm-started anchored fine-tune, raw (M5.5 final) | BC + 5.0M | 54.6% (273/500) | 42.0% (84/200) | 🟨 Raw peer of the 51–57% band; first BC→RL transfer that improves on BC (raw 22% → 55%) instead of eroding. Sweep 35–58%, no collapse |
+| **MCTS over M5.5 fine-tuned final (policy sampler, tuned knobs)** | inference-time | **90.6% (453/500)** | **79.2% (396/500)** | ✅ **Current best agent** (+4.6pp R / +6.6pp DF over the M5 best, outside noise at n=500); seat-balanced h2h vs the raw M5 checkpoint 78.4% (392/500). Human prior + anchored RL + search compounds. Checkpoint: `models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt` |
 
 ## Reference points
 
@@ -50,7 +53,8 @@ Running record of every evaluated model/run in this project. Evaluation is
   determinized UCT search at inference time (`evaluate.py --model mcts`).
   The tuned operating point (sims=100, det=1, c_puct=0.5, ~57–85ms/move) is
   the default since the post-M4 sweep; eval logs in `models/mcts/results/`
-  (M5 sampler A/B: `m5_ab_*.log`).
+  (M5 sampler A/B: `m5_ab_*.log`; M5.5 batteries: `m55_bc_mcts_*.log`,
+  `m55_bcft_mcts_*.log`, h2h `m55_bcft_h2h_*.log`).
 - The M5 aux head shaped the trunk (best search-amplified numbers to date)
   but its *sampler* did not beat the policy sampler inside search — see
   `MILESTONES.md` → M5 → Reading.
