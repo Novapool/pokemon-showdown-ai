@@ -1190,9 +1190,15 @@ ingests the M6 bot's own ladder games (`data/replays/self_ladder/`).
 
 ---
 
-## M6: Server Integration & Ladder ⬜ NEXT (spec revised 2026-07-16)
+## M6: Server Integration & Ladder ✅ COMPLETE 2026-07-17
 
-**Status:** ⬜ Not started. Rewritten post-M5: the original spec predated the
+**Status:** ✅ Complete — **all three success criteria met.** Both phases
+built and shipped; the 100-battle official-ladder criterion run finished
+2026-07-17 with the MCTS config, zero mechanical failures. External
+measurement (the milestone's purpose): **the agent sits at the bottom of
+the human ladder** — final Elo **1017** (floor is 1000), GXE **23.9%**,
+Glicko-1 **1281 ± 37**, account record 23W–96L on gen1randombattle.
+Full results below. Rewritten post-M5: the original spec predated the
 M3.2 transformer retirement and M4 search. **Ships the M5.5 winner
 (`models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt`) with tuned
 policy-sampler MCTS** (M5.5 battery beat the M5 checkpoint on every measure;
@@ -1224,10 +1230,46 @@ Every ladder game is also a human-opponent trajectory for the M5.5 pipeline.
 
 ### Success Criteria (replacing the stale originals)
 - Bot completes ≥ 100 consecutive official-ladder battles without
-  crash/timeout losses
-- Decision latency < 2s per move (Phase 1 trivially; Phase 2 measured)
-- Elo tracked and reported (peak + stable band) — no fixed win-rate bar; the
-  ladder IS the external measurement M0–M5 never had
+  crash/timeout losses — ✅ **100/100 clean** (2026-07-17, MCTS config;
+  zero invalid choices, timeouts, or crashes)
+- Decision latency < 2s per move — ✅ **max 579ms observed** (cold-start,
+  battle 1); warm per-battle maxima 136–540ms, typically ~150–350ms
+- Elo tracked and reported — ✅ final **Elo 1017 / GXE 23.9% /
+  Glicko-1 1281 ± 37** (account Novapool, gen1randombattle, 23W–96L)
+
+### Results (criterion run, 2026-07-17)
+
+Three rated sessions on account Novapool, all vs live matchmade humans:
+shakedown 0/3 (raw policy), first criterion attempt 2/15 (raw policy,
+externally stopped), full criterion run **21/100 with MCTS** (sims=100,
+det=1, c_puct=0.5). Logs in `data/replays/self_ladder/`.
+
+- **MCTS lift replicates externally:** raw policy ~13% (2/15) → MCTS 21%
+  (21/100); early pace was 12/41 (~29%) before a long mid-run losing
+  streak. GXE 23.9% is the settled read: ~24% expected vs a random
+  ladder player.
+- **Honest decomposition:** 13 of the 21 wins were ≤9-decision battles
+  (opponent forfeits/disconnects — a normal part of low-ladder Elo, but
+  not evidence of outplaying anyone). Full-length-battle win rate is
+  ~8/87 (~9%). Bottom-of-ladder humans beat this agent ~4-in-5 games
+  even with search.
+- **The external measurement M0–M5 never had, delivered:** an agent at
+  90.6%/79.2% vs the project's training bots and 78.4% h2h vs the prior
+  best is still a ~1017-Elo (floor-adjacent) ladder player. The
+  bot-relative ledger drastically overstates absolute strength; the
+  human ladder is now the project's primary evaluator.
+- **Qualitative failure notes (user-observed, watching live games):**
+  Hypnosis into an already-asleep Pokémon; Explosion into a Ghost-type;
+  repeated not-very-effective moves (e.g. Fire Blast into Slowbro); no
+  evident handling of Hyper Beam recharge or Sleep Clause. Root cause
+  traced to the observation schema (`feature-extractor.ts`): no type
+  effectiveness, no base stats/species identity, no move secondary-effect
+  flags (recharge/self-KO/status/priority), no Sleep Clause signal —
+  status moves are near-indistinguishable to the net. Motivates an obs
+  schema v3 as the leading next-milestone candidate.
+- Mechanical: 100 consecutive battles, one at a time, ~21–61 decisions
+  each, 75–90% of decisions searched (rest force-switch/locked → raw
+  policy per `fromTracked`'s contract), zero search-fallback storms.
 
 ---
 
@@ -1286,4 +1328,4 @@ Best action
 | M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
 | M5: Opponent Modeling | ✅ | Thesis negative (head sampler = policy sampler, −2.2pp); side finding: **new best agent** — M5 ckpt + policy-sampler MCTS 72.6% DF / 86.0% R | M6 |
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
-| M6: Server Integration | ⬜ | Live ladder bot (raw policy first, then MCTS via `BattleSim.fromTracked`) | — |
+| M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | obs v3 case |

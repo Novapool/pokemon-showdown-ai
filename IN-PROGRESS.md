@@ -1,15 +1,25 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 ---
 
 ## Current Work
 
-**M5.5 (Human Replay Data + BC for the MLP) — ✅ COMPLETE 2026-07-16.
-POSITIVE RESULT, NEW BEST AGENT** (bcft final + tuned MCTS: 90.6% R /
-79.2% DF / 78.4% h2h vs M5 best). Full verdict in `MILESTONES.md` → M5.5.
-**Next: M6 (ladder) ships `bcft/ppo_step_5000000_final.pt`.**
+**M6 (Server Integration & Ladder) — ✅ COMPLETE 2026-07-17.** All three
+criteria met: 100/100 clean rated battles on the official ladder (MCTS
+config, ≤579ms/move), **Elo 1017 / GXE 23.9%** — the agent sits at the
+bottom of the human ladder despite dominating every project bot (external
+measurement delivered; the bot-relative ledger overstates absolute
+strength). Full results + qualitative failure analysis in
+`MILESTONES.md` → M6. **Next-milestone candidate: obs schema v3**
+(type effectiveness, base stats/species, move-effect flags, Sleep Clause —
+the ladder-observed blunders all trace to missing obs features).
+
+**Previous: M5.5 (Human Replay Data + BC for the MLP) — ✅ COMPLETE
+2026-07-16. POSITIVE RESULT, NEW BEST AGENT** (bcft final + tuned MCTS:
+90.6% R / 79.2% DF / 78.4% h2h vs M5 best). Full verdict in
+`MILESTONES.md` → M5.5. M6 shipped `bcft/ppo_step_5000000_final.pt`.
 
 Project decision: competitive target stays **gen1randombattle**; training
 data is multi-format — high-Elo (≥1300) randbats replays + high-level gen1ou
@@ -121,20 +131,20 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       **Verified:** `battle-sim-tracked` suite 7/7; local bot-vs-bot smoke
       (MCTS vs raw, 2 battles): 28/32 and 23/28 decisions searched, 0
       fallbacks/errors, ~100ms warm / 574ms cold — far inside the 2s budget.
-- [ ] M6 criterion run: 100 consecutive official-ladder battles + Elo
-      tracking. **First attempt 2026-07-17 (raw policy, no search)
-      externally stopped at 15 battles (2/15 won, all rated, zero bot
-      errors — no invalid choices/timeouts/crashes; bot was healthy when
-      killed).** Early read: the raw policy is ~13% vs low-ladder humans —
-      far below its 90%+/79% vs the training bots; humans punish it hard.
-      That motivated shipping Phase 2 (MCTS) as the criterion config.
-      **Second attempt IN PROGRESS 2026-07-17 with `--mcts`** (user-
-      launched): through 41 battles, **12/41 won (~29%)** — roughly the
-      predicted ~2–3x lift over the raw policy's 13%; search latency well
-      inside budget (max ~350ms), zero fallback storms or bot errors.
-      The 15 raw-policy human-game logs are in `data/replays/self_ladder/`.
-      Known gap: no websocket reconnect logic — a mid-run disconnect
-      exits nonzero.
+- [x] M6 criterion run — ✅ **COMPLETE 2026-07-17, all three criteria
+      met; M6 CLOSED.** First attempt (raw policy) externally stopped at
+      2/15; full run with `--mcts` finished **21/100 won**, 100/100
+      mechanically clean (zero invalid choices/timeouts/crashes, max
+      latency 579ms cold / ≤540ms warm vs the 2s budget). **Final ladder
+      read (the external measurement): Elo 1017 (floor 1000), GXE 23.9%,
+      Glicko-1 1281 ± 37, account 23W–96L.** MCTS lift replicated
+      externally (raw ~13% → 21%; early pace 29% before a mid-run losing
+      streak). Honest note: 13/21 wins were ≤9-decision opponent
+      forfeits; full-battle win rate ~9%. Verdict + qualitative failure
+      analysis (no type effectiveness / stats / move effects in obs →
+      obs v3 case) in `MILESTONES.md` → M6. All game logs in
+      `data/replays/self_ladder/`. Known gap (carried): no websocket
+      reconnect logic.
 
 **Previous: M5 (Opponent Modeling Head) — ✅ COMPLETE 2026-07-16. Thesis negative,
 new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**
