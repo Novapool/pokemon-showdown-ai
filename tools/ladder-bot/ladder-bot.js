@@ -52,9 +52,14 @@ function parseArgs(argv) {
 		password: process.env.PS_PASSWORD || null,
 		challenge: null,   // send a challenge to this user instead of laddering
 		acceptFrom: null,  // accept challenges from this user instead of laddering
+		loginFile: null,   // "username: ...\npassword: ..." file (keeps creds off argv/env)
 		saveDir: 'data/replays/self_ladder',
 		device: 'cpu',
 		verbose: false,
+		mcts: false,        // M6 P2: search clean move requests via act_tracked
+		sims: 100,
+		determinizations: 1,
+		cPuct: 0.5,
 	};
 	for (let i = 2; i < argv.length; i++) {
 		switch (argv[i]) {
@@ -66,14 +71,25 @@ function parseArgs(argv) {
 		case '--password': args.password = argv[++i]; break;
 		case '--challenge': args.challenge = argv[++i]; break;
 		case '--accept-from': args.acceptFrom = argv[++i]; break;
+		case '--login-file': args.loginFile = argv[++i]; break;
 		case '--save-dir': args.saveDir = argv[++i]; break;
 		case '--device': args.device = argv[++i]; break;
 		case '--verbose': args.verbose = true; break;
+		case '--mcts': args.mcts = true; break;
+		case '--sims': args.sims = parseInt(argv[++i], 10); break;
+		case '--determinizations': args.determinizations = parseInt(argv[++i], 10); break;
+		case '--c-puct': args.cPuct = parseFloat(argv[++i]); break;
 		default: throw new Error(`unknown arg: ${argv[i]}`);
 		}
 	}
+	if (args.loginFile) {
+		for (const line of fs.readFileSync(args.loginFile, 'utf8').split('\n')) {
+			const m = /^(username|password):\s*(.+?)\s*$/.exec(line);
+			if (m) args[m[1] === 'username' ? 'name' : 'password'] = m[2];
+		}
+	}
 	if (!args.checkpoint) throw new Error('--checkpoint is required');
-	if (!args.name) throw new Error('--name (or PS_USERNAME env) is required');
+	if (!args.name) throw new Error('--name (or PS_USERNAME env, or --login-file) is required');
 	return args;
 }
 
@@ -86,11 +102,17 @@ function toID(text) {
 // ---------------------------------------------------------------------------
 
 class InferServer {
-	constructor(checkpoint, device) {
-		this.proc = spawn('python3', [
+	constructor(args) {
+		const argv = [
 			path.join(__dirname, '../../models/infer_server.py'),
-			'--checkpoint', checkpoint, '--device', device,
-		], { stdio: ['pipe', 'pipe', 'inherit'] });
+			'--checkpoint', args.checkpoint, '--device', args.device,
+		];
+		if (args.mcts) {
+			argv.push('--mcts', '--sims', String(args.sims),
+				'--determinizations', String(args.determinizations),
+				'--c-puct', String(args.cPuct));
+		}
+		this.proc = spawn('python3', argv, { stdio: ['pipe', 'pipe', 'inherit'] });
 		this.rl = readline.createInterface({ input: this.proc.stdout });
 		this.queue = [];
 		this.rl.on('line', line => {
@@ -109,13 +131,20 @@ class InferServer {
 	async ping() {
 		const resp = await this._send({ cmd: 'ping' });
 		if (!resp.ok) throw new Error(`infer server ping failed: ${JSON.stringify(resp)}`);
-		return resp.obs_size;
+		return resp;
 	}
 
 	async act(obs, mask) {
 		const resp = await this._send({ cmd: 'act', obs: Array.from(obs), mask });
 		if (resp.error) throw new Error(`infer server: ${resp.error}`);
 		return resp.action;
+	}
+
+	/** M6 P2: determinized UCT over a reconstruction of the remote battle. */
+	async actTracked(payload) {
+		const resp = await this._send({ cmd: 'act_tracked', ...payload });
+		if (resp.error) throw new Error(`infer server: ${resp.error}`);
+		return resp; // {action, sims, fallback?}
 	}
 
 	close() {
@@ -144,6 +173,8 @@ class BattleRoom {
 		this.result = null;        // 'win' | 'loss' | 'tie'
 		this.decisions = 0;
 		this.maxLatencyMs = 0;
+		this.turn = 0;             // latest |turn| number (BattleSim.fromTracked input)
+		this.searched = 0;         // decisions answered by MCTS (not fallback)
 	}
 
 	/** Process one protocol line; returns true if state changed. */
@@ -157,6 +188,9 @@ class BattleRoom {
 			else this.opponent = parts[3];
 		} else if (type === 'rated') {
 			this.rated = true;
+		} else if (type === 'turn') {
+			this.turn = parseInt(parts[2], 10) || this.turn;
+			this.trackers.processLine(line);
 		} else if (type === 'request' && parts[2]) {
 			try {
 				const request = JSON.parse(parts.slice(2).join('|'));
@@ -202,7 +236,26 @@ class BattleRoom {
 		);
 		let action;
 		try {
-			action = await this.bot.infer.act(obs, mask);
+			// M6 P2: search clean move requests; raw policy answers everything
+			// else (force switches / locked states — fromTracked's contract).
+			if (this.bot.mctsReady && request.active && !request.forceSwitch && !request.wait) {
+				const resp = await this.bot.infer.actTracked({
+					obs: Array.from(obs), mask,
+					formatid: this.bot.args.format,
+					seat: this.seat,
+					request,
+					trackers: this.trackers.snapshot(),
+					turn: this.turn,
+					obs_mode: this.bot.obsV2 ? 'structured-v2' : 'structured',
+				});
+				action = resp.action;
+				if (resp.sims > 0) this.searched++;
+				else if (this.bot.verbose) {
+					console.log(`[${this.roomid}] search fell back to raw policy: ${resp.fallback}`);
+				}
+			} else {
+				action = await this.bot.infer.act(obs, mask);
+			}
 		} catch (err) {
 			console.error(`[${this.roomid}] inference failed (${err.message}); choosing default`);
 			this.bot.send(`${this.roomid}|/choose default|${request.rqid ?? ''}`);
@@ -257,8 +310,9 @@ class LadderBot {
 		this.wins = 0;
 		this.searching = false;
 		this.loggedIn = false;
-		this.infer = new InferServer(args.checkpoint, args.device);
-		this.obsV2 = null; // set after ping
+		this.infer = new InferServer(args);
+		this.obsV2 = null;     // set after ping
+		this.mctsReady = false; // set after ping (--mcts requested AND server confirms)
 	}
 
 	send(message) {
@@ -267,12 +321,16 @@ class LadderBot {
 	}
 
 	async start() {
-		const obsSize = await this.infer.ping();
+		const pong = await this.infer.ping();
+		const obsSize = pong.obs_size;
 		this.obsV2 = obsSize === 12 * 77;
 		if (!this.obsV2 && obsSize !== 12 * 65) {
 			throw new Error(`unsupported checkpoint obs_size ${obsSize} (need 780 or 924)`);
 		}
-		console.log(`inference ready: obs_size=${obsSize} (${this.obsV2 ? 'v2' : 'v1'} schema)`);
+		this.mctsReady = this.args.mcts && !!pong.mcts;
+		console.log(`inference ready: obs_size=${obsSize} (${this.obsV2 ? 'v2' : 'v1'} schema)` +
+			(this.mctsReady ? `, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
+				`c_puct=${this.args.cPuct})` : ''));
 
 		this.ws = new WebSocket(this.args.server);
 		this.ws.addEventListener('open', () => console.log(`connected: ${this.args.server}`));
@@ -395,8 +453,8 @@ class LadderBot {
 				this.finished++;
 				if (room.result === 'win') this.wins++;
 				console.log(`battle finished: ${id} — ${room.result} vs ${room.opponent} ` +
-					`(${room.decisions} decisions, max ${room.maxLatencyMs}ms) ` +
-					`[${this.wins}/${this.finished} won]`);
+					`(${room.decisions} decisions${this.mctsReady ? `, ${room.searched} searched` : ''}, ` +
+					`max ${room.maxLatencyMs}ms) [${this.wins}/${this.finished} won]`);
 				room.save(this.args.saveDir);
 				this.rooms.delete(id);
 				this.finishedRooms.add(id);

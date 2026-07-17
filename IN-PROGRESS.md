@@ -95,8 +95,46 @@ Future follow-up (out of scope): fine-tune on one specific OU team.
       Side note: the human-data opp head reads DamageFirst at only ~19-24%
       (vs the bot-trained M5 head's 30-36%) — the M5 "mixture
       miscalibration" reading, confirmed from the other direction.
-- [ ] M6 Phase 1 (parallel-safe): `tools/ladder-bot/` + `models/infer_server.py`
-      per the revised M6 spec in MILESTONES.
+- [x] M6 Phase 1 build (committed `e85a6c5e5`): `tools/ladder-bot/` +
+      `models/infer_server.py` per the revised M6 spec in MILESTONES.
+      **Verified 2026-07-17:** local-server smoke (bot vs bot, 2 battles,
+      bcft v2 checkpoint) clean — mirrored results, 38–41 decisions/battle,
+      max latency 182ms cold / 2ms warm, zero invalid choices; saved logs
+      are raw protocol streams (replay-adapter compatible). Added
+      `--login-file` so credentials stay off argv/env; login lives at
+      `config/showdown_login.txt` (gitignored via `/config/*` + explicit
+      `showdown_login.txt` entry, chmod 600).
+- [x] M6 Phase 1 official-ladder shakedown (account: Novapool, 2026-07-17):
+      3 rated battles, 0/3 won but mechanically clean — no invalid choices,
+      timeouts, or crashes; latency 4ms warm / 264ms cold; logs + CSV in
+      `data/replays/self_ladder/`. Losses at fresh-account Elo are not yet
+      a signal; Elo measurement is the criterion run.
+- [x] M6 Phase 2 wiring (2026-07-17): `BattleSim.fromTracked` (core was
+      already committed, `611c14d6c`) is now reachable from the ladder —
+      `gym_bridge.js` `sim_from_tracked` command (no live env needed);
+      `models/infer_server.py --mcts` hosts `MCTSAgent` over a
+      `TrackedSimClient` (spawns a bridge subprocess as sim host; raw-policy
+      fallback on any search error, reason reported); `ladder-bot.js --mcts
+      [--sims/--determinizations/--c-puct]` searches clean move requests and
+      answers force-switches/locked states with the raw policy per
+      fromTracked's contract; per-battle `searched` count logged.
+      **Verified:** `battle-sim-tracked` suite 7/7; local bot-vs-bot smoke
+      (MCTS vs raw, 2 battles): 28/32 and 23/28 decisions searched, 0
+      fallbacks/errors, ~100ms warm / 574ms cold — far inside the 2s budget.
+- [ ] M6 criterion run: 100 consecutive official-ladder battles + Elo
+      tracking. **First attempt 2026-07-17 (raw policy, no search)
+      externally stopped at 15 battles (2/15 won, all rated, zero bot
+      errors — no invalid choices/timeouts/crashes; bot was healthy when
+      killed).** Early read: the raw policy is ~13% vs low-ladder humans —
+      far below its 90%+/79% vs the training bots; humans punish it hard.
+      That motivated shipping Phase 2 (MCTS) as the criterion config.
+      **Second attempt IN PROGRESS 2026-07-17 with `--mcts`** (user-
+      launched): through 41 battles, **12/41 won (~29%)** — roughly the
+      predicted ~2–3x lift over the raw policy's 13%; search latency well
+      inside budget (max ~350ms), zero fallback storms or bot errors.
+      The 15 raw-policy human-game logs are in `data/replays/self_ladder/`.
+      Known gap: no websocket reconnect logic — a mid-run disconnect
+      exits nonzero.
 
 **Previous: M5 (Opponent Modeling Head) — ✅ COMPLETE 2026-07-16. Thesis negative,
 new-best side finding. Full results + verdict in `MILESTONES.md` → M5.**

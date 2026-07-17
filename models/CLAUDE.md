@@ -79,9 +79,14 @@ node tools/ladder-bot/ladder-bot.js --server ws://localhost:8355/showdown/websoc
 node tools/ladder-bot/ladder-bot.js --server ws://localhost:8355/showdown/websocket \
     --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt \
     --name lbotbeta --battles 2 --challenge lbotalpha
-# M6: official ladder (registered account; conservative pacing — one battle at a time)
-PS_USERNAME=... PS_PASSWORD=... node tools/ladder-bot/ladder-bot.js \
-    --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt --battles 10
+# M6: official ladder (registered account; conservative pacing — one battle at a time).
+# Credentials: --login-file (never on argv/env; file lives in gitignored config/).
+node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
+    --checkpoint models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt --battles 10
+# M6 P2: add search (determinized UCT via BattleSim.fromTracked; tuned defaults
+# sims=100/det=1/c_puct=0.5; force-switches/locked states fall back to raw policy)
+node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
+    --checkpoint models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt --battles 10 --mcts
 # Game logs land in data/replays/self_ladder/ (+ ladder_results.csv) and feed
 # straight back into models/replay_adapter_cli.js.
 

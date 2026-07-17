@@ -62,6 +62,12 @@
  *     Independent copy of a sim's current state (tree branching).
  *   {"cmd":"sim_free","sim":<id>}    → {"ok":true}
  *   {"cmd":"sim_free_all"}           → {"ok":true,"freed":<count>}
+ *   {"cmd":"sim_from_tracked","formatid":"gen1randombattle","seat":"p1"|"p2",
+ *    "request":<move request JSON>,"trackers":<TrackerSnapshot>,"turn":<int>,
+ *    "obs_mode":"structured-v2"?,"determinize":bool,"seed":<int?>}
+ *     → same shape as sim_clone. (M6 P2) Reconstructs a searchable battle
+ *     from a remote (ladder) client's knowledge — needs no live env/reset;
+ *     determinization resamples the seat OPPOSITE "seat".
  */
 
 const readline = require('readline');
@@ -195,6 +201,27 @@ async function processCommand(command) {
 		const sim = BattleSim.fromSnapshot(env.snapshot(), {
 			determinize: !!command.determinize,
 			perspective: command.perspective === 'p2' ? 'p2' : 'p1',
+			seed: command.seed,
+		});
+		const id = nextSimId++;
+		sims.set(id, sim);
+		respond(simStateToJSON(id, sim));
+
+	} else if (cmd === 'sim_from_tracked') {
+		// M6 P2: reconstruct a searchable battle from a remote (ladder) client's
+		// knowledge — request JSON + tracker snapshot. No live env required, so
+		// this works without a prior reset (the battle lives on the server).
+		const seat = command.seat === 'p2' ? 'p2' : 'p1';
+		const sim = BattleSim.fromTracked({
+			formatid: command.formatid,
+			seat,
+			request: command.request,
+			trackers: command.trackers,
+			turnCount: command.turn ?? 0,
+			obsMode: command.obs_mode,
+		}, {
+			determinize: !!command.determinize,
+			perspective: seat,
 			seed: command.seed,
 		});
 		const id = nextSimId++;
