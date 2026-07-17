@@ -1273,6 +1273,104 @@ det=1, c_puct=0.5). Logs in `data/replays/self_ladder/`.
 
 ---
 
+## M7: Observation Schema v3 🟡 SCOPED (2026-07-17)
+
+**Status:** 🟡 Scoped, awaiting orchestrator plan.
+
+**Motivation:** M6's 21/100 ladder win rate (9% full-battle) despite 90.6% vs bots revealed a rules-understanding gap. User-observed blunders: Hypnosis into an already-asleep Pokémon, Explosion into a Ghost-type, repeated not-very-effective moves (Fire Blast into Slowbro), no handling of Hyper Beam recharge or Sleep Clause. Root cause: v2 obs schema (65 base + 12 boosts/volatiles) lacks type effectiveness, species identity, move-effect flags, and Sleep Clause signaling. The observation schema has never been the bottleneck (parallel training, MCTS, BC, opponent modeling all improved; v2 was a wash). But this time the rules omitted are ones humans apply *every* game.
+
+### v3 Schema Design (appendix to v1+v2 — byte-identical prefix, new dims appended)
+
+**Current state (v2):**
+- **Dims 0–64:** Per-Pokémon tokens as v1 (HP ratio, level, type one-hots, status, active/unknown/fainted flags, move 1–4 @ 6 dims each) — unchanged
+- **Dims 65–76:** Active token only — boosts (7 stages), screens/Sub/Leech Seed (4 flags), toxic counter (1 dim) — 12 dims
+- Total per token: 77 dims; full obs: (12, 77)
+
+**v3 additions (per-move, affects all 12 tokens):**
+
+| Feature | Dims | Notes |
+|---------|------|-------|
+| **Per-move type-effectiveness vs opponent active** | 4 | The combined multiplier vs BOTH defender types — gen1 values are {0, 0.25, 0.5, 1, 2, 4} (dual-typed defenders stack: e.g. Ice Beam vs Dragonite = 4x, Fire Blast vs Slowbro = 0.5x, Explosion vs Gengar = 0x). Encode scaled, e.g. multiplier/4 → [0, 1] (exact encoding is a Phase 0 decision). Highest-leverage fix (type chart is the hardest thing to learn from a scalar type index). One lookup per decision, pre-computed. |
+| **Base stats vs opponent active** (optional A/B) | 1–2 | Speed ratio (own active speed / opp active speed, clamped) OR HP ratio (own / opp). Alternative: defer, use in M8 as a phase 1a A/B if v3 base doesn't clear the bars. |
+| **Per-move effect flags** | 3–4 | Bitmask: recharge (Hyper Beam), self-KO (Explosion/Selfdestruct), priority (Quick Attack), inflicted-status. Total 3–4 flags; store as separate dims or one packed byte (space is cheap; clarity favors separate). |
+| **Sleep Clause flag** | 1 | Sleep Clause Mod blocks putting a SECOND opponent Pokémon to sleep: flag = 1 while any opponent Pokémon we put to sleep is still asleep (self-induced Rest sleep does NOT count toward the clause). Derivable from the public log via the existing reveal tracker — a slept mon was necessarily active when slept, so no omniscient access is needed (project convention: observations use observable info only). |
+
+**Dimensions breakdown (per-token proposal):**
+- Move 0–3: 6 dims each (base_power, accuracy, PP, type_idx, category, disabled) → expand each move block to 6 + 4 type-eff + 1 recharge + 1 self-KO + 1 priority + 1 inflicted-status = **14 dims per move**
+- Alternative (cleaner): move features stay at 6 dims, append [type-eff × 4, effect-flags × 3] to every token → **65 base + 12 volatiles + 4 type-eff + 3 effect-flags = 84 dims per token**
+
+**Final proposal (method B, less disruptive to move indexing):**
+- Dims 0–64: v1 (unchanged)
+- Dims 65–76: v2 boosts/volatiles (unchanged)
+- Dims 77–80: type-effectiveness (4 moves × 1 dim each, not per move)
+- Dims 81–83: move effect flags (packed as 3 separate bits: recharge, self-KO, priority)
+- Dim 84: inflicted-status ID (0–5, same as existing status enum, or a "carry" flag for status moves)
+- Dim 85: Sleep Clause flag (1 = active opponent has sleeping Pokémon)
+- **Total per token: 86 dims; full obs: (12, 86)**
+
+Keep dims 0–76 byte-identical to v2 for cross-schema eval slicing (`slice_structured_obs`); all new info is dims 77–85. BC data and ladder evals can slice to v2 for A/B vs the current best.
+
+### Files to Modify
+| File | Change |
+|------|--------|
+| `sim/tools/feature-extractor.ts` | `TOKEN_DIM_V3 = 86`; `extractFeaturesStructured(volatiles, v3Info)` new param; fill type-eff (lookup table indexed by [own-move-type, opp-type]), effect-flags (parse move object), inflicted-status from move data |
+| `sim/tools/pokemon-gym.ts` | Sleep Clause tracker from public log lines (`|-status|...slp` / `|-curestatus|` / `|faint|` on revealed opponent mons; exclude `[from] move: Rest`); NOT reset on switch — sleep persists on the bench. `obsMode: 'structured-v3'` |
+| `sim/tools/replay-adapter.ts` | Regenerate BC trajectory data with v3; same adapter output schema (obs + action + done) but now obs is (12, 86) instead of (12, 77) |
+| `models/gym_bridge.js` | `--obs-v3` flag; serialize 1032-element flat array (12 × 86) |
+| `models/gym_client.py` / `models/vec_gym_client.py` | `obs_v3=` (reshape to (12, 86)), `set_obs_version()` for pool mixing |
+| `models/bc_pretrain_mlp.py` | Accept v3 trajectory shards; verify input shape (924 → 1032); report per-format validation accuracy |
+| `models/ppo/train.py` | `--obs-v3` flag; `--obs-size` auto-inferred; checkpoints → `checkpoints/v3/` |
+| `models/evaluate.py` | `--obs-v3`; v3-vs-v2 head-to-head slicing (both obs versions from same forward pass via `slice_structured_obs`) |
+| `models/mcts/mcts_agent.py` | v3-compatible (obs shape already parameterized; no changes needed if gym_client handles reshaping) |
+| `tools/ladder-bot/ladder-bot.js` | Forward `--obs-v3` to bridge; no protocol changes needed |
+| `test/tools/gym.test.js` | v3 shape (1032), v2-prefix byte-equality, type-eff values (known matchups incl. 4x/0.25x/immune), Sleep Clause state tracking (incl. Rest exclusion, faint clearing), full-battle v3 stability |
+
+### Implementation Strategy (6 phases, parallelizable after Phase 0)
+
+**Phase 0 (prerequisite):** Spec exact feature set; enumerate gen1 type chart (15×15); validate move-effect-flag mapping vs dex.
+
+**Phase 1 (parallel):**
+- **1A:** Feature-extractor logic (`sim/tools/feature-extractor.ts`) — type-eff lookup, move-effect flags, Sleep Clause signal; tests
+- **1B:** Gym tracker updates (`sim/tools/pokemon-gym.ts`) — Sleep Clause state, obsMode 'structured-v3'; tests
+
+**Phase 2 (after 1A+1B, parallel):**
+- **2A:** Bridge/gym-client plumbing (`gym_bridge.js`, `gym_client.py`, `vec_gym_client.py`) — `--obs-v3` serialization, reshaping, pool mixing
+- **2B:** Replay-adapter regeneration (`sim/tools/replay-adapter.ts`, `models/replay_adapter_cli.js`) — one-time batch run on existing logs; output to `data/replay_trajs/v3/` (or overwrite v2 shards after spot-check)
+
+**Phase 3 (after 2A+2B):** Trainer wiring (`models/ppo/train.py`, `models/bc_pretrain_mlp.py`, `models/evaluate.py`, `models/infer_server.py`); smokes
+
+**Phase 4:** BC pretrain on v3 data — typically 2h at the MLP recipe
+
+**Phase 5:** PPO fine-tune (5M steps, opponent-mix recipe) — typically 2h at 8 envs
+
+**Phase 6:** Ladder criterion run (≥100 games for Glicko stability)
+
+### Pre-Registered Success Criteria
+
+**Criterion A (hard gate — must pass):** v3 produces a valid observation shape at every decision point (smoke tests); no NaN/inf in type-eff or dims; Sleep Clause flag toggles correctly.
+
+**Criterion B (bot evals — cheap gates before ladder spend):**
+- v3 bot-trained PPO + tuned MCTS vs Random: ≥ 80% (target: within 10pp of current 90.6%), OR
+- v3 bot-trained vs DamageFirst: ≥ 65% (within 10pp of current 79.2%), OR
+- No regression if either is missed — if v3 hits 70–80% range vs both, proceed to ladder
+
+**Criterion C (ladder — the true test):**
+- Ladder run: ≥ 100 consecutive rated games, ≤2s per move, zero crashes
+- GXE after 100 games: "clearly above" the M6 floor (23.9% ± 35 = [−11%, 59%]; Glicko-1 ± 37). Operationally: if GXE ≥ 35%, strong signal of improvement; 25–34%, noise band; < 25%, slight regression. Pre-commit: *a 100-game run that lands in the 25–35% band is inconclusive, not a win or loss*. Only GXE ≥ 35% counts as a clear win; < 25% counts as clear regression.
+- Conditional: if bot evals show no regression (Criterion B met), ladder run is mandatory regardless of bot numbers (rules understanding may not show in 500-battle evals vs deterministic heuristics).
+
+**Contingency:** if v3 lands in the 25–35% band (inconclusive) after 100 games, one optional 50-game follow-up before deciding next steps.
+
+### Cautionary Reading
+
+Schema v2 (boosts/volatiles) was a wash in bot evals and a statistical peer under search. The difference here: v2 added state *rarely needed* vs bots (boosts help but Amnesia/Swords Dance aren't on every randbat; volatiles even rarer). v3 adds type effectiveness — the single most frequent decision rule in any Pokemon game, across all levels. If v3 doesn't clear the bars, the binding constraint is not obs richness but something deeper (model capacity, reward signal, data quality, search depth, or inherent randbats luck variance).
+
+### Unblocks
+
+M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value targets, or opponent-pool diversity experiments.
+
+---
+
 ## Architecture Reference
 
 ```
@@ -1328,4 +1426,5 @@ Best action
 | M4: MCTS | ✅ | **Positive result** — determinized UCT beats the raw policy 60.2% h2h, +11pp vs DamageFirst, 88ms/move | M5, M6 |
 | M5: Opponent Modeling | ✅ | Thesis negative (head sampler = policy sampler, −2.2pp); side finding: **new best agent** — M5 ckpt + policy-sampler MCTS 72.6% DF / 86.0% R | M6 |
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
-| M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | obs v3 case |
+| M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
+| M7: Observation Schema v3 | 🟡 | **Pending** — type effectiveness, move-effect flags, Sleep Clause, species/stats info; aims to fix observed ladder blunders | — |

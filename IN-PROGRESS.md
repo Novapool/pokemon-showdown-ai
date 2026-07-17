@@ -6,15 +6,15 @@ Last updated: 2026-07-17
 
 ## Current Work
 
-**M6 (Server Integration & Ladder) — ✅ COMPLETE 2026-07-17.** All three
-criteria met: 100/100 clean rated battles on the official ladder (MCTS
-config, ≤579ms/move), **Elo 1017 / GXE 23.9%** — the agent sits at the
-bottom of the human ladder despite dominating every project bot (external
-measurement delivered; the bot-relative ledger overstates absolute
-strength). Full results + qualitative failure analysis in
-`MILESTONES.md` → M6. **Next-milestone candidate: obs schema v3**
-(type effectiveness, base stats/species, move-effect flags, Sleep Clause —
-the ladder-observed blunders all trace to missing obs features).
+**M7 (Observation Schema v3) — 🟡 SCOPED 2026-07-17.** Addresses M6's failure
+analysis: type effectiveness, move-effect flags, Sleep Clause signal, and
+species/base-stats info. The observation schema has never been the bottleneck
+before (parallel training, MCTS, BC, opponent modeling all helped), but the
+rules omitted this time are ones humans apply *every* game. 6 phases,
+~6–8 hours total (phases 0–3 build, then 2h BC pretrain + 2h fine-tune +
+≥100-game ladder run). Pre-registered criteria (bot evals + ladder Glicko
+stability) avoid overfitting to project bots. **Awaiting orchestrator
+plan** — full spec in `MILESTONES.md` → M7.
 
 **Previous: M5.5 (Human Replay Data + BC for the MLP) — ✅ COMPLETE
 2026-07-16. POSITIVE RESULT, NEW BEST AGENT** (bcft final + tuned MCTS:
@@ -871,31 +871,49 @@ None. All components verified and working.
 
 ## Next Steps
 
-### M2 — Structured State
-✅ Complete and verified (51% win rate vs RandomPlayerAI, 500 battles). Nothing left here.
+### M7 — Observation Schema v3
+🟡 **Scoped, awaiting orchestrator plan (2026-07-17).**
 
-### M3 — Transformer + PPO
-✅ **Complete — negative result (2026-07-13).** Two full training runs (from-scratch 2.6M steps, warm-started up to 7.6M steps, plus a stability-fixed warm-started retrain to 5M steps) and ~40 evaluated checkpoints all agree: transformer PPO tops out at **46%** win rate vs RandomPlayerAI, never beating (or sustainably matching) the M2 MLP-PPO baseline's **51%**. Continued PPO fine-tuning degrades performance from its early/BC-pretrained peak rather than improving it. See "Recently Completed" for the full diagnostic trail. Nothing left to run here — this is the final M3 result.
+Full specification in `MILESTONES.md` → M7. **Quick summary:**
+- **Phases 0–3 (code):** Spec feature set (type-eff lookup, move-effect flags, Sleep Clause), implement in feature-extractor + gym, wire through bridge/trainer/eval (~2–3h)
+- **Phase 4 (BC pretrain):** Regenerate replay trajectories with v3, train BC on new data (~2h)
+- **Phase 5 (fine-tune):** PPO 5M-step warm-start from BC checkpoint, opponent-mix recipe (~2h)
+- **Phase 6 (ladder):** ≥100-game criterion run on official ladder for Glicko-2 stability (~2–4h wall-clock, depends on queue)
 
-### M3.1 / M3.2 — Complete
-✅ Both done (2026-07-14). `--num-envs 8` is the default everywhere; **the project architecture is MLP-PPO** (M3.2 decision — transformer retired after the fixes-run confirmed its ceiling is the BC policy).
+**Success criteria (pre-registered):**
+- **Criterion A (hard gate):** v3 obs valid shape, no NaN/inf, Sleep Clause flag toggles
+- **Criterion B (bot evals):** ≥80% vs Random with MCTS (vs current 90.6%), OR ≥65% vs DamageFirst (vs current 79.2%), OR no regression in either → proceed to ladder
+- **Criterion C (ladder):** ≥100 games, GXE ≥35% is a clear win (M6 floor 23.9%); 25–35% is inconclusive; <25% is regression
 
-### M5 — Complete
-✅ Done (2026-07-16). Thesis negative (head sampler = policy sampler under
-search); side finding: **new best agent = tuned MCTS (policy sampler) over
-`models/ppo/checkpoints/opp/ppo_step_5000001_final.pt`** (72.6% DF / 86.0% R).
-Verdict + reading in `MILESTONES.md` → M5.
+**Cautionary note:** v2 (boosts/volatiles) was a wash. v3 adds type effectiveness — the most frequent rule humans apply, but if it doesn't move the ladder despite strong bot evals, the binding constraint is somewhere else (model capacity, reward signal, randbats luck variance).
 
-### Immediate (post-M5)
-1. ~~**Post-run cleanup pass**~~ — ✅ done 2026-07-16 (all 5 code-simplifier
-   findings from the `ffd14e275` review applied; details in Active Tasks
-   above).
-2. **M6 (server integration & ladder)** — ship the M5 checkpoint with tuned
-   policy-sampler MCTS (~60ms/move, well inside M6's 2s budget); optionally
-   ladder-A/B vs the v2 control checkpoint.
-3. Longer term (unchanged): AlphaZero-style fine-tuning on MCTS-played games
-   (MILESTONES → M4 "Unblocks") — now with a stronger search agent to
-   generate data.
+---
+
+### Previously Completed Milestones
+
+#### M6 — Server Integration & Ladder
+✅ **Complete 2026-07-17.** All three criteria met: 100/100 clean rated battles on the official ladder (MCTS config, ≤579ms/move), **Elo 1017 / GXE 23.9%** — the agent sits at the bottom of the human ladder despite dominating every project bot (external measurement delivered; the bot-relative ledger overstates absolute strength). Full results + qualitative failure analysis in `MILESTONES.md` → M6.
+
+#### M5.5 — Human Replay Data + BC for the MLP
+✅ **Complete 2026-07-16 — POSITIVE RESULT, NEW BEST AGENT.** BC on human replays → anchored PPO fine-tune → tuned MCTS = **90.6% (453/500) vs Random / 79.2% (396/500) vs DamageFirst** (prior best 86.0%/72.6%). Checkpoint: `models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt`. See `MILESTONES.md` → M5.5.
+
+#### M5 — Opponent Modeling Head
+✅ **Complete 2026-07-16 — THESIS NEGATIVE, NEW-BEST SIDE FINDING.** Sampling opponent's action from the trained prediction head adds nothing over the policy sampler under tuned MCTS (−2.2pp vs DamageFirst, parity). But the run produced the project's best agent: M5 checkpoint under policy-sampler MCTS at 72.6%/86.0%. See `MILESTONES.md` → M5.
+
+#### M4 — MCTS Integration
+✅ **Complete 2026-07-15 — POSITIVE RESULT.** Determinized UCT beats the raw policy 60.2% h2h (seat-balanced), +11pp vs DamageFirst, 88ms/move (4 of 5 criteria ✅). Knob sweep post-M4 raised tuned MCTS to **81.2% Random / 67.2% DamageFirst** (vs 100/sims default 66%/56.5%). See `MILESTONES.md` → M4.
+
+#### M3.1 / M3.2 / M3.3 / M3.4
+✅ **All complete 2026-07-15.** M3 (transformer) was negative; M3.1 parallelized training; M3.2 retired the transformer (MLP-PPO is the architecture); M3.3 self-play fixed training stability; M3.4 obs schema v2 + opponent mix were both washes. See `MILESTONES.md` → M3–M3.4 and "Recently Completed" above for full detail.
+
+#### M2.5 — Behavior Cloning Pretraining
+✅ **Complete 2026-07-02.** Scraped and adapted 119k gen1ou + 20k+ high-Elo gen1randombattle human games. BC achieved 50.5% top-1 accuracy vs ~11% chance. See `MILESTONES.md` → M2.5.
+
+#### M2 — Structured State Representation
+✅ **Complete and verified (51% win rate vs RandomPlayerAI, 500 battles). Nothing left here.**
+
+#### M1 & M0
+✅ Complete. Foundation and environment + baselines working.
 
 ### Stretch (deprioritized)
 - Attention weight visualization to confirm non-uniform attention
