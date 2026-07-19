@@ -10,6 +10,21 @@
 
 import { Dex } from '..';
 import type { ChoiceRequest, MoveRequest, SwitchRequest, PokemonSwitchRequestData, MoveRequestData } from '../side';
+import {
+	TOKEN_DIM_V3,
+	V3_TYPE_EFF,
+	V3_MOVE_SLOTS,
+	V3_FLAG_RECHARGE,
+	V3_FLAG_SELFKO,
+	V3_FLAG_PRIORITY,
+	V3_INFLICTED_STATUS,
+	V3_SLEEP_CLAUSE,
+	MOVE_STATUS_ID_MAX,
+	typeEffDim,
+	getMoveEffectFlags,
+} from './type-chart-v3';
+
+export { TOKEN_DIM_V3 } from './type-chart-v3';
 
 export const OBS_SIZE = 100;
 
@@ -460,6 +475,96 @@ export interface OpponentPokemonInfo {
 	moves: string[];
 }
 
+// ---- Schema v3 (M7) ---------------------------------------------------------
+//
+// v3 appends dims 77–85 to every token; dims 0–76 stay byte-identical to v2.
+// The lookups/encoders live in type-chart-v3.ts (Job 0.1) — this file only
+// places their outputs. Per-slot type effectiveness (77–80) is that token's
+// move set vs the OPPONENT ACTIVE Pokémon's type(s); effect flags (81–83) and
+// inflicted-status (84) are aggregated over the token's ≤4 moves; the Sleep
+// Clause flag (85) is a global battle signal fed by the gym tracker (Job 1.2)
+// and is placed identically on every token.
+
+/**
+ * v3 information supplied by the gym (Job 1.2's `structured-v3` obsMode).
+ * Currently just the Sleep Clause flag — everything else in dims 77–84 is
+ * derived from move/species data the extractor already has. Passing this
+ * (even with `sleepClause: false`) is what selects the 86-dim v3 schema.
+ */
+export interface V3Info {
+	/** 1 while an opponent Pokémon WE put to sleep is still asleep (bench-persistent). */
+	sleepClause: boolean;
+}
+
+/** Internal per-call v3 context threaded into token filling. */
+interface V3FillContext {
+	/** Opponent active Pokémon's type(s) — the defender for dims 77–80. */
+	defenderTypes: string[];
+}
+
+/**
+ * Fill dims 77–84 for one token from its move set. Dim 85 (Sleep Clause) is set
+ * separately across all tokens. Empty move slots encode type-eff 0.0 (shared
+ * with 0x immunity — documented, disambiguated by the existing PP/disabled dims).
+ * All values are bounded in [0, 1]; unknown moves/types degrade to safe defaults.
+ */
+function fillV3MoveDims(
+	obs: Float32Array,
+	offset: number,
+	moves: TokenMoveInput[],
+	ctx: V3FillContext,
+): void {
+	const dex = Dex.mod('gen1');
+	let anyRecharge = false;
+	let anySelfKO = false;
+	let anyPriority = false;
+	let statusId = 0;
+
+	for (let i = 0; i < V3_MOVE_SLOTS; i++) {
+		const move = moves[i];
+		if (!move) {
+			obs[offset + V3_TYPE_EFF + i] = 0.0;
+			continue;
+		}
+
+		let moveType = '';
+		try {
+			const moveInfo = dex.moves.get(move.id);
+			if (moveInfo.exists) moveType = moveInfo.type;
+		} catch {
+			// leave moveType empty -> type-eff 0.0
+		}
+		obs[offset + V3_TYPE_EFF + i] = (moveType && ctx.defenderTypes.length > 0) ?
+			typeEffDim(moveType, ctx.defenderTypes) : 0.0;
+
+		const flags = getMoveEffectFlags(move.id);
+		if (flags.recharge) anyRecharge = true;
+		if (flags.selfKO) anySelfKO = true;
+		if (flags.priority) anyPriority = true;
+		if (statusId === 0 && flags.inflictedStatusId > 0) statusId = flags.inflictedStatusId;
+	}
+
+	obs[offset + V3_FLAG_RECHARGE] = anyRecharge ? 1.0 : 0.0;
+	obs[offset + V3_FLAG_SELFKO] = anySelfKO ? 1.0 : 0.0;
+	obs[offset + V3_FLAG_PRIORITY] = anyPriority ? 1.0 : 0.0;
+	// Normalise the 0–6 status id into [0, 1] to match every other dim's scale.
+	obs[offset + V3_INFLICTED_STATUS] = statusId / MOVE_STATUS_ID_MAX;
+}
+
+/** Resolve the opponent active Pokémon's gen1 type(s) for the type-eff defender. */
+function opponentActiveTypes(opponent: OpponentPokemonInfo[]): string[] {
+	const active = opponent.find(p => p.active);
+	if (!active) return [];
+	const speciesName = active.details.split(',')[0].trim();
+	try {
+		const speciesInfo = Dex.mod('gen1').species.get(speciesName);
+		if (speciesInfo.exists && speciesInfo.types.length > 0) return speciesInfo.types;
+	} catch {
+		// fall through to empty
+	}
+	return [];
+}
+
 function fillUnknownToken(obs: Float32Array, offset: number): void {
 	// Unrevealed opponent bench: assumed full HP, everything else zero.
 	// Do NOT use an all-zero vector — that would be indistinguishable from
@@ -479,6 +584,7 @@ function fillPokemonToken(
 	condition: string,
 	active: boolean,
 	moves: TokenMoveInput[],
+	v3ctx?: V3FillContext,
 ): void {
 	if (parseHpRatio(condition) <= 0) {
 		fillFaintedToken(obs, offset);
@@ -535,24 +641,32 @@ function fillPokemonToken(
 		obs[base + 4] = catIdx / 2;
 		obs[base + 5] = move.disabled ? 1.0 : 0.0;
 	}
+
+	if (v3ctx) fillV3MoveDims(obs, offset, moves, v3ctx);
 }
 
-function fillOwnBenchToken(obs: Float32Array, offset: number, poke: PokemonSwitchRequestData): void {
+function fillOwnBenchToken(
+	obs: Float32Array, offset: number, poke: PokemonSwitchRequestData, v3ctx?: V3FillContext
+): void {
 	// Bench Pokémon only expose choosable move ids (no live PP/disabled info).
 	const moves: TokenMoveInput[] = (poke.moves || []).slice(0, 4).map(id => ({ id }));
-	fillPokemonToken(obs, offset, poke.details, poke.condition, false, moves);
+	fillPokemonToken(obs, offset, poke.details, poke.condition, false, moves, v3ctx);
 }
 
-function fillOpponentToken(obs: Float32Array, offset: number, info: OpponentPokemonInfo): void {
+function fillOpponentToken(
+	obs: Float32Array, offset: number, info: OpponentPokemonInfo, v3ctx?: V3FillContext
+): void {
 	const moves: TokenMoveInput[] = info.moves.slice(0, 4).map(id => ({ id }));
-	fillPokemonToken(obs, offset, info.details, info.condition, info.active, moves);
+	fillPokemonToken(obs, offset, info.details, info.condition, info.active, moves, v3ctx);
 }
 
-function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[], tokenDim: number): void {
+function fillOpponentTokens(
+	obs: Float32Array, opponent: OpponentPokemonInfo[], tokenDim: number, v3ctx?: V3FillContext
+): void {
 	const activeOffset = 6 * tokenDim;
 	const active = opponent.find(p => p.active);
 	if (active) {
-		fillOpponentToken(obs, activeOffset, active);
+		fillOpponentToken(obs, activeOffset, active, v3ctx);
 	} else {
 		// Between switch resolution and the next reveal there's a brief window
 		// with no known active opponent — fall back to unknown rather than crash.
@@ -563,7 +677,7 @@ function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[], 
 	for (let j = 0; j < 5; j++) {
 		const offset = (7 + j) * tokenDim;
 		if (j < bench.length) {
-			fillOpponentToken(obs, offset, bench[j]);
+			fillOpponentToken(obs, offset, bench[j], v3ctx);
 		} else {
 			fillUnknownToken(obs, offset);
 		}
@@ -585,18 +699,29 @@ function fillOpponentTokens(obs: Float32Array, opponent: OpponentPokemonInfo[], 
  * Passing `volatiles` (M3.4) switches to schema v2: 77-dim tokens whose first
  * 65 dims are identical to v1, with boost stages and volatile-condition flags
  * appended on the two active tokens ([0] own, [6] opponent).
+ *
+ * Passing `v3Info` (M7) switches to schema v3: 86-dim tokens whose first 77 dims
+ * are byte-identical to v2 (so `volatiles` must be supplied alongside `v3Info`
+ * for a full v2-parity prefix), with dims 77–85 appended to every token:
+ * per-move-slot type effectiveness vs the opponent active (77–80), aggregated
+ * recharge/self-KO/priority flags (81–83), inflicted-status id (84), and the
+ * global Sleep Clause flag (85). Dims 0–76 are never altered by the v3 path.
  */
 export function extractFeaturesStructured(
 	request: ChoiceRequest,
 	opponent: OpponentPokemonInfo[],
 	volatiles?: { own: ActiveVolatiles, opp: ActiveVolatiles } | null,
+	v3Info?: V3Info | null,
 ): Float32Array {
-	const tokenDim = volatiles ? TOKEN_DIM_V2 : TOKEN_DIM;
+	const tokenDim = v3Info ? TOKEN_DIM_V3 : (volatiles ? TOKEN_DIM_V2 : TOKEN_DIM);
 	const obs = new Float32Array(N_TOKENS * tokenDim);
+	const v3ctx: V3FillContext | undefined = v3Info ?
+		{ defenderTypes: opponentActiveTypes(opponent) } : undefined;
 
 	if (request.wait || request.teamPreview) {
-		fillOpponentTokens(obs, opponent, tokenDim);
+		fillOpponentTokens(obs, opponent, tokenDim, v3ctx);
 		if (volatiles) fillVolatileDims(obs, 6 * tokenDim, volatiles.opp);
+		if (v3Info) fillSleepClause(obs, tokenDim, v3Info);
 		return obs;
 	}
 
@@ -605,7 +730,7 @@ export function extractFeaturesStructured(
 
 	if (ownActive) {
 		if (isSwitchRequest(request)) {
-			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, []);
+			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, [], v3ctx);
 		} else if (isMoveRequest(request)) {
 			const activeMoveData = request.active[0];
 			const moves: TokenMoveInput[] = activeMoveData ?
@@ -613,7 +738,7 @@ export function extractFeaturesStructured(
 					{ id: m.id, pp: m.pp, maxpp: m.maxpp, disabled: !!m.disabled }
 				)) :
 				[];
-			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, moves);
+			fillPokemonToken(obs, 0, ownActive.details, ownActive.condition, true, moves, v3ctx);
 		}
 	}
 
@@ -624,15 +749,29 @@ export function extractFeaturesStructured(
 			fillFaintedToken(obs, offset);
 			continue;
 		}
-		fillOwnBenchToken(obs, offset, poke);
+		fillOwnBenchToken(obs, offset, poke, v3ctx);
 	}
 
-	fillOpponentTokens(obs, opponent, tokenDim);
+	fillOpponentTokens(obs, opponent, tokenDim, v3ctx);
 
 	if (volatiles) {
 		fillVolatileDims(obs, 0, volatiles.own);
 		fillVolatileDims(obs, 6 * tokenDim, volatiles.opp);
 	}
 
+	if (v3Info) fillSleepClause(obs, tokenDim, v3Info);
+
 	return obs;
+}
+
+/**
+ * Place the global Sleep Clause flag (dim 85) identically on every token — a
+ * battle-wide signal, so token-pooling models see it regardless of which token
+ * they attend to. No-op unless v3.
+ */
+function fillSleepClause(obs: Float32Array, tokenDim: number, v3Info: V3Info): void {
+	const value = v3Info.sleepClause ? 1.0 : 0.0;
+	for (let t = 0; t < N_TOKENS; t++) {
+		obs[t * tokenDim + V3_SLEEP_CLAUSE] = value;
+	}
 }

@@ -7,7 +7,7 @@
  * logs in, queues on the ladder (or challenges/accepts), and plays battles by
  * reusing the exact live-gym code path:
  *   |request| JSON  +  public log lines -> ObservationTrackers
- *       -> extractFeaturesStructured (v2)  -> obs
+ *       -> extractFeaturesStructured (v1/v2/v3, per checkpoint obs_size) -> obs
  *   validActionsForRequest(request)        -> mask
  *   models/infer_server.py (PPO checkpoint, stdio)  -> action
  *   actionToChoice(action)                 -> /choose string
@@ -229,10 +229,14 @@ class BattleRoom {
 		const mask = validActionsForRequest(request);
 		if (!mask.some(m => m)) return; // nothing legal (wait-like) — server decides
 
+		// v2 and v3 both need the appended volatile dims; v3 additionally needs
+		// the Sleep Clause flag (its dim 85), both read from the public-log
+		// trackers exactly as the live gym does.
 		const obs = extractFeaturesStructured(
 			request,
 			this.trackers.opponentInfoFor(this.seat),
-			this.bot.obsV2 ? this.trackers.volatilesFor(this.seat) : null,
+			(this.bot.obsV2 || this.bot.obsV3) ? this.trackers.volatilesFor(this.seat) : null,
+			this.bot.obsV3 ? { sleepClause: this.trackers.sleepClauseFlagFor(this.seat) === 1 } : undefined,
 		);
 		let action;
 		try {
@@ -246,7 +250,7 @@ class BattleRoom {
 					request,
 					trackers: this.trackers.snapshot(),
 					turn: this.turn,
-					obs_mode: this.bot.obsV2 ? 'structured-v2' : 'structured',
+					obs_mode: this.bot.obsV3 ? 'structured-v3' : this.bot.obsV2 ? 'structured-v2' : 'structured',
 				});
 				action = resp.action;
 				if (resp.sims > 0) this.searched++;
@@ -311,7 +315,8 @@ class LadderBot {
 		this.searching = false;
 		this.loggedIn = false;
 		this.infer = new InferServer(args);
-		this.obsV2 = null;     // set after ping
+		this.obsV2 = null;     // set after ping (schema inferred from checkpoint obs_size)
+		this.obsV3 = null;     // set after ping (M7: (12,86) schema-v3 checkpoint)
 		this.mctsReady = false; // set after ping (--mcts requested AND server confirms)
 	}
 
@@ -323,12 +328,14 @@ class LadderBot {
 	async start() {
 		const pong = await this.infer.ping();
 		const obsSize = pong.obs_size;
+		this.obsV3 = obsSize === 12 * 86;
 		this.obsV2 = obsSize === 12 * 77;
-		if (!this.obsV2 && obsSize !== 12 * 65) {
-			throw new Error(`unsupported checkpoint obs_size ${obsSize} (need 780 or 924)`);
+		if (!this.obsV3 && !this.obsV2 && obsSize !== 12 * 65) {
+			throw new Error(`unsupported checkpoint obs_size ${obsSize} (need 780, 924, or 1032)`);
 		}
+		const schema = this.obsV3 ? 'v3' : this.obsV2 ? 'v2' : 'v1';
 		this.mctsReady = this.args.mcts && !!pong.mcts;
-		console.log(`inference ready: obs_size=${obsSize} (${this.obsV2 ? 'v2' : 'v1'} schema)` +
+		console.log(`inference ready: obs_size=${obsSize} (${schema} schema)` +
 			(this.mctsReady ? `, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
 				`c_puct=${this.args.cPuct})` : ''));
 

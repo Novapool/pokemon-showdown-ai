@@ -20,11 +20,12 @@
 const assert = require('../assert');
 const { ReplayAdapter } = require('../../dist/sim/tools/replay-adapter');
 const { PokemonGymEnv } = require('../../dist/sim/tools/pokemon-gym');
-const { TOKEN_DIM_V2 } = require('../../dist/sim/tools/feature-extractor');
+const { TOKEN_DIM_V2, TOKEN_DIM_V3 } = require('../../dist/sim/tools/feature-extractor');
 const { Dex } = require('../../dist/sim');
 
 const dex = Dex.mod('gen1');
 const T = TOKEN_DIM_V2; // 77
+const T3 = TOKEN_DIM_V3; // 86
 
 function randomValidAction(mask, rng) {
 	const legal = [];
@@ -67,11 +68,13 @@ async function playGymBattle(seed) {
 describe('ReplayAdapter', function () {
 	this.timeout(120000);
 
-	let parsed, obsByTurn;
+	let parsed, obsByTurn, battleLog, parsedV3;
 	before(async () => {
 		const battle = await playGymBattle([21, 22, 23, 24]);
 		obsByTurn = battle.obsByTurn;
+		battleLog = battle.log;
 		parsed = new ReplayAdapter().parse(battle.log);
+		parsedV3 = new ReplayAdapter('v3').parse(battle.log);
 	});
 
 	it('parses a gym-generated omniscient log into two non-empty trajectories', () => {
@@ -206,5 +209,53 @@ describe('ReplayAdapter', function () {
 		assert.equal(result.p1.decisions[1].resolved, 'chansey');
 		// p2's turn-1 decision should cross-link with p1's
 		assert.equal(result.p2.decisions[0].oppAction, 0);
+	});
+
+	describe('v3 schema (M7)', () => {
+		it('emits (12, 86) observations with no NaN/inf', () => {
+			assert(parsedV3, 'v3 parse returned null');
+			assert(parsedV3.p1.decisions.length > 0, 'v3 p1 trajectory empty');
+			assert(parsedV3.p2.decisions.length > 0, 'v3 p2 trajectory empty');
+			for (const traj of [parsedV3.p1, parsedV3.p2]) {
+				for (const dec of traj.decisions) {
+					assert.equal(dec.obs.length, 12 * T3);
+					assert([...dec.obs].every(v => Number.isFinite(v)), 'v3 obs contains NaN/inf');
+				}
+			}
+		});
+
+		it('keeps dims 0-76 byte-identical to the v2 parse of the same log (per-token prefix parity)', () => {
+			let compared = 0;
+			for (const seat of ['p1', 'p2']) {
+				const v2decs = parsed[seat].decisions;
+				const v3decs = parsedV3[seat].decisions;
+				assert.equal(v2decs.length, v3decs.length, `${seat} decision count differs between v2/v3 parses`);
+				for (let d = 0; d < v2decs.length; d++) {
+					const v2obs = v2decs[d].obs;
+					const v3obs = v3decs[d].obs;
+					for (let tok = 0; tok < 12; tok++) {
+						for (let i = 0; i < T; i++) {
+							assert.equal(v3obs[tok * T3 + i], v2obs[tok * T + i],
+								`${seat} dec ${d} token ${tok} dim ${i} mismatch (v3 vs v2)`);
+						}
+					}
+					compared++;
+				}
+			}
+			assert(compared >= 10, `only ${compared} decisions compared`);
+		});
+
+		it('sets dims 77-85 within [0, 1] on every token', () => {
+			for (const traj of [parsedV3.p1, parsedV3.p2]) {
+				for (const dec of traj.decisions) {
+					for (let tok = 0; tok < 12; tok++) {
+						for (let i = 77; i < T3; i++) {
+							const v = dec.obs[tok * T3 + i];
+							assert(v >= 0 && v <= 1, `dim ${i} of token ${tok} out of [0,1]: ${v}`);
+						}
+					}
+				}
+			}
+		});
 	});
 });

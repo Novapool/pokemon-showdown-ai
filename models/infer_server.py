@@ -12,7 +12,7 @@ Protocol (one JSON object per line):
   in : {"cmd": "act_tracked", "obs": [...], "mask": [...],
         "formatid": "gen1randombattle", "seat": "p1"|"p2",
         "request": <move request JSON>, "trackers": <TrackerSnapshot>,
-        "turn": <int>, "obs_mode": "structured-v2"|"structured"}
+        "turn": <int>, "obs_mode": "structured-v3"|"structured-v2"|"structured"}
   out: {"action": <int 0-8>, "sims": <int>, "fallback": <str?>}
        (M6 P2 — only in --mcts mode: determinized UCT over a battle
         reconstructed from the client's request + tracker snapshot via the
@@ -25,6 +25,11 @@ Usage: python models/infer_server.py --checkpoint <path> [--device cpu]
            [--mcts] [--sims 100] [--determinizations 1] [--c-puct 0.5]
 Action selection matches evaluate.py: PPOAgent.act() (masked policy sampling)
 for "act"; MCTSAgent with the tuned defaults for "act_tracked" under --mcts.
+
+Obs schema is inferred from the checkpoint: obs_size comes straight from the
+loaded PPOAgent's hparams (780 v1 / 924 v2 / 1032 v3, M7), and act/act_tracked
+validate/pass the obs at whatever width the checkpoint expects — no per-schema
+code path here. The ladder client picks the matching obs_mode string.
 """
 
 import argparse

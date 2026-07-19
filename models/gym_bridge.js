@@ -27,7 +27,9 @@
  * to 780 floats. Pass --flat on the command line to fall back to the legacy
  * 100-dim extractFeatures() vector (M1 MLP baseline regression checks), or
  * --obs-v2 (M3.4) for the (12, 77) schema-v2 observation (boost stages +
- * volatile flags) flattened to 924 floats.
+ * volatile flags) flattened to 924 floats, or --obs-v3 (M7) for the (12, 86)
+ * schema-v3 observation (type effectiveness, move-effect flags, Sleep Clause
+ * signal) flattened to 1032 floats.
  *
  * Opponent selection (M3.3):
  *   --opponent random|damagefirst   picks the built-in p2 AI (default random)
@@ -76,11 +78,12 @@ const { BattleSim } = require('../dist/sim/tools/battle-sim');
 
 const flat = process.argv.includes('--flat');
 const obsV2 = process.argv.includes('--obs-v2');
-if (flat && obsV2) {
-	process.stdout.write(JSON.stringify({ error: '--flat and --obs-v2 are mutually exclusive' }) + '\n');
+const obsV3 = process.argv.includes('--obs-v3');
+if ((flat && obsV2) || (flat && obsV3) || (obsV2 && obsV3)) {
+	process.stdout.write(JSON.stringify({ error: '--flat, --obs-v2, and --obs-v3 are mutually exclusive' }) + '\n');
 	process.exit(1);
 }
-const obsMode = flat ? 'flat' : (obsV2 ? 'structured-v2' : 'structured');
+const obsMode = flat ? 'flat' : (obsV3 ? 'structured-v3' : (obsV2 ? 'structured-v2' : 'structured'));
 const selfplay = process.argv.includes('--selfplay');
 const opponentArgIdx = process.argv.indexOf('--opponent');
 const defaultOpponent = selfplay

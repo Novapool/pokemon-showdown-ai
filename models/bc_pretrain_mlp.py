@@ -49,6 +49,7 @@ sys.path.insert(0, str(MODELS_DIR / "ppo"))
 from ppo_agent import PPOAgent  # noqa: E402
 
 OBS_V2_SIZE = 12 * 77  # flattened schema-v2 observation
+OBS_V3_SIZE = 12 * 86  # flattened schema-v3 observation (M7)
 SHUFFLE_BUFFER = 50_000
 LOG_EVERY = 200  # batches
 
@@ -199,7 +200,13 @@ def main() -> None:
     parser.add_argument("--formats", default="gen1randombattle,gen1ou")
     parser.add_argument("--format-weights", default=None,
                         help='per-format sampling weights, e.g. "gen1randombattle=0.6,gen1ou=0.4"')
-    parser.add_argument("--traj-dir", default="data/replay_trajs")
+    parser.add_argument("--obs-v3", action="store_true",
+                        help="M7: train on the (12,86)->1032 schema-v3 shards "
+                             "(type effectiveness, move-effect flags, Sleep "
+                             "Clause). Defaults --traj-dir to data/replay_trajs/v3.")
+    parser.add_argument("--traj-dir", default=None,
+                        help="trajectory-shard root (default: data/replay_trajs, "
+                             "or data/replay_trajs/v3 with --obs-v3)")
     parser.add_argument("--min-rating", type=int, default=1300)
     parser.add_argument("--no-tournaments", action="store_true",
                         help="drop unrated tournament games instead of keeping them")
@@ -220,11 +227,14 @@ def main() -> None:
     parser.add_argument("--device", default=None, choices=[None, "cpu", "mps", "cuda"])
     args = parser.parse_args()
 
+    obs_size = OBS_V3_SIZE if args.obs_v3 else OBS_V2_SIZE
+    traj_dir = args.traj_dir or ("data/replay_trajs/v3" if args.obs_v3 else "data/replay_trajs")
+
     formats = [f.strip() for f in args.formats.split(",") if f.strip()]
     weights = parse_weights(args.format_weights, formats)
     datasets = []
     for i, fmt in enumerate(formats):
-        ds = ReplayShardDataset(fmt, Path(args.traj_dir), args.min_rating,
+        ds = ReplayShardDataset(fmt, Path(traj_dir), args.min_rating,
                                 not args.no_tournaments, i, args.val_shards)
         if args.max_shards:
             ds.files = ds.files[: args.max_shards]
@@ -232,8 +242,9 @@ def main() -> None:
         print(f"dataset[{fmt}]: {len(ds.files)} train shards, "
               f"{len(ds.val_files)} val shards, weight {weights[i]:g}")
 
-    agent = PPOAgent(obs_size=OBS_V2_SIZE, device=args.device)
+    agent = PPOAgent(obs_size=obs_size, device=args.device)
     device = agent.device
+    print(f"obs schema: {'v3' if args.obs_v3 else 'v2'} (obs_size={obs_size}) | traj-dir: {traj_dir}")
     # BC's own optimizer (policy/opp/trunk only) — agent.optimizer stays the
     # untouched PPO Adam that gets checkpointed for a later fine-tune.
     params = (list(agent.trunk.parameters()) + list(agent.policy_head.parameters()) +
@@ -260,6 +271,11 @@ def main() -> None:
             weights, seed=epoch,
         )
         for obs_np, act_np, opp_np, val_np, _fmt in batches(shuffled(stream, seed=epoch), args.batch_size):
+            if obs_np.shape[1] != obs_size:
+                raise ValueError(
+                    f"shard obs width {obs_np.shape[1]} != expected {obs_size} "
+                    f"({'v3' if args.obs_v3 else 'v2'}) — check --obs-v3/--traj-dir"
+                )
             obs = torch.from_numpy(obs_np).to(device)
             actions = torch.from_numpy(act_np).to(device)
             opp_actions = torch.from_numpy(opp_np).to(device)

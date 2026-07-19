@@ -5,9 +5,12 @@
  * for BOTH seats of the battle.
  *
  * Observations are built with the exact same code the live gym uses —
- * ObservationTrackers (reveal + volatile tracking from public log lines) and
- * extractFeaturesStructured (v2, (12, 77) tokens) — so token conventions are
- * identical to PokemonGymEnv by construction, not by reimplementation.
+ * ObservationTrackers (reveal + volatile tracking from public log lines,
+ * including the Sleep Clause tracker) and extractFeaturesStructured — so
+ * token conventions are identical to PokemonGymEnv by construction, not by
+ * reimplementation. Defaults to schema v2 ((12, 77) tokens); construct with
+ * `new ReplayAdapter('v3')` for schema v3 ((12, 86) tokens, M7) — see the
+ * constructor doc below.
  *
  * Action grounding (the M2.5 invariant): replays carry no |request| JSON, so
  * request-slot order is unknowable. Instead, own move slots are written in
@@ -44,7 +47,8 @@ type Seat = 'p1' | 'p2';
 
 export interface ReplayDecision {
 	seat: Seat;
-	/** Flattened (12, 77) schema-v2 observation. */
+	/** Flattened (12, 77) schema-v2 observation, or (12, 86) schema-v3 when the
+	 * adapter was constructed with `obsVersion: 'v3'`. */
 	obs: Float32Array;
 	/** 0–8 in the adapter's alphabetical action frame (see header). */
 	action: number;
@@ -114,8 +118,26 @@ function isCalledMove(parts: string[]): boolean {
 	return parts.some(p => p.startsWith('[from]'));
 }
 
+/** Selects the obs schema the adapter emits (see `ReplayAdapter`'s constructor). */
+export type ReplayObsVersion = 'v2' | 'v3';
+
 export class ReplayAdapter {
 	private readonly _dex = Dex.mod('gen1');
+	private readonly _obsVersion: ReplayObsVersion;
+
+	/**
+	 * @param obsVersion 'v2' (default) emits the existing (12, 77) schema.
+	 *   'v3' emits (12, 86): dims 0–76 are byte-identical to v2 (same
+	 *   `extractFeaturesStructured` prefix), with dims 77–85 (type-eff,
+	 *   move-effect flags, inflicted-status, Sleep Clause) appended per Job
+	 *   1.1/1.2. The Sleep Clause flag is read from the same
+	 *   `ObservationTrackers` instance used for reveal/volatile tracking, so
+	 *   it reflects the adapter's own two-pass replay of the log rather than
+	 *   any live-gym state.
+	 */
+	constructor(obsVersion: ReplayObsVersion = 'v2') {
+		this._obsVersion = obsVersion;
+	}
 
 	/**
 	 * Parse one raw battle log into two per-seat trajectories.
@@ -339,6 +361,7 @@ export class ReplayAdapter {
 			request as ChoiceRequest,
 			trackers.opponentInfoFor(seat),
 			trackers.volatilesFor(seat),
+			this._obsVersion === 'v3' ? { sleepClause: trackers.sleepClauseFlagFor(seat) === 1 } : null,
 		);
 
 		return {

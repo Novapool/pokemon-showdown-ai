@@ -10,12 +10,15 @@
  * decision:
  *   {b: battleId, f: format, r: rating|null, s: "p1"|"p2", w: 0|1,
  *    a: action 0-8, oa: oppAction -1..8, d: 0|1 (trajectory done),
- *    t: turn, o: base64(Float32Array LE, 924 floats — v2 obs)}
+ *    t: turn, o: base64(Float32Array LE, N floats)}
+ * N is 924 (v2, 12x77 tokens) by default, or 1032 (v3, 12x86 tokens) with
+ * --obs-v3 (M7) — dims 0-76 of each v3 token are byte-identical to v2.
  *
  * Usage:
  *   node models/replay_adapter_cli.js --format gen1randombattle
  *   node models/replay_adapter_cli.js --format gen1ou --limit 500
  *   node models/replay_adapter_cli.js --format gen1ou --shard-size 2000
+ *   node models/replay_adapter_cli.js --format gen1randombattle --obs-v3 --out-dir data/replay_trajs/v3
  *
  * Requires `./build` to have compiled dist/ first.
  */
@@ -26,7 +29,10 @@ const zlib = require('zlib');
 const { ReplayAdapter } = require('../dist/sim/tools/replay-adapter');
 
 function parseArgs(argv) {
-	const args = { format: null, limit: 0, shardSize: 2000, replaysDir: 'data/replays', outDir: 'data/replay_trajs' };
+	const args = {
+		format: null, limit: 0, shardSize: 2000, replaysDir: 'data/replays', outDir: 'data/replay_trajs',
+		obsVersion: 'v2',
+	};
 	for (let i = 2; i < argv.length; i++) {
 		switch (argv[i]) {
 		case '--format': args.format = argv[++i]; break;
@@ -34,6 +40,7 @@ function parseArgs(argv) {
 		case '--shard-size': args.shardSize = parseInt(argv[++i], 10); break;
 		case '--replays-dir': args.replaysDir = argv[++i]; break;
 		case '--out-dir': args.outDir = argv[++i]; break;
+		case '--obs-v3': args.obsVersion = 'v3'; break;
 		default: throw new Error(`unknown arg: ${argv[i]}`);
 		}
 	}
@@ -63,7 +70,7 @@ async function main() {
 	let files = fs.readdirSync(inDir).filter(f => f.endsWith('.log.gz')).sort();
 	if (args.limit) files = files.slice(0, args.limit);
 
-	const adapter = new ReplayAdapter();
+	const adapter = new ReplayAdapter(args.obsVersion);
 	let shardIdx = 0;
 	let shardBattles = 0;
 	let gzip = null;
@@ -133,6 +140,7 @@ async function main() {
 
 	console.log(JSON.stringify({
 		format: args.format,
+		obsVersion: args.obsVersion,
 		files: files.length,
 		battles: stats.battles,
 		unusable: stats.unusable,

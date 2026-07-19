@@ -8,9 +8,11 @@
  */
 
 const assert = require('../assert');
-const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, TOKEN_DIM_V2, N_TOKENS } =
+const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, TOKEN_DIM_V2, TOKEN_DIM_V3, N_TOKENS } =
 	require('../../dist/sim/tools/feature-extractor');
-const { PokemonGymEnv } = require('../../dist/sim/tools/pokemon-gym');
+const { V3_TYPE_EFF, V3_FLAG_SELFKO, V3_SLEEP_CLAUSE } =
+	require('../../dist/sim/tools/type-chart-v3');
+const { PokemonGymEnv, ObservationTrackers } = require('../../dist/sim/tools/pokemon-gym');
 
 // ---------------------------------------------------------------------------
 // Helpers: minimal mock request objects
@@ -187,6 +189,106 @@ describe('extractFeaturesStructured', () => {
 		});
 	});
 
+	describe('schema v3 (M7)', () => {
+		function neutralVolatiles() {
+			return {
+				boosts: [0, 0, 0, 0, 0, 0, 0],
+				reflect: false,
+				lightScreen: false,
+				substitute: false,
+				leechSeed: false,
+				toxicCounter: 0,
+			};
+		}
+		function bothNeutral() {
+			return { own: neutralVolatiles(), opp: neutralVolatiles() };
+		}
+		// A move request whose own active carries one named move in slot 0.
+		function requestWithMove(moveId, moveName) {
+			const req = makeMoveRequest();
+			req.active[0].moves = [
+				{ move: moveName, id: moveId, pp: 10, maxpp: 10, target: 'normal', disabled: false },
+			];
+			req.side.pokemon[0].moves = [moveId];
+			return req;
+		}
+		function opponentActive(details) {
+			return [{ details, condition: '100/100', active: true, moves: [] }];
+		}
+
+		it('should return 12 × TOKEN_DIM_V3 floats when v3Info is passed (no NaN)', () => {
+			const result = extractFeaturesStructured(makeMoveRequest(), [], bothNeutral(),
+				{ sleepClause: false });
+			assert.equal(TOKEN_DIM_V3, 86);
+			assert.equal(result.length, N_TOKENS * TOKEN_DIM_V3);
+			assert([...result].every(v => !isNaN(v) && isFinite(v)), 'v3 observation must not contain NaN/inf');
+		});
+
+		it('should keep the first 77 dims of every token byte-identical to v2', () => {
+			const request = makeMoveRequest('150/250 par');
+			const opponent = [
+				{ details: 'Gengar, L100', condition: '80/100', active: true, moves: ['lick'] },
+			];
+			const v2 = extractFeaturesStructured(request, opponent, bothNeutral());
+			const v3 = extractFeaturesStructured(request, opponent, bothNeutral(), { sleepClause: false });
+			for (let t = 0; t < N_TOKENS; t++) {
+				for (let d = 0; d < TOKEN_DIM_V2; d++) {
+					assert.equal(
+						v3[t * TOKEN_DIM_V3 + d], v2[t * TOKEN_DIM_V2 + d],
+						`v3 token ${t} dim ${d} diverged from v2`
+					);
+				}
+			}
+		});
+
+		it('should encode a 4x matchup (Ice Beam vs Dragonite) as 1.0 in the first move-slot dim', () => {
+			const result = extractFeaturesStructured(
+				requestWithMove('icebeam', 'Ice Beam'), opponentActive('Dragonite, L100'),
+				bothNeutral(), { sleepClause: false });
+			assert(Math.abs(result[0 + V3_TYPE_EFF] - 1.0) < 1e-6,
+				`Ice→Dragonite 4x should encode to 1.0, got ${result[V3_TYPE_EFF]}`);
+		});
+
+		it('should encode a 0.5x matchup (Flamethrower vs Slowbro) as 0.125', () => {
+			const result = extractFeaturesStructured(
+				requestWithMove('flamethrower', 'Flamethrower'), opponentActive('Slowbro, L100'),
+				bothNeutral(), { sleepClause: false });
+			assert(Math.abs(result[0 + V3_TYPE_EFF] - 0.125) < 1e-6,
+				`Fire→Slowbro 0.5x should encode to 0.125, got ${result[V3_TYPE_EFF]}`);
+		});
+
+		it('should encode a 0x immunity (Explosion vs Gengar) as 0.0 (and set the self-KO flag)', () => {
+			const result = extractFeaturesStructured(
+				requestWithMove('explosion', 'Explosion'), opponentActive('Gengar, L100'),
+				bothNeutral(), { sleepClause: false });
+			assert.equal(result[0 + V3_TYPE_EFF], 0.0, 'Normal→Gengar is immune (0x) → 0.0');
+			// Disambiguate "immune" from "empty slot": Explosion still sets self-KO.
+			assert.equal(result[0 + V3_FLAG_SELFKO], 1.0, 'Explosion must set the self-KO flag');
+		});
+
+		it('should place the Sleep Clause flag (dim 85) on every token when set', () => {
+			const on = extractFeaturesStructured(makeMoveRequest(), [], bothNeutral(), { sleepClause: true });
+			const off = extractFeaturesStructured(makeMoveRequest(), [], bothNeutral(), { sleepClause: false });
+			for (let t = 0; t < N_TOKENS; t++) {
+				assert.equal(on[t * TOKEN_DIM_V3 + V3_SLEEP_CLAUSE], 1.0, `sleep-clause dim unset on token ${t}`);
+				assert.equal(off[t * TOKEN_DIM_V3 + V3_SLEEP_CLAUSE], 0.0, `sleep-clause dim should be 0 on token ${t}`);
+			}
+		});
+
+		it('feeds the tracker Sleep Clause flag into dim 85 (tracker → obs integration)', () => {
+			const t = new ObservationTrackers();
+			for (const line of [
+				'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+				'|-status|p2a: Gengar|slp',
+			]) t.processLine(line);
+			assert.equal(t.sleepClauseFlagFor('p1'), 1, 'tracker flag should be set');
+			const obs = extractFeaturesStructured(makeMoveRequest(), t.opponentInfoFor('p1'),
+				t.volatilesFor('p1'), { sleepClause: t.sleepClauseFlagFor('p1') === 1 });
+			assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V3);
+			assert.equal(obs[V3_SLEEP_CLAUSE], 1.0, 'tracker-derived sleep flag must reach obs dim 85');
+		});
+	});
+
 	it('should place own bench tokens in side.pokemon[1..5] request-slot order', () => {
 		const request = makeMoveRequest();
 		request.side.pokemon.push(
@@ -238,6 +340,18 @@ describe('PokemonGymEnv', () => {
 				const obs = await env.reset();
 				assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V2);
 				assert([...obs].every(v => !isNaN(v)), 'v2 observation from reset() must not contain NaN');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('should return a v3 observation of length N_TOKENS * TOKEN_DIM_V3 in structured-v3 obsMode', async function () {
+			this.timeout(20000);
+			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4], obsMode: 'structured-v3' });
+			try {
+				const obs = await env.reset();
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V3);
+				assert([...obs].every(v => !isNaN(v) && isFinite(v)), 'v3 observation from reset() must not contain NaN/inf');
 			} finally {
 				env.destroy();
 			}
@@ -350,6 +464,37 @@ describe('PokemonGymEnv', () => {
 						for (let d = 65; d < TOKEN_DIM_V2; d++) {
 							const v = result.obs[t * TOKEN_DIM_V2 + d];
 							assert(v >= -1 && v <= 1, `v2 dim out of range at step ${steps}, token ${t}, dim ${d}: ${v}`);
+						}
+					}
+					obs = result.obs;
+					done = result.done;
+					steps++;
+				}
+				assert(done, 'Battle must terminate within 300 steps');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('should keep v3 obs shape stable with no NaN/inf across a full battle', async function () {
+			this.timeout(60000);
+			const env = new PokemonGymEnv({ seed: [15, 16, 17, 18], obsMode: 'structured-v3' });
+			try {
+				let obs = await env.reset();
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V3);
+				let done = false;
+				let steps = 0;
+				while (!done && steps < 300) {
+					const mask = env.validActions();
+					const action = mask.findIndex(v => v);
+					const result = await env.step(action >= 0 ? action : 0);
+					assert.equal(result.obs.length, N_TOKENS * TOKEN_DIM_V3, `v3 obs shape changed at step ${steps}`);
+					assert([...result.obs].every(v => !isNaN(v) && isFinite(v)), `NaN/inf in v3 obs at step ${steps}`);
+					// Every v3 extension dim (type-eff/flags/status/sleep) is bounded [0, 1].
+					for (let t = 0; t < N_TOKENS; t++) {
+						for (let d = TOKEN_DIM_V2; d < TOKEN_DIM_V3; d++) {
+							const v = result.obs[t * TOKEN_DIM_V3 + d];
+							assert(v >= 0 && v <= 1, `v3 dim out of range at step ${steps}, token ${t}, dim ${d}: ${v}`);
 						}
 					}
 					obs = result.obs;
@@ -649,5 +794,111 @@ describe('PokemonGymEnv opponent action labels (M5)', () => {
 				env.destroy();
 			}
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// M7: Sleep Clause tracker (ObservationTrackers.sleepClauseFlagFor)
+// ---------------------------------------------------------------------------
+//
+// The flag is derived purely from public battle-log lines (the existing
+// reveal-tracker convention — no omniscient state). From p1's viewpoint the
+// opponent is p2, so `sleepClauseFlagFor('p1')` reflects p2 Pokémon that p1 put
+// to sleep. All scenarios below feed lines through processLine() exactly as the
+// live omniscient reader does.
+
+describe('Sleep Clause tracker', () => {
+	function feed(trackers, lines) {
+		for (const line of lines) trackers.processLine(line);
+	}
+
+	it('sets the flag when we inflict sleep on an opponent Pokémon', () => {
+		const t = new ObservationTrackers();
+		assert.equal(t.sleepClauseFlagFor('p1'), 0, 'flag starts cleared');
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|move|p1a: Alakazam|Hypnosis|p2a: Gengar',
+			'|-status|p2a: Gengar|slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'flag sets after opponent is slept');
+		// Symmetry: p2 did not sleep any p1 mon, so p2's flag stays cleared.
+		assert.equal(t.sleepClauseFlagFor('p2'), 0, 'p2 flag unaffected by our sleep');
+	});
+
+	it('does NOT set the flag for Rest-sourced (self-induced) sleep', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Snorlax|Snorlax, L100, M|100/100',
+			'|move|p2a: Snorlax|Rest|p2a: Snorlax',
+			'|-status|p2a: Snorlax|slp|[from] move: Rest',
+			'|-heal|p2a: Snorlax|100/100 slp|[silent]',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 0, 'Rest self-sleep must not count toward the clause');
+	});
+
+	it('persists the flag across an opponent switch (sleep is bench-persistent)', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|-status|p2a: Gengar|slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'flag set while Gengar sleeps');
+		// Opponent switches the sleeping mon out and a fresh mon in.
+		feed(t, [
+			'|switch|p2a: Tauros|Tauros, L100, M|100/100',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'sleep persists on the bench after switch-out');
+		// Switching the sleeper back in also keeps the flag.
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100 slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'flag still set after sleeper switches back in');
+	});
+
+	it('clears the flag when the sleeping opponent faints', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|-status|p2a: Gengar|slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1);
+		feed(t, ['|faint|p2a: Gengar']);
+		assert.equal(t.sleepClauseFlagFor('p1'), 0, 'flag clears when the slept mon faints');
+	});
+
+	it('clears the flag when the opponent wakes up (-curestatus)', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|-status|p2a: Gengar|slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1);
+		feed(t, ['|-curestatus|p2a: Gengar|slp']);
+		assert.equal(t.sleepClauseFlagFor('p1'), 0, 'flag clears when the mon wakes');
+	});
+
+	it('stays set while a SECOND slept opponent is also asleep, and only clears when both are gone', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|-status|p2a: Gengar|slp',
+			'|switch|p2a: Tauros|Tauros, L100, M|100/100',
+			'|-status|p2a: Tauros|slp',
+		]);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'two sleeping mons -> flag set');
+		feed(t, ['|-curestatus|p2a: Gengar|slp']);
+		assert.equal(t.sleepClauseFlagFor('p1'), 1, 'still set while Tauros sleeps');
+		feed(t, ['|faint|p2a: Tauros']);
+		assert.equal(t.sleepClauseFlagFor('p1'), 0, 'clears only when no slept opponent remains');
+	});
+
+	it('round-trips the sleep state through snapshot/fromSnapshot', () => {
+		const t = new ObservationTrackers();
+		feed(t, [
+			'|switch|p2a: Gengar|Gengar, L100, M|100/100',
+			'|-status|p2a: Gengar|slp',
+		]);
+		const restored = ObservationTrackers.fromSnapshot(t.snapshot());
+		assert.equal(restored.sleepClauseFlagFor('p1'), 1, 'snapshot preserves the Sleep Clause flag');
 	});
 });

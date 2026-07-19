@@ -16,7 +16,8 @@ import { toID } from '../dex-data';
 import { RandomPlayerAI } from './random-player-ai';
 import { DamageFirstAI } from './damage-first-ai';
 import { extractFeatures, extractFeaturesStructured, BOOST_ORDER, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2 } from './feature-extractor';
-import type { OpponentPokemonInfo, ActiveVolatiles } from './feature-extractor';
+import type { OpponentPokemonInfo, ActiveVolatiles, V3Info } from './feature-extractor';
+import { TOKEN_DIM_V3 } from './type-chart-v3';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
 
 // ---------------------------------------------------------------------------
@@ -29,9 +30,12 @@ import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
  * the legacy 100-dim extractFeatures() vector for MLP-baseline regression
  * checks against the M1 result. 'structured-v2' (M3.4) returns the (12, 77)
  * schema-v2 observation — v1 tokens plus boost stages and volatile-condition
- * flags on the two active tokens — flattened to 924 floats.
+ * flags on the two active tokens — flattened to 924 floats. 'structured-v3'
+ * (M7) returns the (12, 86) schema-v3 observation — v2's 77 dims byte-identical
+ * plus per-move type-effectiveness, move-effect flags, inflicted-status id, and
+ * the log-derived Sleep Clause flag — flattened to 1032 floats.
  */
-export type ObsMode = 'flat' | 'structured' | 'structured-v2';
+export type ObsMode = 'flat' | 'structured' | 'structured-v2' | 'structured-v3';
 
 /**
  * Who sits in the p2 seat (M3.3):
@@ -99,6 +103,13 @@ export interface TrackerSnapshot {
 	revealOrder: { p1: string[], p2: string[] };
 	revealRecords: { p1: Array<[string, OpponentRecord]>, p2: Array<[string, OpponentRecord]> };
 	volatiles: { p1: SideVolatiles, p2: SideVolatiles };
+	/**
+	 * Per-side opponent-inflicted-sleep state (M7 Sleep Clause). Keyed by
+	 * Pokémon nickname; `true` while that mon is asleep from a sleep move the
+	 * OTHER side used (Rest-sourced self-sleep is excluded). Bench-persistent —
+	 * survives switch-out, cleared only on wake (`-curestatus`) or faint.
+	 */
+	sleepInflicted: { p1: Array<[string, boolean]>, p2: Array<[string, boolean]> };
 }
 
 /**
@@ -175,10 +186,37 @@ export class ObservationTrackers {
 		p1: freshSideVolatiles(), p2: freshSideVolatiles(),
 	};
 
+	/**
+	 * Per-side Sleep Clause state (M7). For side S, maps a nickname → `true`
+	 * while that Pokémon is asleep from a sleep move the OTHER side inflicted.
+	 * Rest-sourced (self-induced) sleep is deliberately NOT recorded here, since
+	 * it does not count toward the Sleep Clause. Bench-persistent: never reset on
+	 * switch/drag, only on wake (`-curestatus ... slp`) or `faint`. Derived
+	 * entirely from public log lines (a slept mon was necessarily active when
+	 * slept), so no omniscient state is used.
+	 */
+	sleepInflicted: { p1: Map<string, boolean>, p2: Map<string, boolean> } = {
+		p1: new Map(), p2: new Map(),
+	};
+
 	/** Update all trackers from one battle-log line. */
 	processLine(line: string): void {
 		this._processRevealLine(line);
 		this._processVolatileLine(line);
+		this._processSleepClauseLine(line);
+	}
+
+	/**
+	 * Sleep Clause flag for the `viewer` seat's v3 observation (dim 85): 1 iff
+	 * any opponent Pokémon that `viewer` put to sleep (non-Rest) is still asleep.
+	 * From p1's view the opponent is p2, so this reads p2's inflicted-sleep map.
+	 */
+	sleepClauseFlagFor(viewer: 'p1' | 'p2'): number {
+		const opp = viewer === 'p1' ? 'p2' : 'p1';
+		for (const asleep of this.sleepInflicted[opp].values()) {
+			if (asleep) return 1;
+		}
+		return 0;
 	}
 
 	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */
@@ -217,6 +255,10 @@ export class ObservationTrackers {
 				p2: Array.from(this.revealRecords.p2.entries()),
 			},
 			volatiles: this.volatiles,
+			sleepInflicted: {
+				p1: Array.from(this.sleepInflicted.p1.entries()),
+				p2: Array.from(this.sleepInflicted.p2.entries()),
+			},
 		}));
 	}
 
@@ -229,6 +271,11 @@ export class ObservationTrackers {
 			p2: new Map(copy.revealRecords.p2),
 		};
 		trackers.volatiles = copy.volatiles;
+		// Backward-compatible with pre-M7 snapshots that predate this field.
+		trackers.sleepInflicted = {
+			p1: new Map(copy.sleepInflicted?.p1 ?? []),
+			p2: new Map(copy.sleepInflicted?.p2 ?? []),
+		};
 		return trackers;
 	}
 
@@ -329,6 +376,48 @@ export class ObservationTrackers {
 		} else if (type === '-damage' && line.includes('[from] psn')) {
 			vol.toxicCounter++;
 		}
+	}
+
+	/**
+	 * Maintain the per-side Sleep Clause state (M7) from one public log line.
+	 * Only three transitions matter, and none of them is a switch/drag — sleep
+	 * persists on the bench:
+	 *   |-status|pXa: Nick|slp            → opponent-inflicted sleep starts
+	 *   |-status|pXa: Nick|slp|[from] move: Rest → self-sleep, EXCLUDED (Rest)
+	 *   |-curestatus|pXa: Nick|slp        → woke up, clear the flag
+	 *   |faint|pXa: Nick                  → fainted, clear the flag
+	 * The recorded side is the side the status is ON; `sleepClauseFlagFor` reads
+	 * the OPPONENT side's map so the flag reflects "a mon WE slept".
+	 */
+	private _processSleepClauseLine(line: string): void {
+		const parts = line.split('|');
+		const type = parts[1];
+		if (type !== '-status' && type !== '-curestatus' && type !== 'faint') return;
+
+		const ident = parts[2] ?? '';
+		const side = ident.startsWith('p2') ? 'p2' as const : ident.startsWith('p1') ? 'p1' as const : null;
+		if (!side) return;
+		const nickname = extractNickname(ident);
+		const map = this.sleepInflicted[side];
+
+		if (type === 'faint') {
+			map.delete(nickname);
+			return;
+		}
+
+		// -status / -curestatus: only the sleep status is relevant.
+		if ((parts[3] ?? '') !== 'slp') return;
+
+		if (type === '-curestatus') {
+			// Woke up (or otherwise cured of sleep) — no longer counts.
+			map.delete(nickname);
+			return;
+		}
+
+		// type === '-status' with slp. Rest-sourced self-sleep is excluded: it
+		// does not count toward the Sleep Clause.
+		if (line.includes('move: Rest')) return;
+		map.set(nickname, true);
 	}
 }
 
@@ -962,6 +1051,7 @@ export class PokemonGymEnv {
 		}
 		return extractFeaturesStructured(
 			this._currentRequest!, this._getOpponentInfo('p1'), this._getVolatilesFor('p1'),
+			this._getV3InfoFor('p1'),
 		);
 	}
 
@@ -972,19 +1062,38 @@ export class PokemonGymEnv {
 		if (!request) {
 			// Stream closed before any actionable request — terminal filler
 			const size = this._obsMode === 'flat' ? 100 :
-				N_TOKENS * (this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM);
+				N_TOKENS * (
+					this._obsMode === 'structured-v3' ? TOKEN_DIM_V3 :
+					this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM
+				);
 			return new Float32Array(size);
 		}
 		if (this._obsMode === 'flat') {
 			return extractFeatures(request, null);
 		}
-		return extractFeaturesStructured(request, this._getOpponentInfo(seat), this._getVolatilesFor(seat));
+		return extractFeaturesStructured(
+			request, this._getOpponentInfo(seat), this._getVolatilesFor(seat), this._getV3InfoFor(seat),
+		);
 	}
 
-	/** The `viewer` seat's volatile view (own side + opponent side), or null in v1 mode. */
+	/**
+	 * The `viewer` seat's volatile view (own side + opponent side), or null in v1
+	 * mode. Both v2 and v3 keep dims 65–76 (boosts/volatiles), so both need this.
+	 */
 	private _getVolatilesFor(viewer: 'p1' | 'p2'): { own: ActiveVolatiles, opp: ActiveVolatiles } | null {
-		if (this._obsMode !== 'structured-v2') return null;
+		if (this._obsMode !== 'structured-v2' && this._obsMode !== 'structured-v3') return null;
 		return this._trackers.volatilesFor(viewer);
+	}
+
+	/**
+	 * The `viewer` seat's v3-only info (dim 85 Sleep Clause flag), or undefined
+	 * outside v3 mode so the extractor's v2/v1 code path is unchanged. Job 1.1's
+	 * extractor derives dims 77–84 itself from `request`/`opponent`; only the
+	 * Sleep Clause flag is log-tracked here and must be handed in.
+	 */
+	private _getV3InfoFor(viewer: 'p1' | 'p2'): V3Info | undefined {
+		if (this._obsMode !== 'structured-v3') return undefined;
+		return { sleepClause: this._trackers.sleepClauseFlagFor(viewer) === 1 };
 	}
 
 	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */

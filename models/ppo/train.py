@@ -83,6 +83,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--obs-v3",
+        action="store_true",
+        help=(
+            "M7: train on the (12,86)->1032 schema-v3 observation (type "
+            "effectiveness + move-effect flags + Sleep Clause appended to "
+            "each token). Implies --structured. obs_size is auto-inferred "
+            "(1032). Checkpoints go to checkpoints/v3/ — v1/v2 checkpoints "
+            "still play as pool/h2h opponents (sliced per token)."
+        ),
+    )
+    parser.add_argument(
         "--num-envs",
         type=int,
         default=8,
@@ -205,7 +216,9 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.obs_v2:
+    if args.obs_v2 and args.obs_v3:
+        parser.error("--obs-v2 and --obs-v3 are mutually exclusive")
+    if args.obs_v2 or args.obs_v3:
         args.structured = True
     if args.opponent_mix and args.opponent != "random":
         parser.error("--opponent-mix and --opponent are mutually exclusive")
@@ -285,7 +298,8 @@ def main() -> None:
     else:
         checkpoint_dir = (
             Path(__file__).parent / "checkpoints"
-            / ("v2" if args.obs_v2 else "structured" if args.structured else ".")
+            / ("v3" if args.obs_v3 else "v2" if args.obs_v2
+               else "structured" if args.structured else ".")
         )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
@@ -298,11 +312,12 @@ def main() -> None:
     buffers = [TrajectoryBuffer() for _ in range(num_envs)]
     # The opponent family is set per reset by _switch_family() below, so the
     # constructor doesn't need spawn-time opponent flags.
-    env = VecGymClient(num_envs, structured=args.structured, obs_v2=args.obs_v2)
+    env = VecGymClient(num_envs, structured=args.structured, obs_v2=args.obs_v2,
+                       obs_v3=args.obs_v3)
 
     def _flatten(o):
         # The MLP consumes flat vectors: (N, 12, D) -> (N, 12*D) in structured
-        # mode (D=65 v1, 77 v2); flat mode is already (N, 100).
+        # mode (D=65 v1, 77 v2, 86 v3); flat mode is already (N, 100).
         return o.reshape(num_envs, -1) if args.structured else o
 
     def _flatten_seat(state):
@@ -382,7 +397,7 @@ def main() -> None:
 
     print(
         f"Starting PPO training: {total_budget} steps | "
-        f"obs_mode={'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
+        f"obs_mode={'v3' if args.obs_v3 else 'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
         f"(obs_size={obs_size}) | "
         f"rollout={rollout_steps} steps | "
         f"num_envs={num_envs} | device={agent.device} | "

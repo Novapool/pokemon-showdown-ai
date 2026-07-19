@@ -13,8 +13,122 @@ before (parallel training, MCTS, BC, opponent modeling all helped), but the
 rules omitted this time are ones humans apply *every* game. 6 phases,
 ~6–8 hours total (phases 0–3 build, then 2h BC pretrain + 2h fine-tune +
 ≥100-game ladder run). Pre-registered criteria (bot evals + ladder Glicko
-stability) avoid overfitting to project bots. **Awaiting orchestrator
-plan** — full spec in `MILESTONES.md` → M7.
+stability) avoid overfitting to project bots. Plan lives in `AGENT_JOBS.md`;
+full spec in `MILESTONES.md` → M7.
+
+**Phase 0 — Job 0.1 (Type chart + move-effect flags + encoding) ✅ DONE
+2026-07-17.** Created `sim/tools/type-chart-v3.ts` — the spec-lock layer Jobs
+1.1/1.2 import. All lookups sourced from the engine's own gen1 dex
+(`Dex.mod('gen1').getEffectiveness`/`getImmunity`; move-data fields), no
+hand-transcribed tables or name lists. Exports: `TOKEN_DIM_V3 = 86`, dim
+offsets (`V3_TYPE_EFF=77`, `V3_FLAG_RECHARGE/SELFKO/PRIORITY=81/82/83`,
+`V3_INFLICTED_STATUS=84`, `V3_SLEEP_CLAUSE=85`), `computeTypeEffMultiplier`
+/ `encodeTypeEff` (mult/4 → [0,1]; 0x immunity → 0.0) / `typeEffDim`,
+`getMoveEffectFlags` + `MoveEffectFlags`, `MOVE_STATUS_ID`. Verified vs engine:
+Ice→Dragonite 4x, Fire→Slowbro 0.5x, Explosion→Gengar 0x; Hyper Beam recharge,
+Explosion self-KO, Quick Attack priority, Rest→status 0 (self-sleep excluded).
+`./build` green. Next: Jobs 1.1 + 1.2.
+
+**Phase 1 — Job 1.1 (Feature extractor v3 logic) ✅ DONE 2026-07-17.** Extended
+`sim/tools/feature-extractor.ts`: added optional 4th param `v3Info` to
+`extractFeaturesStructured(request, opponent, volatiles?, v3Info?)` — passing
+it (shape `{ sleepClause: boolean }`, even when false) selects the 86-dim v3
+schema (`TOKEN_DIM_V3`, re-exported). Fills, on every token, dims 77–80 (that
+token's ≤4 move slots' type-eff vs the opponent active's types, via
+`typeEffDim`; empty slot / unknown / 0x → 0.0), 81–83 (recharge/self-KO/priority
+OR-aggregated over the move set), 84 (first inflicted-status id, normalised
+`/MOVE_STATUS_ID_MAX` → [0,1]), and 85 (global Sleep Clause flag placed
+identically on all 12 tokens). Dims 0–76 untouched — kept byte-identical to v2
+(v3 fills the v2 prefix via the existing volatiles path when volatiles are
+supplied alongside v3Info). No NaN/inf on unknown move/species/switch/empty
+inputs. New tests: `test/tools/feature-extractor.test.js` (22 passing, incl.
+v2/v3 and v1/v3 byte-equality on dims 0–76, 4x/0.5x/0x matchups, effect-flag and
+inflicted-status cases, edge cases). `gym.test.js` + `replay-adapter.test.js`
+still green (43 passing). `./build` green. Did NOT touch `pokemon-gym.ts`
+(Job 1.2) or `gym.test.js` (Job 3.1).
+
+**Phase 1 — Job 1.2 (Sleep Clause tracker + obsMode 'structured-v3') ✅ DONE
+2026-07-17.** `sim/tools/pokemon-gym.ts` only. Added a per-side Sleep Clause
+tracker to `ObservationTrackers` (`sleepInflicted: {p1,p2} Map<nickname,boolean>`
++ `sleepClauseFlagFor(viewer)`), driven from public log lines via a new
+`_processSleepClauseLine`: `|-status|pXa: N|slp` sets the flag on that side
+(EXCLUDING `move: Rest` self-sleep); `|-curestatus|...slp` and `|faint|` clear
+it; NOT reset on switch/drag (bench-persistent). `sleepClauseFlagFor('p1')` reads
+p2's map so the flag means "an opponent WE slept is still asleep". Wired
+`obsMode: 'structured-v3'`: `_getVolatilesFor` now also serves v3 (keeps dims
+65–76), new `_getV3InfoFor` supplies `{ sleepClause: boolean }` to Job 1.1's 4th
+extractor param, and the terminal filler sizes v3 at `N_TOKENS * TOKEN_DIM_V3`
+(1032). Consumes Job 1.1's landed `V3Info` type + `TOKEN_DIM_V3` (from
+`type-chart-v3`). Sleep tracker state round-trips through snapshot/fromSnapshot
+(BattleSim/M4-safe). New tests: `test/tools/gym.test.js` "Sleep Clause tracker"
+suite (7 tests: set on opponent sleep, NOT on Rest, persist across switch, clear
+on faint, clear on wake, second-sleeper, snapshot round-trip). `gym.test.js` 36
+passing; `./build` green; `tsc` clean on `pokemon-gym.ts`; e2e smoke: v3 reset +
+40 steps all 1032-dim, no NaN/inf.
+
+**Phase 2 — Job 2.1 (Bridge / gym-client serialization for v3) ✅ DONE
+2026-07-17.** Mirrored the existing `--obs-v2` pattern in exactly the three
+files scoped: `models/gym_bridge.js` (recognizes `--obs-v3`, mutually
+exclusive with `--flat`/`--obs-v2`, requests `obsMode: 'structured-v3'` — no
+other bridge changes needed since obs arrays are forwarded length-agnostic),
+`models/gym_client.py` (`TOKEN_DIM_V3 = 86`, `GymClient(obs_v3=True)` sets
+`--obs-v3` + `_token_dim`, mutual-exclusion guard vs `obs_v2`;
+`slice_structured_obs` needed no code change — it's already shape-generic, so
+v3→v2 (86→77) and v3→v1 (86→65) per-token slicing work automatically, doc
+comment updated to describe it explicitly), `models/vec_gym_client.py`
+(`obs_v3` param passed straight through to each `GymClient`; no separate
+obs-version-mixing logic exists today to update). Smoke-verified: single-seat
+`GymClient(obs_v3=True)` reset+5 steps → (12,86), no NaN/inf; dual-seat
+selfplay v3 → 30 steps, both seats (12,86), no NaN/inf; `VecGymClient(n_envs=2,
+obs_v3=True)` → 300 steps with 9 auto-resets, (2,12,86), no NaN/inf; v2 path
+(`GymClient`/`VecGymClient(obs_v2=True)`) still produces unchanged (12,77)/(2,12,77)
+shapes; `obs_v2=True, obs_v3=True` together raises `ValueError`. `./build`
+green (no TS changes this job). Did NOT touch `pokemon-gym.ts`,
+`feature-extractor.ts`, `train.py`, `evaluate.py`, or `test/tools/*` (out of
+scope per job spec). Next: Job 2.2 (replay-adapter regen) can proceed in
+parallel; Job 3.1 depends on both 2.1 and 2.2.
+
+**Phase 3 — Job 3.1 (Trainer/Eval/Infra wiring for v3 + smokes) ✅ DONE
+2026-07-18.** Wired `--obs-v3` end-to-end across the training/eval/inference
+scripts, mirroring the established `--obs-v2` conventions:
+- `models/bc_pretrain_mlp.py`: `--obs-v3` (obs_size 1032, defaults `--traj-dir`
+  to `data/replay_trajs/v3`); a first-batch shape assertion (924→1032);
+  per-format val accuracy reporting unchanged.
+- `models/ppo/train.py`: `--obs-v3` flag (implies `--structured`, mutually
+  exclusive with `--obs-v2`), obs_size auto-inferred from the env (1032),
+  checkpoints → `checkpoints/v3/`, `obs_v3` passed to `VecGymClient`.
+- `models/evaluate.py`: `--obs-v3` threaded through all five `_run_battles*`
+  runners → `VecGymClient`/`GymClient(obs_v3=)`. v3-vs-v2 h2h works via the
+  existing per-token `slice_structured_obs` (v2 vs-checkpoint sliced 1032→924;
+  dims 0–76 of a v3 token == a native v2 token). Mutually exclusive with
+  `--obs-v2`; ppo/mcts only.
+- `models/infer_server.py`: no code change needed — obs_size is read from the
+  checkpoint hparams (1032 for v3) and act/act_tracked pass obs at that width;
+  docstring updated to note v3.
+- `models/mcts/mcts_agent.py`: VERIFIED obs-shape-agnostic (its `_fit_obs`
+  slices to the checkpoint's obs_size via `slice_structured_obs`, works at
+  1032). NOT modified.
+- `tools/ladder-bot/ladder-bot.js`: the bot has never had an `--obs-v2` flag —
+  it infers the schema from the checkpoint's `obs_size` at ping time. Extended
+  that detection to v3 (1032 → `obsV3`), builds the obs with volatiles + the
+  Sleep-Clause `v3Info` (`{ sleepClause: trackers.sleepClauseFlagFor(seat)===1 }`),
+  and passes `obs_mode: 'structured-v3'` to `act_tracked`. (Deviation from the
+  job's literal "forward --obs-v3 flag": faithful mirror of the existing
+  auto-detect design, which has no obs flag.)
+- `test/tools/gym.test.js`: +9 tests (36→45 passing). New "schema v3 (M7)"
+  extractor block: v3 shape (1032, no NaN/inf), v2-prefix byte-equality
+  (dims 0–76 of v3 == v2), type-eff matchups (Ice→Dragonite 4x=1.0,
+  Flamethrower→Slowbro 0.5x=0.125, Explosion→Gengar 0x=0.0 + self-KO flag),
+  Sleep-Clause dim-85 placement, and tracker→obs integration; plus gym-level
+  structured-v3 reset shape and a full-battle v3 stability run (shape stable,
+  no NaN/inf, all extension dims in [0,1]).
+- Smokes (all clean): BC pretrain `--obs-v3 --max-shards 1 --epochs 1` →
+  obs_size 1032, val acc randbats 0.408 / gen1ou 0.338, checkpoint saved;
+  `train.py --obs-v3 --steps 400 --num-envs 2` → obs_mode=v3 (obs_size 1032),
+  final checkpoint saved; `evaluate.py --model ppo --obs-v3` v3-vs-v2 h2h and
+  single-opponent (vs Random) both ran without error; `infer_server.py` ping on
+  the v3 checkpoint → `obs_size: 1032`, `act` on a 1032 obs → valid action.
+  `gym.test.js` 45/45. `./build` green (no TS source changed this job).
 
 **Previous: M5.5 (Human Replay Data + BC for the MLP) — ✅ COMPLETE
 2026-07-16. POSITIVE RESULT, NEW BEST AGENT** (bcft final + tuned MCTS:
@@ -998,6 +1112,113 @@ When starting a new session:
 - [ ] Update "Recently Completed" when tasks finish
 - [ ] Update "Active Tasks" when starting new work
 - [ ] Commit this file after major progress
+
+---
+
+## Test Results — M7 Job 3.2 / Criterion A
+
+**Date:** 2026-07-18. **Scope:** full test/build suite over Phases 0–3.1 output, plus explicit Criterion A verification before Phase 4 (BC pretrain) training spend.
+
+**Commands run (verbatim) and exit codes:**
+1. `./build` → exit 0
+2. `npx mocha --no-config --reporter dot test/tools/gym.test.js` → `45 passing (208ms)`, exit 0
+3. `npx mocha --no-config --reporter dot test/tools/feature-extractor.test.js` → `22 passing (21ms)`, exit 0
+4. `npx mocha --no-config --reporter dot test/tools/battle-sim.test.js` → `13 passing (287ms)`, exit 0
+5. `npx mocha --no-config --reporter dot test/tools/replay-adapter.test.js` → `10 passing`, exit 0
+
+No failures in any of the above. (Note: full-suite/`npm test` runs are known to separately hit a pre-existing, unrelated better-sqlite3 `NODE_MODULE_VERSION` mismatch in "SQLite worker wrapper" — out of scope per Job 3.2 instructions, not run here since targeted suites above cover everything Job 3.1 touched.)
+
+**Criterion A coverage check** (MILESTONES.md: valid obs shape at every decision point, no NaN/inf in type-eff/new dims, Sleep Clause flag toggles correctly) — confirmed present in existing tests, no smoke script needed:
+- v3 obs shape `(12, 86)` / flat `1032` at decision points: `test/tools/gym.test.js` lines 219–224 (`extractFeaturesStructured` direct call), 348–354 (`env.reset()` in `structured-v3` obsMode), 479–496 (shape re-checked at every step across a full battle, `TOKEN_DIM_V3`/`N_TOKENS` asserted each iteration).
+- No NaN/inf in new dims: same tests assert `!isNaN(v) && isFinite(v)` over the full 86-dim vector, including the full-battle step loop (line 492) and a targeted loop over dims `TOKEN_DIM_V2..TOKEN_DIM_V3` (lines 495–496).
+- v2-prefix byte-equality (dims 0–76 identical to v2): `test/tools/gym.test.js` line 227 ("should keep the first 77 dims of every token byte-identical to v2"); mirrored in `test/tools/feature-extractor.test.js` (22 tests, incl. v1/v3 and v2/v3 byte-equality per Job 1.1's summary).
+- Sleep Clause flag toggling: `test/tools/gym.test.js` "Sleep Clause tracker" describe block (lines 810–902) — flag starts cleared, sets when opponent is put to sleep, Rest-sourced self-sleep excluded (line 828), bench-persistent across switch (not reset on switch/drag), clears on cure and on faint (line 858), multi-sleeper case, snapshot/restore preserves flag. Plus obs-level placement test (line 269) confirming the flag lands identically on all 12 tokens (dim 85) and a tracker→obs integration test (line 278).
+
+All Criterion A sub-requirements have direct, passing test coverage — no gap requiring an ad hoc smoke script.
+
+**Verdict: PASS.** Criterion A is met. Phase 4 (Job 4.1, BC pretrain on v3 data) is cleared to begin.
+
+---
+
+## Job 4.1 — BC Pretrain Run on v3 Data (2026-07-18)
+
+**Command (verbatim):**
+```
+python3 models/bc_pretrain_mlp.py --epochs 5 --obs-v3 --out bc_mlp_gen1_v3.pt
+```
+Matches the M5.5 Run 2 recipe exactly (defaults: `--min-rating 1300`, equal
+per-format sampling weights, `--opp-bc-coef 0.1`, `--value-bc-coef 0.5` —
+the outcome-trained value head Run 2 added for MCTS), changing only
+`--obs-v3` (obs_size 1032, `data/replay_trajs/v3/`: 99 gen1ou + 21
+gen1randombattle shards) and `--out`. Ran via `nohup` to
+`logs/bc_pretrain_v3_full.log`, monitored to completion (no polling).
+
+**Result: completed cleanly, 5/5 epochs, 25,109,340 samples, wall time
+1054s (~17.6 min — far under the ~2h estimate; v3's extra dims didn't
+change dataset size or add meaningful per-step cost).**
+
+Final held-out validation:
+| format | policy acc | opp-head acc | value-sign acc | val samples |
+|---|---|---|---|---|
+| gen1randombattle | **52.7%** | 34.6% | 63.1% | 60,766 |
+| gen1ou | **54.0%** | 34.4% | 68.6% | 28,852 |
+
+vs. M5.5 v2 baseline (Run 2): 49.7% randbats / 53.1% gen1ou (policy),
+62%/67% value-sign. v3 is **flat-to-slightly-up** on both formats and both
+heads (+3.0pp randbats / +0.9pp gen1ou policy; +1.1pp / +1.6pp value-sign) —
+not degenerate (chance ≈11%), no crash, no NaN.
+
+**Checkpoint:** `models/checkpoints/bc_mlp_gen1_v3.pt` (kept distinct from
+the v2 checkpoint `models/checkpoints/bc_mlp_gen1.pt`, which is untouched).
+
+**Verdict: Phase 5 (PPO fine-tune) is cleared to begin** — gate was
+"not degenerate/crashed," which is met with margin; v3's extra type-eff/
+move-flag/Sleep-Clause signal is at minimum not hurting human-imitation
+accuracy at the BC stage.
+
+---
+
+## Job 5.1 — PPO Fine-Tune Run on v3 Obs (started 2026-07-18)
+
+**Command (verbatim):**
+```
+python3 models/ppo/train.py --obs-v3 --steps 5000000 --rollout-steps 512 \
+  --num-envs 8 --checkpoint-every 250000 \
+  --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" \
+  --checkpoint-dir models/ppo/checkpoints/v3 \
+  --pretrain-checkpoint models/checkpoints/bc_mlp_gen1_v3.pt \
+  --bc-anchor models/checkpoints/bc_mlp_gen1_v3.pt --bc-anchor-coef 0.05 \
+  --value-warmup-steps 200000 --opp-coef 0.1
+```
+Matches the M5.5 `bcft` recipe exactly (verified against
+`models/ppo/checkpoints/bcft/train.log`'s header line and MILESTONES.md's
+M5.5 write-up), swapping only obs version and checkpoint paths: `--obs-v3`
+(obs_size auto-inferred 1032) in place of `--obs-v2`, warm-start/anchor from
+`bc_mlp_gen1_v3.pt` in place of `bc_mlp_gen1.pt`, checkpoints to
+`models/ppo/checkpoints/v3/` (new dir, did not exist — no overwrite risk).
+Pool seeded identically to bcft: copied `ppo_step_0_seed_m2.pt` and
+`ppo_step_0_seed_m33best.pt` (M2 + M3.3-best, both v1/780-dim structured
+checkpoints) from `models/ppo/checkpoints/bcft/` into the new v3 checkpoint
+dir before launch, so the default self-play pool (= checkpoint dir) picks
+them up. Cross-schema compatibility confirmed in `models/ppo/train.py`
+before running: `_opp_view()` (line ~454) calls `slice_structured_obs()`
+generically whenever `args.structured` is set — not v2-specific — and the
+`--obs-v3` help text explicitly documents "v1/v2 checkpoints still play as
+pool/h2h opponents (sliced per token)," so the M5.5 pool seeding works
+unmodified under v3.
+
+Launched via `nohup` (PID 52721) to `models/ppo/checkpoints/v3/train.log`,
+monitored via a background watch (no busy-polling). Startup log line
+confirms exact match to the bcft recipe modulo obs version:
+`obs_mode=v3 (obs_size=1032) | rollout=512 steps | num_envs=8 | opponent=
+selfplay=0.5,damagefirst=0.3,random=0.2 (pool: models/ppo/checkpoints/v3) |
+checkpoint every 250000 steps | opp_coef=0.1`, `Value warmup: policy frozen
+until step 200000`. Same two expected pre-M5-checkpoint warnings as bcft
+(fresh opp_head / fresh optimizer state for the v1 seed checkpoints) — not
+errors, identical to the bcft run's own log.
+
+**Status: RUNNING as of this entry — result pending, will be appended when
+the monitor reports completion or failure.**
 
 ---
 
