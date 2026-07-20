@@ -1,10 +1,75 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-17
+Last updated: 2026-07-20
 
 ---
 
 ## Current Work
+
+**M7 is complete.** No active phase. Next session should decide between the
+Criterion C follow-up (optional 50-game ladder run, see below) and starting
+M8. Nothing is currently running in the background — the ladder-bot auto-
+restart wrapper and monitor were stopped, and no `ladder-bot.js`/
+`infer_server` processes are left running (verified via `pgrep`).
+
+**Phase 6 (ladder, Criterion C) ✅ COMPLETE 2026-07-20 — INCONCLUSIVE.**
+100/100 consecutive rated `gen1randombattle` games via
+`tools/ladder-bot/ladder-bot.js --mcts` on the v3 checkpoint + tuned MCTS
+(sims=100/det=1/c_puct=0.5), zero crashes, well under the 2s/move budget.
+The run fragmented into three sessions due to the known (M6-documented)
+lack of websocket reconnect logic in `ladder-bot.js` — two dropped
+connections, no data loss, each resumed with `--battles <remaining>`. The
+user ran the final 95-battle segment themselves on their own terminal after
+the bot dropped twice under mine; it disconnected once more on their end
+too, meaning the instability is generic (Showdown-side or the missing
+reconnect logic), not specific to either execution environment.
+- **Raw record: 30W–70L** (up from M6's 21W–79L).
+- **Account state after the run** (`gen1randombattle`, via
+  `pokemonshowdown.com/users/novapool.json`): **Elo 1034.6, GXE 28.2%**
+  (M6 baseline: Elo 1017, GXE 23.9%).
+- **Verdict per pre-registered bands:** GXE 28.2% falls in the 25–34%
+  "noise band" — not the ≥35% needed for a clear win, though directionally
+  up +4.3pp GXE / +9pp raw win rate over M6. Per the pre-committed rule,
+  this is scored as **inconclusive**, not a win.
+- **Contingency (not yet run):** an optional 50-game follow-up is
+  pre-authorized to try to resolve the band one way or the other.
+- Log: `data/replays/self_ladder/m7_ladder_run.log`.
+
+**Job 5.2 / battle-sim.ts fix — committed 2026-07-20** (previously
+uncommitted; folded into the M7 closeout commit along with the eval logs
+and doc updates below).
+
+**Phase 5 — Job 5.1 (PPO fine-tune on v3) ✅ COMPLETE 2026-07-19.** The 5M-step
+run launched 2026-07-18 (see Job 5.1 entry below) finished cleanly:
+`models/ppo/checkpoints/v3/ppo_step_5000002_final.pt` (20 checkpoints + final),
+loss healthy to the end, late rollout win rates 0.40–0.45 vs the mixed pool.
+
+**Phase 5 — Job 5.2 (Criterion B evals) 🟡 IN PROGRESS 2026-07-19.**
+- **Raw sweep (20 ckpts, 150 vs Random each, `v3/sweep_results.txt`):**
+  43–73% band, rising through training, best = the **final 5M checkpoint at
+  73%** — the v2 bcft sweep never exceeded 58%.
+- **Raw confirmations (`v3/confirm_results.txt`):** final **70.0% (350/500) R
+  / 52.0% (104/200) DF**; 4.75M 65.2%/58.5%; 2.5M 69.0%/55.0%. All three are
+  the best raw-policy numbers in project history (prior best raw: 57% R
+  M3.3 / 54.6% R bcft). MCTS base = the final checkpoint (best R, shipping
+  convention; DF differences within ±7pp noise).
+- **Bug found & fixed (uncommitted): `sim/tools/battle-sim.ts` had no v3
+  support** — `_extractObsFor` sized non-v2 structured obs at TOKEN_DIM (780)
+  and passed no v3Info, so every `--model mcts --obs-v3` eval crashed with
+  "cannot reshape 780 into (12,86)". Job 3.1's "MCTS verified
+  obs-shape-agnostic" claim covered only the Python side (`mcts_agent.py`);
+  the Node sim host was never exercised under v3. Fixed to mirror
+  `pokemon-gym.ts` (volatiles for v2+v3, `{sleepClause}` v3Info from the
+  tracker). `./build` green, battle-sim 13/13 + gym 45/45, MCTS v3 smoke
+  3/3 wins @ ~57ms mean search latency.
+- **Tuned-MCTS battery ✅ COMPLETE 2026-07-19 — CRITERION B MET, NEW BEST
+  AGENT** (`models/mcts/results/m7_v3_mcts_{random,damagefirst}.log`,
+  tuned defaults sims=100/det=1/c_puct=0.5): **93.0% (465/500) vs Random /
+  84.2% (421/500) vs DamageFirst** — both bars (≥80% R, ≥65% DF) cleared,
+  and both ahead of the prior best (v2 bcft + tuned MCTS: 90.6%/79.2%;
+  +2.4pp / +5.0pp). Search latency 56ms mean / 107ms p95. Per the
+  pre-registered conditional rule, Phase 6 (≥100-game ladder run,
+  Criterion C GXE bands) is mandatory next.
 
 **M7 (Observation Schema v3) — 🟡 SCOPED 2026-07-17.** Addresses M6's failure
 analysis: type effectiveness, move-effect flags, Sleep Clause signal, and
@@ -985,21 +1050,29 @@ None. All components verified and working.
 
 ## Next Steps
 
+### M7 follow-up decision (not yet made)
+M7 is done but Criterion C landed inconclusive (GXE 28.2%, 25–34% noise
+band). Two options, pre-authorized either way:
+1. **50-game Criterion C follow-up** (pre-registered contingency) — resolve
+   whether the true GXE is above or below the 35% "clear win" line. Cheaper
+   than it sounds now that the ladder-bot invocation is proven; main cost is
+   ladder queue wall-clock and the reconnect fragmentation.
+2. **Move on to M8** and treat v3 as shipped (it's a strict upgrade on
+   Criterion A + B, and directionally non-negative on the ladder) — revisit
+   Criterion C only if a future milestone's ladder run also looks off.
+
+**Known gap carried forward:** `tools/ladder-bot/ladder-bot.js` still has no
+websocket reconnect logic (confirmed again this run — disconnected under
+both my execution and the user's own terminal, so it's not environment-
+specific). Worth fixing before the next ladder-dependent milestone so a
+100+ game run doesn't require manual `--battles` bookkeeping across
+sessions.
+
 ### M7 — Observation Schema v3
-🟡 **Scoped, awaiting orchestrator plan (2026-07-17).**
-
-Full specification in `MILESTONES.md` → M7. **Quick summary:**
-- **Phases 0–3 (code):** Spec feature set (type-eff lookup, move-effect flags, Sleep Clause), implement in feature-extractor + gym, wire through bridge/trainer/eval (~2–3h)
-- **Phase 4 (BC pretrain):** Regenerate replay trajectories with v3, train BC on new data (~2h)
-- **Phase 5 (fine-tune):** PPO 5M-step warm-start from BC checkpoint, opponent-mix recipe (~2h)
-- **Phase 6 (ladder):** ≥100-game criterion run on official ladder for Glicko-2 stability (~2–4h wall-clock, depends on queue)
-
-**Success criteria (pre-registered):**
-- **Criterion A (hard gate):** v3 obs valid shape, no NaN/inf, Sleep Clause flag toggles
-- **Criterion B (bot evals):** ≥80% vs Random with MCTS (vs current 90.6%), OR ≥65% vs DamageFirst (vs current 79.2%), OR no regression in either → proceed to ladder
-- **Criterion C (ladder):** ≥100 games, GXE ≥35% is a clear win (M6 floor 23.9%); 25–35% is inconclusive; <25% is regression
-
-**Cautionary note:** v2 (boosts/volatiles) was a wash. v3 adds type effectiveness — the most frequent rule humans apply, but if it doesn't move the ladder despite strong bot evals, the binding constraint is somewhere else (model capacity, reward signal, randbats luck variance).
+✅ **Complete 2026-07-20.** Criterion A pass, Criterion B pass (93.0% R /
+84.2% DF, new best agent), Criterion C inconclusive (Elo 1034.6 / GXE 28.2%
+vs M6's 1017/23.9%, landed in the pre-registered 25–34% noise band). Full
+results in `MILESTONES.md` → M7.
 
 ---
 

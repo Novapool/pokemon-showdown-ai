@@ -31,7 +31,7 @@ import {
 } from './pokemon-gym';
 import type { GymSnapshot, ObsMode, TrackerSnapshot } from './pokemon-gym';
 import {
-	extractFeatures, extractFeaturesStructured, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2,
+	extractFeatures, extractFeaturesStructured, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2, TOKEN_DIM_V3,
 	parseHpRatio, parseStatus, parseLevelFromDetails, BOOST_ORDER,
 } from './feature-extractor';
 
@@ -479,14 +479,20 @@ export class BattleSim {
 		const request = this._lastActionable[seat] ?? (side.activeRequest as ChoiceRequest | null);
 		if (!request) {
 			const size = this._obsMode === 'flat' ? 100 :
-				N_TOKENS * (this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM);
+				N_TOKENS * (this._obsMode === 'structured-v3' ? TOKEN_DIM_V3 :
+					this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM);
 			return new Float32Array(size);
 		}
 		if (this._obsMode === 'flat') {
 			return extractFeatures(request, null);
 		}
-		const volatiles = this._obsMode === 'structured-v2' ? this._trackers.volatilesFor(seat) : null;
-		return extractFeaturesStructured(request, this._trackers.opponentInfoFor(seat), volatiles);
+		// v3 keeps the v2 volatile dims (65–76), so both modes need volatiles;
+		// v3 additionally hands in the log-tracked Sleep Clause flag.
+		const volatiles = this._obsMode === 'structured-v2' || this._obsMode === 'structured-v3' ?
+			this._trackers.volatilesFor(seat) : null;
+		const v3Info = this._obsMode === 'structured-v3' ?
+			{ sleepClause: this._trackers.sleepClauseFlagFor(seat) === 1 } : undefined;
+		return extractFeaturesStructured(request, this._trackers.opponentInfoFor(seat), volatiles, v3Info);
 	}
 
 	/**

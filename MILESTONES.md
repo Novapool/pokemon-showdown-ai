@@ -1273,9 +1273,16 @@ det=1, c_puct=0.5). Logs in `data/replays/self_ladder/`.
 
 ---
 
-## M7: Observation Schema v3 🟡 SCOPED (2026-07-17)
+## M7: Observation Schema v3 ✅ COMPLETE — INCONCLUSIVE (2026-07-17 → 2026-07-20)
 
-**Status:** 🟡 Scoped, awaiting orchestrator plan.
+**Status:** ✅ All 6 phases executed. Criterion A passed, Criterion B passed decisively, Criterion C landed in the pre-registered noise band — net result is a new best agent by every bot/search metric, with an unproven (not disproven) ladder-level claim.
+
+**Final results:**
+- **Criterion A:** ✅ Pass — v3 obs shape (12, 86) valid at every decision point, no NaN/inf, Sleep Clause flag verified via unit tests (incl. Rest exclusion, faint clearing).
+- **Criterion B:** ✅ Pass, decisively — tuned MCTS (sims=100, det=1, c_puct=0.5) on the v3 PPO checkpoint (`ppo_step_5000002_final.pt`): **93.0% (465/500) vs Random, 84.2% (421/500) vs DamageFirst** — both pre-registered bars cleared (≥80% R / ≥65% DF), both ahead of the prior (v2) best of 90.6%/79.2%. New best agent by bot eval.
+- **Criterion C:** 🟡 Inconclusive — 100/100 consecutive rated ladder games, zero crashes, well under the 2s/move budget. Raw record 30W–70L (up from M6's 21W–79L). Account state after the run: **Elo 1034.6, GXE 28.2%** (M6 baseline: Elo 1017, GXE 23.9%). GXE landed in the pre-registered 25–34% noise band — directionally improved (+4.3pp GXE, +9pp raw win rate) but not the ≥35% needed to call it a clear win, per the pre-committed rule that 25–35% is inconclusive rather than a verdict either way.
+- **Verdict:** v3's rules-understanding fixes (type effectiveness, move-effect flags, Sleep Clause) produced a measurable, non-trivial bot/search improvement and a directionally positive but statistically inconclusive ladder result. Per the pre-registered contingency, an optional 50-game follow-up run would be needed to resolve the band; not run in this session (user handed the ladder run to their own terminal after bot-side disconnects — see IN-PROGRESS.md).
+- **Bug fixed along the way:** `sim/tools/battle-sim.ts` had no v3 handling (`_extractObsFor` sized non-v2 obs at the legacy 65-dim token and never passed `v3Info`), which crashed `--model mcts --obs-v3` outright. This was a real gap in M4/M5's "MCTS is obs-shape-agnostic" claim (only ever verified Python-side). Fixed and covered by the existing `battle-sim.test.js` / `gym.test.js` suites plus a smoke test.
 
 **Motivation:** M6's 21/100 ladder win rate (9% full-battle) despite 90.6% vs bots revealed a rules-understanding gap. User-observed blunders: Hypnosis into an already-asleep Pokémon, Explosion into a Ghost-type, repeated not-very-effective moves (Fire Blast into Slowbro), no handling of Hyper Beam recharge or Sleep Clause. Root cause: v2 obs schema (65 base + 12 boosts/volatiles) lacks type effectiveness, species identity, move-effect flags, and Sleep Clause signaling. The observation schema has never been the bottleneck (parallel training, MCTS, BC, opponent modeling all improved; v2 was a wash). But this time the rules omitted are ones humans apply *every* game.
 
@@ -1427,4 +1434,4 @@ Best action
 | M5: Opponent Modeling | ✅ | Thesis negative (head sampler = policy sampler, −2.2pp); side finding: **new best agent** — M5 ckpt + policy-sampler MCTS 72.6% DF / 86.0% R | M6 |
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
 | M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
-| M7: Observation Schema v3 | 🟡 | **Pending** — type effectiveness, move-effect flags, Sleep Clause, species/stats info; aims to fix observed ladder blunders | — |
+| M7: Observation Schema v3 | ✅ | **New best agent (bot evals)** — tuned MCTS 93.0% R / 84.2% DF, +2.4/+5.0pp vs prior best. **Ladder: inconclusive** — Elo 1034.6 / GXE 28.2% (M6: 1017/23.9%), lands in the pre-registered 25–34% noise band; directionally up (+9pp raw win rate) but not a confirmed win | M8 |

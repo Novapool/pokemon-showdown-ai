@@ -1,0 +1,121 @@
+=== models/ppo/checkpoints/v3/ppo_step_250002.pt ===
+Battle 150/150 | running win rate: 0.46 (69/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_250002.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.46 (69/150)
+Opp-prediction top-1 accuracy: 0.254 (1682/6626 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_500002.pt ===
+Battle 150/150 | running win rate: 0.56 (84/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_500002.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.56 (84/150)
+Opp-prediction top-1 accuracy: 0.261 (1602/6131 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_750005.pt ===
+Battle 150/150 | running win rate: 0.43 (65/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_750005.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.43 (65/150)
+Opp-prediction top-1 accuracy: 0.258 (1683/6522 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_1000006.pt ===
+Battle 150/150 | running win rate: 0.61 (91/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_1000006.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.61 (91/150)
+Opp-prediction top-1 accuracy: 0.262 (1638/6248 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_1250007.pt ===
+Battle 150/150 | running win rate: 0.64 (96/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_1250007.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.64 (96/150)
+Opp-prediction top-1 accuracy: 0.253 (1838/7275 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_1500007.pt ===
+Battle 150/150 | running win rate: 0.63 (94/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_1500007.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.63 (94/150)
+Opp-prediction top-1 accuracy: 0.266 (1467/5509 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_1750012.pt ===
+Battle 150/150 | running win rate: 0.65 (97/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_1750012.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.65 (97/150)
+Opp-prediction top-1 accuracy: 0.259 (1403/5424 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_2000015.pt ===
+Battle 150/150 | running win rate: 0.61 (92/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_2000015.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.61 (92/150)
+Opp-prediction top-1 accuracy: 0.250 (1589/6345 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_2250020.pt ===
+Battle 150/150 | running win rate: 0.63 (95/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_2250020.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.63 (95/150)
+Opp-prediction top-1 accuracy: 0.255 (1445/5664 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_2500025.pt ===
+Battle 150/150 | running win rate: 0.67 (100/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_2500025.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.67 (100/150)
+Opp-prediction top-1 accuracy: 0.250 (1613/6457 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_2750031.pt ===
+Battle 150/150 | running win rate: 0.66 (99/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_2750031.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.66 (99/150)
+Opp-prediction top-1 accuracy: 0.266 (1503/5642 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_3000034.pt ===
+Battle 150/150 | running win rate: 0.54 (81/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_3000034.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.54 (81/150)
+Opp-prediction top-1 accuracy: 0.266 (1491/5611 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_3250040.pt ===
+Battle 150/150 | running win rate: 0.62 (93/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_3250040.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.62 (93/150)
+Opp-prediction top-1 accuracy: 0.258 (1724/6683 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_3500044.pt ===
+Battle 150/150 | running win rate: 0.63 (94/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_3500044.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.63 (94/150)
+Opp-prediction top-1 accuracy: 0.257 (1842/7155 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_3750051.pt ===
+Battle 150/150 | running win rate: 0.61 (91/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_3750051.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.61 (91/150)
+Opp-prediction top-1 accuracy: 0.257 (1778/6906 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_4000053.pt ===
+Battle 150/150 | running win rate: 0.51 (77/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_4000053.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.51 (77/150)
+Opp-prediction top-1 accuracy: 0.274 (1659/6059 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_4250059.pt ===
+Battle 150/150 | running win rate: 0.65 (98/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_4250059.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.65 (98/150)
+Opp-prediction top-1 accuracy: 0.261 (1521/5829 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_4500066.pt ===
+Battle 150/150 | running win rate: 0.54 (81/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_4500066.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.54 (81/150)
+Opp-prediction top-1 accuracy: 0.255 (1488/5826 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_4750072.pt ===
+Battle 150/150 | running win rate: 0.67 (100/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_4750072.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.67 (100/150)
+Opp-prediction top-1 accuracy: 0.268 (1581/5894 unmasked steps)
+=== models/ppo/checkpoints/v3/ppo_step_5000002_final.pt ===
+Battle 150/150 | running win rate: 0.73 (110/150)
+Model: ppo | Checkpoint: models/ppo/checkpoints/v3/ppo_step_5000002_final.pt
+Battles: 150
+Win rate vs RandomPlayerAI: 0.73 (110/150)
+Opp-prediction top-1 accuracy: 0.252 (1331/5276 unmasked steps)
+SWEEP DONE
