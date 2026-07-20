@@ -133,6 +133,28 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 
 ---
 
+## Running the ladder bot (live official server)
+
+`tools/ladder-bot/ladder-bot.js` connects to the real Showdown ladder
+(`wss://sim3.psim.us/showdown/websocket`) and plays rated games:
+
+```bash
+node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
+  --checkpoint <path/to/checkpoint.pt> --battles <N> --mcts
+```
+
+**Have the user run this one themselves, not Claude.** It has no websocket
+reconnect logic (known gap, tracked in `IN-PROGRESS.md`), and in practice it
+runs reliably end-to-end when launched from the user's own terminal but has
+repeatedly dropped connection mid-run when launched from Claude's sandboxed
+background-task execution. Root cause isn't confirmed, but the pattern is
+consistent enough across sessions that Claude should hand the command to the
+user rather than run it directly for any live-ladder (not local-sim) work.
+Everything else in this doc — training, local eval vs `RandomPlayerAI`/
+`DamageFirstAI`, bot batteries — is unaffected and fine to run normally.
+
+---
+
 ## Target win rates (M2 success criteria)
 
 | Model | vs RandomPlayerAI | vs DamageFirstAI |

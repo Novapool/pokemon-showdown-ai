@@ -1062,11 +1062,18 @@ band). Two options, pre-authorized either way:
    Criterion C only if a future milestone's ladder run also looks off.
 
 **Known gap carried forward:** `tools/ladder-bot/ladder-bot.js` still has no
-websocket reconnect logic (confirmed again this run — disconnected under
-both my execution and the user's own terminal, so it's not environment-
-specific). Worth fixing before the next ladder-dependent milestone so a
-100+ game run doesn't require manual `--battles` bookkeeping across
-sessions.
+websocket reconnect logic. Worth fixing before the next ladder-dependent
+milestone so a 100+ game run doesn't require manual `--battles` bookkeeping
+across sessions.
+
+**Process note (user directive, 2026-07-20):** live-ladder runs work
+reliably when the user launches `ladder-bot.js` from their own terminal but
+have repeatedly disconnected when Claude runs it via a sandboxed background
+task. Root cause unconfirmed, but going forward **Claude should hand the
+ladder-bot command to the user rather than run it directly** — see
+`docs/TRAINING-COMMANDS.md` → "Running the ladder bot (live official
+server)". This applies only to live-ladder play; local training/eval is
+unaffected.
 
 ### M7 — Observation Schema v3
 ✅ **Complete 2026-07-20.** Criterion A pass, Criterion B pass (93.0% R /
