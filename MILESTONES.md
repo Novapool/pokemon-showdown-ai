@@ -1378,6 +1378,146 @@ M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value ta
 
 ---
 
+## M8: Value-Head Targeting + Ladder Infrastructure ⏳ SCOPED
+
+**Status:** ⏳ Scoped 2026-07-22 (pending user approval to build)
+
+**Thesis:** M7 produced the best agent on bot metrics (+2.4/+5.0pp over M5.5) but landed inconclusive on the ladder (28.2% GXE, inside the 25–34% noise band). The gap between 93% bot eval and ~28% ladder (9% full-battle win rate) suggests one or more binding constraints: (a) the value head was trained on PPO rewards, not search outcomes — it doesn't know what constitutes a "winning" position under lookahead; (b) obs richness still isn't sufficient; (c) opponent-pool distribution. M8 uses a **contingency escalation**: try the flagged obs refinement first (cheap, 2–3 hour payoff), escalate to a structural change (AlphaZero-style value targets) if that fails.
+
+**Rationale for focusing on value targeting over opponent pool:** M7's cautionary reading warned that if obs richness doesn't help, the binding constraint is deeper than observations. The value head is the search's ground truth — if it's mismeasuring positions, search can't improve on a bad foundation. Opponent pool is a second-order lever; value targeting is first-order.
+
+---
+
+### M8 Phases (contingency gates between them)
+
+**Phase 0 (Infra + prerequisite):** Websocket reconnect for ladder-bot
+
+- **Goal:** De-risk long ladder runs. The 100-battle M7 ladder runs fragmented into 3 sessions due to dropped connections; Phase 6 (ladder validation) requires reliable multi-hour uptime.
+- **Scope:** `tools/ladder-bot/ladder-bot.js` — add reconnect logic with exponential backoff + state recovery (last battle ID). No protocol changes; transparent to the server.
+- **Acceptance:** 1 clean 100+ battle session, zero manual reconnects, zero data loss.
+- **Effort:** ~30 min (websocket library API, simple state machine)
+- **Blocker:** None — can start immediately in parallel with Phase 1.
+
+---
+
+**Phase 1A (Obs refinement — fast A/B):** Base-stats + speed-ratio dims
+
+- **Goal:** Test the M7 "flagged-for-M8" refinement (line 1301 MILESTONES.md). If obs richness *is* still a lever, this is the cheap way to find it.
+- **Design:** Extend v3 schema (currently 86 dims/token) with 1–2 additional dims:
+  - **Speed ratio:** own active speed / opp active speed, clamped to [0, 2] (own much slower → opp much faster). Speeds from dex via `Dex.mod('gen1').getSpecies()`.
+  - Alternative (backfill during Phase 1 if speed alone underperforms): add HP ratio (own active HP / opp active HP for health-state inference).
+  - **Schema:** v3 prefix unchanged (dims 0–85), append new dims → **v3-extended = 87–88 dims/token**. obs shape (12, 87/88).
+- **Implementation:** Minimal changes to `sim/tools/feature-extractor.ts` (add 1 lookup at each token) + test updates. Cross-schema eval can slice v3-extended back to v3 (77 dims after v2 prefix, drop new dims) for head-to-head vs v3 control.
+- **Training:** 2–3 hour quick A/B run on 1M or 2M PPO steps (vs 5M full runs) on the M7 opponent-mix recipe to check signal. If the raw policy moves >2pp on both opponents (outside the ±3–4pp noise floor for short runs), escalate to Phase 1B full run.
+- **Decision gate:** "Does speed ratio help?"
+  - ✅ **If yes** (>2pp improvement confirmed at 2M steps): escalate Phase 1B → full 5M run, skip Phase 2.
+  - ❌ **If no** (≤2pp or negative): abort Phase 1B, escalate to Phase 2 (value targets).
+- **Effort:** 4–6 hours (code, test, training, eval).
+
+**Phase 1B (if Phase 1A gates positive):** Full v3-extended PPO run
+
+- **Goal:** Train the obs-refined model to convergence and confirm the bot-eval improvement.
+- **Scope:** `models/ppo/train.py --obs-v3-extended --steps 5000000` (opponent-mix recipe as in M7), all infrastructure already in place. Checkpoints → `checkpoints/v3-extended/`.
+- **Sweep & confirmation:** 20-checkpoint sweep vs Random (150 battles each), confirmations at ≥500 vs Random / 200 vs DamageFirst on top checkpoints.
+- **Decision gate:** "Does v3-extended beat v3 on both opponents?"
+  - ✅ **If yes** (≥+2pp on both at n=500, outside ±4.5pp noise): proceed to Phase 4 ladder validation with this checkpoint.
+  - 🟨 **If tie** (+1pp to −1pp band): proceed to Phase 4 anyway (non-regression is sufficient; might transfer better to ladder).
+  - ❌ **If regression** (<−2pp either side): abort, escalate to Phase 2.
+- **Effort:** 2–3 hours training (parallel machine) + 2 hours eval.
+
+---
+
+**Phase 2 (if Phase 1 gates negative): AlphaZero value targeting**
+
+If obs refinement doesn't move the needle, the binding constraint is likely that the value head is mismeasuring positions under lookahead. Adopt an AlphaZero-style approach: use MCTS search results (outcome + discounted return from the search tree) as training targets for the value head.
+
+- **Goal:** Train the value head on search-quality targets, not PPO-reward targets. Improves leaf evaluation in the MCTS tree, tightens search quality.
+- **Design:**
+  - Generate a self-play dataset: run the current best policy (M7 checkpoint) through the MCTS search (100 sims) against a pool copy (self-play), collect 10k–20k games (~100k decisions).
+  - For each decision state, run a rollout from the MCTS node, collect discounted cumulative return `G_t = R_t + γ R_{t+1} + … + γ^n V(s_n)` (use γ=0.99 to match existing training, or γ=1.0 for undiscounted final outcome, TBD). This is the "MCTS target" — better than the PPO-trained value head.
+  - Freeze the policy and opponent heads, train the value head only on `MSE(V_head(s) - G_mcts)` for 1–2 epochs over this dataset.
+  - No retraining the full policy; this is value-head fine-tuning only (~30 min).
+- **Implementation:** Self-play collection (existing `gym_bridge.js` + MCTS with outcome tracking), value-training script (small PyTorch loop on collected trajectories).
+- **Expected payoff:** Value head becomes a better leaf evaluator; MCTS should improve downstream (less dominated by luck at leaf nodes).
+- **Effort:** 8–12 hours (self-play collection infrastructure, value fine-tune loop, testing).
+- **Risk:** Self-play data quality depends on the policy; if the policy is weak, the value targets are weak. Mitigated by using the already-strong M7 checkpoint.
+
+---
+
+**Phase 3 (if Phase 2 gates positive): Full MCTS value training run**
+
+If Phase 2's value-head fine-tuning moves the MCTS needle, scale it up: a full self-play + PPO loop where the policy trains on MCTS trajectories with value targets.
+
+- **Goal:** Full AlphaZero recipe: self-play → MCTS search → value targeting + policy training loop.
+- **Design:**
+  - **Generation:** Generate K=10k self-play games via M7-policy MCTS + pool self-play (each side is a pool member or the current policy), store search outcomes and intermediate obs.
+  - **Training:** PPO on the search trajectories, but with value targets `G_mcts` instead of TD-lambda estimates. Continue training the opp head (label-supervised as before). 1–2 million steps of training on the pool.
+  - **Iteration:** Periodically checkpoint and re-generate self-play with the new policy. 1–2 full cycles (2–4 hours per cycle at 8 envs).
+- **Expected payoff:** The policy and value head co-optimize under search, self-play avoids overfitting to a fixed opponent.
+- **Effort:** 16–24 hours (infra + training + eval).
+- **Risk:** High complexity, long training time, potential for instability if the value targets are bad. Pre-registered contingency: if loss diverges or win rate regresses after 500k steps, abort and use the Phase 2 checkpoint.
+
+---
+
+**Phase 4 (ladder validation): 100+ game ladder run**
+
+- **Prerequisite:** Phase 0 (reconnect) must be complete.
+- **Checkpoint:** Use the best checkpoint from whichever phase gates positive (Phase 1B > Phase 2 > Phase 3).
+- **Battery:** Bot evals first (vs Random, vs DamageFirst, 500 battles each) to confirm no regression from M7.
+- **Ladder:** ≥100 consecutive rated gen1randombattle games via the reconnect-enabled ladder-bot, tuned MCTS (100/1/0.5).
+- **Measurement:** Final Elo, GXE, Glicko-1 ± confidence; raw win rate; compare to M7 (1034.6 / 28.2%).
+- **Decision gate:** "Is this better than M7?"
+  - ✅ **If GXE ≥35%:** clear win; move to next milestone or stop.
+  - 🟨 **If 25% ≤ GXE < 35%:** inconclusive; optional 50-game follow-up to narrow the band.
+  - ❌ **If GXE <25%:** regression; write postmortem, consider whether the binding constraint is architectural.
+
+---
+
+### Pre-Registered Success Criteria
+
+**Criterion A (Phase 1A gate):** Speed-ratio A/B run (1–2M steps) shows >+2pp signal vs Random and DamageFirst on the quick 150-battle evals.
+- ✅ **Pass:** escalate to Phase 1B or 4 (skip 2/3).
+- ❌ **Fail:** escalate to Phase 2.
+
+**Criterion B (Phase 1B gate, if A passes):** v3-extended full run (5M) beats v3 on both bot opponents by ≥+2pp at n=500 OR ties (≤+1pp, ≥−1pp).
+- ✅ **Pass or tie:** escalate to Phase 4.
+- ❌ **Fail (regression):** escalate to Phase 2.
+
+**Criterion C (Phase 2 gate, if B fails):** Value-head fine-tuning on self-play targets improves MCTS performance on the existing M7 checkpoint by ≥+3pp vs DamageFirst (tuned MCTS, 200 battles).
+- ✅ **Pass:** escalate to Phase 3.
+- ❌ **Fail:** abort Phase 3, use M7 checkpoint as baseline for Phase 4.
+
+**Criterion D (Phase 3 gate, if C passes):** Full MCTS value training (after 500k steps) maintains or improves bot evals vs the M7 checkpoint.
+- ✅ **Pass:** escalate to Phase 4.
+- ❌ **Fail (regression or divergence):** use Phase 2 checkpoint for Phase 4.
+
+**Criterion E (Phase 4, final):** Ladder GXE after 100+ games.
+- ✅ **GXE ≥35%:** clear win; M8 complete.
+- 🟨 **25–34%:** inconclusive; optional 50-game follow-up.
+- ❌ **<25%:** regression; postmortem.
+
+---
+
+### Effort & Duration
+
+- **Phase 0:** 30 min (parallel).
+- **Phase 1A (abort on fail):** 4–6 hours (parallel machine).
+- **Phase 1B (if 1A passes):** 2–3 hours training + 2 hours eval (parallel).
+- **Phase 2 (if 1 fails):** 8–12 hours (includes self-play infrastructure).
+- **Phase 3 (if 2 passes):** 16–24 hours (iterative self-play + training).
+- **Phase 4:** 4–6 hours eval + 2–8 hours ladder (depending on checkpoint and parallelism).
+- **Total (worst case):** ~48 hours spread over 3–4 days. **Most likely path:** Phase 1A → 1B or 2 → 4 = ~12–16 hours.
+
+---
+
+### Unblocks
+
+Depends on result:
+- **If M8 succeeds on ladder (GXE ≥35%):** M9 candidate directions — team-specific specialists, multi-format BC, opponent-pool scaling.
+- **If M8 inconclusive or regresses:** postmortem on whether randbats variance or opponent-pool diversity (not obs/value targeting) is the binding constraint.
+
+---
+
 ## Architecture Reference
 
 ```
@@ -1435,3 +1575,4 @@ Best action
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
 | M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
 | M7: Observation Schema v3 | ✅ | **New best agent (bot evals)** — tuned MCTS 93.0% R / 84.2% DF, +2.4/+5.0pp vs prior best. **Ladder: inconclusive** — Elo 1034.6 / GXE 28.2% (M6: 1017/23.9%), lands in the pre-registered 25–34% noise band; directionally up (+9pp raw win rate) but not a confirmed win | M8 |
+| **M8: Value-Head Targeting + Ladder Infra** | ⏳ Scoped | **Contingency-based escalation:** if obs refinement (base-stats) doesn't move ladder, pivot to AlphaZero-style self-play value training. Ladder-bot websocket reconnect fix mandatory in Phase 0. Bot bars 93%/84% (repeat M7 evals as baseline), ladder GXE ≥35% for win or <25% for clear regression (same ±35 noise band). | — |

@@ -6,11 +6,7 @@ Last updated: 2026-07-20
 
 ## Current Work
 
-**M7 is complete.** No active phase. Next session should decide between the
-Criterion C follow-up (optional 50-game ladder run, see below) and starting
-M8. Nothing is currently running in the background — the ladder-bot auto-
-restart wrapper and monitor were stopped, and no `ladder-bot.js`/
-`infer_server` processes are left running (verified via `pgrep`).
+**M7 is complete; M8 is scoped (2026-07-22).** No active phase. Decision point for the user: proceed with M8 build or run the optional M7 Criterion C 50-game follow-up (independent of M8). Nothing is currently running in the background.
 
 **Phase 6 (ladder, Criterion C) ✅ COMPLETE 2026-07-20 — INCONCLUSIVE.**
 100/100 consecutive rated `gen1randombattle` games via
@@ -71,15 +67,15 @@ loss healthy to the end, late rollout win rates 0.40–0.45 vs the mixed pool.
   pre-registered conditional rule, Phase 6 (≥100-game ladder run,
   Criterion C GXE bands) is mandatory next.
 
-**M7 (Observation Schema v3) — 🟡 SCOPED 2026-07-17.** Addresses M6's failure
-analysis: type effectiveness, move-effect flags, Sleep Clause signal, and
-species/base-stats info. The observation schema has never been the bottleneck
-before (parallel training, MCTS, BC, opponent modeling all helped), but the
-rules omitted this time are ones humans apply *every* game. 6 phases,
-~6–8 hours total (phases 0–3 build, then 2h BC pretrain + 2h fine-tune +
-≥100-game ladder run). Pre-registered criteria (bot evals + ladder Glicko
-stability) avoid overfitting to project bots. Plan lives in `AGENT_JOBS.md`;
-full spec in `MILESTONES.md` → M7.
+---
+
+## Recently Completed
+
+**M8: Value-Head Targeting + Ladder Infrastructure — ⏳ SCOPED 2026-07-22**
+Contingency-based escalation: Phase 0 (websocket reconnect) mandatory; Phase 1A (obs refinement, speed-ratio A/B) as a quick gate; Phase 2 (AlphaZero value targeting) if obs fails. Full 6-phase plan in `MILESTONES.md` → M8. Pre-registered success criteria: bot evals ≥93%/≥84%, ladder GXE ≥35% or <25% (same noise band as M7). Most likely path: Phase 1A → 1B or 2 → ladder validation = ~12–16 hours.
+
+**M7 (Observation Schema v3) — ✅ COMPLETE 2026-07-20**
+Criterion A ✅, Criterion B ✅ (new best agent: 93.0% R / 84.2% DF), Criterion C 🟡 inconclusive (Elo 1034.6 / GXE 28.2% vs M6's 1017/23.9%, landed in 25–34% noise band). v3 adds type effectiveness, move-effect flags, Sleep Clause tracking — the highest-leverage obs features humans use every game. Bug fix: battle-sim.ts now supports v3 (obs-shape-agnostic MCTS now truly holds). Full results in `MILESTONES.md` → M7.
 
 **Phase 0 — Job 0.1 (Type chart + move-effect flags + encoding) ✅ DONE
 2026-07-17.** Created `sim/tools/type-chart-v3.ts` — the spec-lock layer Jobs
@@ -1050,30 +1046,19 @@ None. All components verified and working.
 
 ## Next Steps
 
-### M7 follow-up decision (not yet made)
-M7 is done but Criterion C landed inconclusive (GXE 28.2%, 25–34% noise
-band). Two options, pre-authorized either way:
-1. **50-game Criterion C follow-up** (pre-registered contingency) — resolve
-   whether the true GXE is above or below the 35% "clear win" line. Cheaper
-   than it sounds now that the ladder-bot invocation is proven; main cost is
-   ladder queue wall-clock and the reconnect fragmentation.
-2. **Move on to M8** and treat v3 as shipped (it's a strict upgrade on
-   Criterion A + B, and directionally non-negative on the ladder) — revisit
-   Criterion C only if a future milestone's ladder run also looks off.
+### M8: Value-Head Targeting + Ladder Infrastructure (scoped 2026-07-22)
 
-**Known gap carried forward:** `tools/ladder-bot/ladder-bot.js` still has no
-websocket reconnect logic. Worth fixing before the next ladder-dependent
-milestone so a 100+ game run doesn't require manual `--battles` bookkeeping
-across sessions.
+**Immediate first action (after user approval to build):** parallelize Phase 0 + Phase 1A.
+- **Phase 0 (30 min, can start immediately):** Websocket reconnect logic for ladder-bot (`tools/ladder-bot/ladder-bot.js`). De-risks all future ladder runs.
+- **Phase 1A (4–6 hours, parallel machine):** Speed-ratio A/B run — quick 1–2M PPO steps to test whether base-stats/speed dims help. Decision gate at 2M: if >+2pp signal on both Random + DamageFirst, escalate to Phase 1B full run; else escalate to Phase 2 (value targeting).
 
-**Process note (user directive, 2026-07-20):** live-ladder runs work
-reliably when the user launches `ladder-bot.js` from their own terminal but
-have repeatedly disconnected when Claude runs it via a sandboxed background
-task. Root cause unconfirmed, but going forward **Claude should hand the
-ladder-bot command to the user rather than run it directly** — see
-`docs/TRAINING-COMMANDS.md` → "Running the ladder bot (live official
-server)". This applies only to live-ladder play; local training/eval is
-unaffected.
+**Full M8 contingency structure in MILESTONES.md → M8:** 6 phases with gates between them. **Most likely path:** Phase 1A → 1B or 2 → 4 = ~12–16 hours total. Worst case (full AlphaZero): ~48 hours over 3–4 days.
+
+**Pre-registered criteria:** Bot evals repeat M7 baseline (93%/84%), ladder GXE ≥35% for win or <25% for clear regression (same ±35 noise band as M7).
+
+**M7 follow-up decision (orthogonal to M8):** Criterion C landed inconclusive (GXE 28.2%, 25–34% noise band). An optional 50-game follow-up is pre-authorized to narrow the band, but does not block M8 scoping or build. User runs it independently if desired.
+
+**Known gap carried forward:** M8 Phase 0 fixes the websocket reconnect issue, de-risking Phase 4 (ladder validation).
 
 ### M7 — Observation Schema v3
 ✅ **Complete 2026-07-20.** Criterion A pass, Criterion B pass (93.0% R /

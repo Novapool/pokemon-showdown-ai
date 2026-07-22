@@ -45,3 +45,11 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 | `tools/` | AI helpers (`RandomPlayerAI`, etc.) |
 | `dist/` | Compiled JS output — what Node.js actually runs |
 | `output/` | Output from `simulate.js` (unrelated script — ignore for ML work) |
+
+## Obsidian
+
+Companion note: `/Users/laithassaf/Documents/Obsidian/nebula/1 Projects/pokemon-showdown.md`
+
+When you make a large/architectural change or complete a milestone, update that
+note's **Summary / Status / Next** sections to match (keep it concise). See the
+"Obsidian Vault Sync" convention in `~/.claude/CLAUDE.md`.
