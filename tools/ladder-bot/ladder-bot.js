@@ -39,6 +39,9 @@ const { actionToChoice, validActionsForRequest } = require('../../dist/sim/tools
 const { extractFeaturesStructured } = require('../../dist/sim/tools/feature-extractor');
 
 const DEFAULT_SERVER = 'wss://sim3.psim.us/showdown/websocket';
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 30000;
+const RECONNECT_MAX_ATTEMPTS = 15;
 const LOGIN_API = 'https://play.pokemonshowdown.com/api/login';
 const ASSERTION_API = 'https://play.pokemonshowdown.com/action.php';
 
@@ -210,7 +213,10 @@ class BattleRoom {
 			// Invalid choice — fall back to the server-side default so the
 			// battle never stalls; log it loudly (should not happen).
 			console.error(`[${this.roomid}] ${line}`);
-			if (line.includes('[Invalid choice]')) {
+			// "too late" = a choice is already locked in (e.g. a stale
+				// request replayed on rejoin); defaulting again would error in
+				// a loop, so leave it alone.
+				if (line.includes('[Invalid choice]') && !line.includes('too late')) {
 				this.bot.send(`${this.roomid}|/choose default`);
 			}
 		} else {
@@ -318,9 +324,16 @@ class LadderBot {
 		this.obsV2 = null;     // set after ping (schema inferred from checkpoint obs_size)
 		this.obsV3 = null;     // set after ping (M7: (12,86) schema-v3 checkpoint)
 		this.mctsReady = false; // set after ping (--mcts requested AND server confirms)
+		this.shuttingDown = false;      // set when the run is complete (clean close)
+		this.reconnectAttempts = 0;     // consecutive failed (re)connects; reset on login
+		this.pendingRejoin = new Set(); // battles interrupted by a disconnect
 	}
 
 	send(message) {
+		if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+			console.error(`send skipped (socket not open): ${message.split('\n')[0]}`);
+			return;
+		}
 		if (this.verbose && !message.includes('/choose')) console.log(`>> ${message}`);
 		this.ws.send(message);
 	}
@@ -339,16 +352,51 @@ class LadderBot {
 			(this.mctsReady ? `, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
 				`c_puct=${this.args.cPuct})` : ''));
 
+		this._connect();
+	}
+
+	_connect() {
 		this.ws = new WebSocket(this.args.server);
 		this.ws.addEventListener('open', () => console.log(`connected: ${this.args.server}`));
 		this.ws.addEventListener('message', event => {
 			this.receive(String(event.data)).catch(err => console.error('receive error:', err));
 		});
 		this.ws.addEventListener('close', () => {
-			console.log('connection closed');
-			process.exit(this.finished >= this.args.battles ? 0 : 1);
+			if (this.shuttingDown) {
+				console.log('connection closed');
+				process.exit(this.finished >= this.args.battles ? 0 : 1);
+			}
+			this._scheduleReconnect();
 		});
 		this.ws.addEventListener('error', err => console.error('websocket error:', err.message ?? err));
+	}
+
+	/**
+	 * Reconnect with exponential backoff after an unexpected disconnect.
+	 * In-flight battles are remembered and rejoined after re-login; their
+	 * room state is discarded so the server's full-log replay on /join
+	 * rebuilds trackers from scratch (no double-processing).
+	 */
+	_scheduleReconnect() {
+		this.reconnectAttempts++;
+		if (this.reconnectAttempts > RECONNECT_MAX_ATTEMPTS) {
+			console.error(`giving up after ${RECONNECT_MAX_ATTEMPTS} reconnect attempts ` +
+				`(${this.finished}/${this.args.battles} battles finished)`);
+			this.infer.close();
+			process.exit(1);
+		}
+		for (const roomid of this.rooms.keys()) {
+			this.pendingRejoin.add(roomid);
+			this.rooms.delete(roomid);
+		}
+		this.loggedIn = false;
+		this.searching = false;
+		const delay = Math.min(RECONNECT_MAX_DELAY_MS,
+			RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1));
+		console.log(`disconnected — reconnecting in ${Math.round(delay / 1000)}s ` +
+			`(attempt ${this.reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS}` +
+			(this.pendingRejoin.size ? `, ${this.pendingRejoin.size} battle(s) to rejoin` : '') + ')');
+		setTimeout(() => this._connect(), delay);
 	}
 
 	async login(challstr) {
@@ -383,8 +431,17 @@ class LadderBot {
 	onLoggedIn() {
 		if (this.loggedIn) return;
 		this.loggedIn = true;
+		this.reconnectAttempts = 0;
 		console.log(`logged in as ${this.username}`);
 		this.send('|/cmd rooms'); // keepalive-ish no-op
+		if (this.pendingRejoin.size) {
+			for (const roomid of this.pendingRejoin) {
+				console.log(`rejoining interrupted battle: ${roomid}`);
+				this.send(`|/join ${roomid}`);
+			}
+			this.pendingRejoin.clear();
+			return; // resume searching only after the rejoined battle(s) finish
+		}
 		if (this.args.challenge) {
 			this.send(`|/challenge ${this.args.challenge}, ${this.args.format}`);
 			console.log(`challenged ${this.args.challenge} to ${this.args.format}`);
@@ -430,14 +487,41 @@ class LadderBot {
 						this.send(`|/accept ${from}`);
 						console.log(`accepted challenge from ${from}`);
 					}
+				} else if (type === 'updatesearch') {
+					// After a reconnect, battles that started while we were
+					// offline (ladder matched us mid-disconnect) only show up
+					// here — join any game we aren't already tracking.
+					try {
+						const data = JSON.parse(parts.slice(2).join('|'));
+						for (const gameid of Object.keys(data.games || {})) {
+							if (gameid.startsWith('battle-') &&
+								!this.rooms.has(gameid) && !this.finishedRooms.has(gameid)) {
+								console.log(`joining untracked battle: ${gameid}`);
+								this.send(`|/join ${gameid}`);
+							}
+						}
+					} catch {}
 				} else if (type === 'popup' || type === 'nametaken') {
 					console.error(`server: ${line}`);
+					// A rejoin target that expired while we were offline —
+					// don't stall the run waiting for it.
+					if (line.includes("does not exist") && !this.rooms.size &&
+						!this.args.challenge && !this.args.acceptFrom) {
+						setTimeout(() => this.searchNext(), 3000);
+					}
 				}
 				continue;
 			}
 
 			if (roomid.startsWith('battle-')) {
 				if (this.finishedRooms.has(roomid)) continue; // late frames after /leave
+				if (type === 'init' && this.rooms.has(roomid)) {
+					// The server resends the full log on a rejoin/replayed join —
+					// rebuild the room from scratch so trackers never see a line
+					// twice.
+					console.log(`re-initializing room from replay: ${roomid}`);
+					this.rooms.delete(roomid);
+				}
 				let room = this.rooms.get(roomid);
 				if (!room) {
 					room = new BattleRoom(roomid, this);
@@ -468,6 +552,7 @@ class LadderBot {
 				this.send(`${id}|/leave`);
 				if (this.finished >= this.args.battles) {
 					console.log(`done: ${this.wins}/${this.finished} battles won`);
+					this.shuttingDown = true;
 					this.infer.close();
 					this.ws.close();
 				} else if (this.args.challenge) {

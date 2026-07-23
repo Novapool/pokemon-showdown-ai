@@ -1,12 +1,34 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-20
+Last updated: 2026-07-22
 
 ---
 
 ## Current Work
 
-**M7 is complete; M8 is scoped (2026-07-22).** No active phase. Decision point for the user: proceed with M8 build or run the optional M7 Criterion C 50-game follow-up (independent of M8). Nothing is currently running in the background.
+**M8 Phase 0 (websocket reconnect) ✅ DONE 2026-07-22.** `tools/ladder-bot/
+ladder-bot.js` now survives disconnects: exponential backoff (1s → 30s cap,
+15 attempts, counter reset on successful login), re-login on the fresh
+`challstr`, and rejoin of in-flight battles. Interrupted rooms are rebuilt
+as fresh `BattleRoom`s from the server's full-log replay on `/join` (an
+`|init|` frame for an existing room resets it), so trackers never process a
+line twice. `updatesearch` games are joined when untracked — covers battles
+the ladder matched while the bot was offline. `send()` is guarded while the
+socket is down (dropped choices get re-solicited via the replayed request),
+and the `[Invalid choice]` → `/choose default` fallback now ignores
+"too late" errors (a stale replayed request would otherwise loop). Verified
+via local bot-vs-bot smoke through a killable TCP proxy: normal 1-battle
+flow unchanged; mid-battle connection kill → reconnect in 1s → re-login →
+rejoin → battle completed cleanly (27 decisions, exit 0). Formal Phase 0
+acceptance (one clean 100+ battle ladder session, zero manual restarts)
+rides on the next long ladder run — the user's pre-authorized M7
+Criterion C 50-game follow-up is the natural first exercise.
+
+**M7 Criterion C 50-game follow-up — pending, user-run.** Command handed
+off; reads GXE from `pokemonshowdown.com/users/novapool.json` afterward
+(≥35% = confirmed M7 win, 25–34% = still inconclusive, <25% = regression).
+Independent of the M8 build; next M8 step after it is Phase 1A
+(speed-ratio obs A/B).
 
 **Phase 6 (ladder, Criterion C) ✅ COMPLETE 2026-07-20 — INCONCLUSIVE.**
 100/100 consecutive rated `gen1randombattle` games via

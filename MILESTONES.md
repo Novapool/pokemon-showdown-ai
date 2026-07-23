@@ -1390,13 +1390,22 @@ M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value ta
 
 ### M8 Phases (contingency gates between them)
 
-**Phase 0 (Infra + prerequisite):** Websocket reconnect for ladder-bot
+**Phase 0 (Infra + prerequisite):** Websocket reconnect for ladder-bot — ✅ BUILT 2026-07-22 (acceptance pending a long ladder run)
 
 - **Goal:** De-risk long ladder runs. The 100-battle M7 ladder runs fragmented into 3 sessions due to dropped connections; Phase 6 (ladder validation) requires reliable multi-hour uptime.
 - **Scope:** `tools/ladder-bot/ladder-bot.js` — add reconnect logic with exponential backoff + state recovery (last battle ID). No protocol changes; transparent to the server.
 - **Acceptance:** 1 clean 100+ battle session, zero manual reconnects, zero data loss.
 - **Effort:** ~30 min (websocket library API, simple state machine)
 - **Blocker:** None — can start immediately in parallel with Phase 1.
+- **Built 2026-07-22:** exponential backoff (1s→30s cap, 15 attempts, reset on
+  login), re-login on fresh `challstr`, in-flight battles rejoined via `/join`
+  with the room rebuilt fresh from the server's full-log replay (repeat `|init|`
+  resets an existing room — no double-processed tracker lines); untracked
+  `updatesearch` games joined (covers ladder matches made while offline);
+  `send()` guarded while disconnected; `[Invalid choice]` default fallback now
+  ignores "too late" (stale replayed request would loop). Verified by local
+  bot-vs-bot smoke through a killable TCP proxy: mid-battle kill → reconnect →
+  rejoin → clean finish. Formal acceptance rides on the next 50+ game ladder run.
 
 ---
 
