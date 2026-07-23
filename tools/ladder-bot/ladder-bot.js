@@ -25,6 +25,11 @@
  *   PS_USERNAME=... PS_PASSWORD=... node tools/ladder-bot/ladder-bot.js \
  *     --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt --battles 10
  *
+ *   # Resumable run: --run-id persists progress (finished/wins) to
+ *   # <save-dir>/run_<id>.json after every battle. If the process dies for any
+ *   # reason, re-running the SAME command continues at the next battle —
+ *   # --battles stays the absolute target, no manual arithmetic.
+ *
  * Requires `./build` (dist/) and Node >= 22 (built-in WebSocket).
  */
 
@@ -55,6 +60,8 @@ function parseArgs(argv) {
 		password: process.env.PS_PASSWORD || null,
 		challenge: null,   // send a challenge to this user instead of laddering
 		acceptFrom: null,  // accept challenges from this user instead of laddering
+		runId: null,       // named resumable run: progress persists in saveDir, so
+		                   // re-running the same command continues where it stopped
 		loginFile: null,   // "username: ...\npassword: ..." file (keeps creds off argv/env)
 		saveDir: 'data/replays/self_ladder',
 		device: 'cpu',
@@ -75,6 +82,7 @@ function parseArgs(argv) {
 		case '--challenge': args.challenge = argv[++i]; break;
 		case '--accept-from': args.acceptFrom = argv[++i]; break;
 		case '--login-file': args.loginFile = argv[++i]; break;
+		case '--run-id': args.runId = argv[++i]; break;
 		case '--save-dir': args.saveDir = argv[++i]; break;
 		case '--device': args.device = argv[++i]; break;
 		case '--verbose': args.verbose = true; break;
@@ -327,6 +335,33 @@ class LadderBot {
 		this.shuttingDown = false;      // set when the run is complete (clean close)
 		this.reconnectAttempts = 0;     // consecutive failed (re)connects; reset on login
 		this.pendingRejoin = new Set(); // battles interrupted by a disconnect
+		this.joinRequested = new Set(); // /join sent, room frame not yet seen (dedupe)
+		this.runFile = args.runId ?
+			path.join(args.saveDir, `run_${toID(args.runId)}.json`) : null;
+		this._loadRunState();
+	}
+
+	/** --run-id: restore finished/wins so a restarted run continues in place. */
+	_loadRunState() {
+		if (!this.runFile || !fs.existsSync(this.runFile)) return;
+		try {
+			const state = JSON.parse(fs.readFileSync(this.runFile, 'utf8'));
+			this.finished = state.finished || 0;
+			this.wins = state.wins || 0;
+			console.log(`resuming run '${this.args.runId}': ` +
+				`${this.wins}/${this.finished} won so far, target ${this.args.battles}`);
+		} catch (err) {
+			throw new Error(`corrupt run file ${this.runFile}: ${err.message}`);
+		}
+	}
+
+	_saveRunState() {
+		if (!this.runFile) return;
+		fs.mkdirSync(path.dirname(this.runFile), { recursive: true });
+		fs.writeFileSync(this.runFile, JSON.stringify({
+			finished: this.finished, wins: this.wins,
+			target: this.args.battles, updated: new Date().toISOString(),
+		}) + '\n');
 	}
 
 	send(message) {
@@ -339,6 +374,12 @@ class LadderBot {
 	}
 
 	async start() {
+		if (this.finished >= this.args.battles) {
+			console.log(`run '${this.args.runId}' already complete: ` +
+				`${this.wins}/${this.finished} won — raise --battles to extend it`);
+			this.infer.close();
+			return;
+		}
 		const pong = await this.infer.ping();
 		const obsSize = pong.obs_size;
 		this.obsV3 = obsSize === 12 * 86;
@@ -391,6 +432,7 @@ class LadderBot {
 		}
 		this.loggedIn = false;
 		this.searching = false;
+		this.joinRequested.clear();
 		const delay = Math.min(RECONNECT_MAX_DELAY_MS,
 			RECONNECT_BASE_DELAY_MS * 2 ** (this.reconnectAttempts - 1));
 		console.log(`disconnected — reconnecting in ${Math.round(delay / 1000)}s ` +
@@ -495,7 +537,9 @@ class LadderBot {
 						const data = JSON.parse(parts.slice(2).join('|'));
 						for (const gameid of Object.keys(data.games || {})) {
 							if (gameid.startsWith('battle-') &&
-								!this.rooms.has(gameid) && !this.finishedRooms.has(gameid)) {
+								!this.rooms.has(gameid) && !this.finishedRooms.has(gameid) &&
+								!this.joinRequested.has(gameid)) {
+								this.joinRequested.add(gameid);
 								console.log(`joining untracked battle: ${gameid}`);
 								this.send(`|/join ${gameid}`);
 							}
@@ -547,9 +591,20 @@ class LadderBot {
 					`(${room.decisions} decisions${this.mctsReady ? `, ${room.searched} searched` : ''}, ` +
 					`max ${room.maxLatencyMs}ms) [${this.wins}/${this.finished} won]`);
 				room.save(this.args.saveDir);
+				this._saveRunState();
 				this.rooms.delete(id);
 				this.finishedRooms.add(id);
 				this.send(`${id}|/leave`);
+				// Rated battles are joined under both the base roomid and a
+				// -suffixed (password) alias; retire the twin so it doesn't
+				// linger as a phantom room.
+				for (const otherId of this.rooms.keys()) {
+					if (id.startsWith(otherId) || otherId.startsWith(id)) {
+						this.rooms.delete(otherId);
+						this.finishedRooms.add(otherId);
+						this.send(`${otherId}|/leave`);
+					}
+				}
 				if (this.finished >= this.args.battles) {
 					console.log(`done: ${this.wins}/${this.finished} battles won`);
 					this.shuttingDown = true;

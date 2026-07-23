@@ -24,11 +24,29 @@ acceptance (one clean 100+ battle ladder session, zero manual restarts)
 rides on the next long ladder run — the user's pre-authorized M7
 Criterion C 50-game follow-up is the natural first exercise.
 
-**M7 Criterion C 50-game follow-up — pending, user-run.** Command handed
-off; reads GXE from `pokemonshowdown.com/users/novapool.json` afterward
-(≥35% = confirmed M7 win, 25–34% = still inconclusive, <25% = regression).
-Independent of the M8 build; next M8 step after it is Phase 1A
-(speed-ratio obs A/B).
+**M7 Criterion C 50-game follow-up ✅ RUN 2026-07-22/23 (user-run) — STILL
+INCONCLUSIVE, but strongly directional.** 50/50 rated games in ONE clean
+session, zero disconnects/manual restarts — the reconnect-enabled bot's
+first real outing (nothing to reconnect from, so formal Phase 0 acceptance
+still technically pending a session that actually drops). **Raw 21/50
+(42%)**, up from the main run's 30%. Account after
+(`pokemonshowdown.com/users/novapool.json`): **Elo 1101.4, GXE 32.9%**
+(from 1034.6 / 28.2% pre-follow-up; M6 baseline 1017 / 23.9%). GXE 32.9%
+is still inside the 25–34% noise band → per the pre-registered rule M7
+Criterion C stays **inconclusive**, but the trend across 150 total games
+is monotonic (23.9 → 28.2 → 32.9) and sits 2.1pp under the win bar. Log:
+`data/replays/self_ladder/m7_ladder_followup.log`. Next: M8 Phase 1A.
+
+**Ladder-bot `--run-id` resumable runs ✅ DONE 2026-07-23.** `--run-id
+<name>` persists `{finished, wins, target}` to `<save-dir>/run_<id>.json`
+after every battle; re-running the SAME command (with `--battles` as the
+absolute target) resumes at the next battle — no more manual
+`--battles <remaining>` arithmetic after a crash/kill. Re-running a
+completed run prints a notice and exits 0. Also from the 50-game log:
+deduped the doubled `/join` sends, and finished battles now retire their
+base/`-suffixed` (password-alias) twin room so it can't linger as a
+phantom. Verified locally: kill after battle 1 of a 2-battle `--run-id`
+run → restart resumes at 2/2 → completion → rerun no-ops.
 
 **Phase 6 (ladder, Criterion C) ✅ COMPLETE 2026-07-20 — INCONCLUSIVE.**
 100/100 consecutive rated `gen1randombattle` games via
