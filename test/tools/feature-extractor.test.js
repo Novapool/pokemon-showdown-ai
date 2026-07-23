@@ -17,6 +17,7 @@ const {
 	TOKEN_DIM,
 	TOKEN_DIM_V2,
 	TOKEN_DIM_V3,
+	TOKEN_DIM_V3_EXT,
 	N_TOKENS,
 } = require('../../dist/sim/tools/feature-extractor');
 const {
@@ -26,7 +27,10 @@ const {
 	V3_FLAG_PRIORITY,
 	V3_INFLICTED_STATUS,
 	V3_SLEEP_CLAUSE,
+	V3_SPEED_RATIO,
 	MOVE_STATUS_ID_MAX,
+	gen1BaseSpeed,
+	encodeSpeedRatio,
 } = require('../../dist/sim/tools/type-chart-v3');
 
 // ---------------------------------------------------------------------------
@@ -330,6 +334,98 @@ describe('extractFeaturesStructured — schema v3 (M7)', () => {
 			assert.equal(result[OWN + V3_TYPE_EFF], 0.0);
 			// sleep clause still placed
 			assert.equal(result[OWN + V3_SLEEP_CLAUSE], 1.0);
+		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// M8 Phase 1A — schema v3-extended (dim 86 = own/opp active base-speed ratio)
+// ---------------------------------------------------------------------------
+
+/** A move request whose own active is `species` (base speed drives dim 86). */
+function makeMoveRequestForSpecies(species) {
+	const req = makeMoveRequest([
+		{ move: 'Tackle', id: 'tackle', pp: 35, maxpp: 35, target: 'normal', disabled: false },
+	]);
+	req.side.pokemon[0].details = `${species}, L100, M`;
+	return req;
+}
+
+function extOf(request, opponent) {
+	return extractFeaturesStructured(request, opponent, bothVolatiles(), { sleepClause: false, extended: true });
+}
+
+describe('extractFeaturesStructured — schema v3-extended (M8 Phase 1A)', () => {
+	it('returns 12 × TOKEN_DIM_V3_EXT (=87) floats with no NaN/inf when extended is set', () => {
+		const result = extOf(makeMoveRequest(), []);
+		assert.equal(TOKEN_DIM_V3_EXT, 87);
+		assert.equal(result.length, N_TOKENS * TOKEN_DIM_V3_EXT);
+		assert([...result].every(v => Number.isFinite(v)), 'v3-extended observation must not contain NaN/inf');
+	});
+
+	it('keeps every token dim 0–85 byte-identical between a v3 and a v3-extended call', () => {
+		const request = makeMoveRequestForSpecies('Alakazam');
+		const opponent = [
+			{ details: 'Snorlax, L100', condition: '80/100', active: true, moves: ['bodyslam'] },
+			{ details: 'Gengar, L100', condition: '90/100', active: false, moves: ['lick'] },
+		];
+		const vol = bothVolatiles();
+		const v3 = extractFeaturesStructured(request, opponent, vol, { sleepClause: true });
+		const ext = extractFeaturesStructured(request, opponent, vol, { sleepClause: true, extended: true });
+		assert.equal(v3.length, N_TOKENS * TOKEN_DIM_V3);
+		assert.equal(ext.length, N_TOKENS * TOKEN_DIM_V3_EXT);
+		for (let t = 0; t < N_TOKENS; t++) {
+			for (let d = 0; d < TOKEN_DIM_V3; d++) {
+				assert.equal(
+					ext[t * TOKEN_DIM_V3_EXT + d], v3[t * TOKEN_DIM_V3 + d],
+					`v3-extended token ${t} dim ${d} diverged from v3`
+				);
+			}
+		}
+	});
+
+	describe('dim 86 — own/opp active base-speed ratio', () => {
+		it('encodes min(own/opp,2)/2, placed identically on all 12 tokens (Alakazam 120 vs Snorlax 30 -> 1.0)', () => {
+			const request = makeMoveRequestForSpecies('Alakazam');
+			const opponent = [{ details: 'Snorlax, L100', condition: '100/100', active: true, moves: [] }];
+			const result = extOf(request, opponent);
+			// 120/30 = 4 -> clamp 2 -> /2 = 1.0 (saturates)
+			const expected = encodeSpeedRatio(gen1BaseSpeed('Alakazam'), gen1BaseSpeed('Snorlax'));
+			assert.equal(expected, 1.0);
+			for (let t = 0; t < N_TOKENS; t++) {
+				assert.equal(result[t * TOKEN_DIM_V3_EXT + V3_SPEED_RATIO], expected, `token ${t} speed ratio`);
+			}
+		});
+
+		it('encodes a sub-1 ratio for a slower own active (Snorlax 30 vs Alakazam 120 -> 0.125)', () => {
+			const request = makeMoveRequestForSpecies('Snorlax');
+			const opponent = [{ details: 'Alakazam, L100', condition: '100/100', active: true, moves: [] }];
+			const result = extOf(request, opponent);
+			// 30/120 = 0.25 -> /2 = 0.125
+			assert.equal(result[OWN + V3_SPEED_RATIO], 0.125);
+		});
+
+		it('encodes 0.5 for a mirror matchup (equal base speed)', () => {
+			const request = makeMoveRequestForSpecies('Tauros');
+			const opponent = [{ details: 'Tauros, L100', condition: '100/100', active: true, moves: [] }];
+			const result = extOf(request, opponent);
+			assert.equal(result[OWN + V3_SPEED_RATIO], 0.5);
+		});
+
+		it('falls back to neutral 0.5 when the opponent active is not yet revealed', () => {
+			const request = makeMoveRequestForSpecies('Alakazam');
+			const result = extOf(request, []); // no opponent info
+			for (let t = 0; t < N_TOKENS; t++) {
+				assert.equal(result[t * TOKEN_DIM_V3_EXT + V3_SPEED_RATIO], 0.5, `token ${t} neutral`);
+			}
+		});
+
+		it('falls back to neutral 0.5 for an unknown opponent species (unresolvable base speed)', () => {
+			const request = makeMoveRequestForSpecies('Alakazam');
+			const opponent = [{ details: 'Notarealmon, L100', condition: '100/100', active: true, moves: [] }];
+			const result = extOf(request, opponent);
+			assert.equal(result[OWN + V3_SPEED_RATIO], 0.5);
+			assert([...result].every(v => Number.isFinite(v)));
 		});
 	});
 });

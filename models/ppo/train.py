@@ -94,6 +94,17 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--obs-v3-extended",
+        action="store_true",
+        help=(
+            "M8 Phase 1A: train on the (12,87)->1044 schema-v3-extended "
+            "observation (v3 plus the own/opp active base-speed ratio at "
+            "dim 86). Implies --structured. obs_size is auto-inferred (1044). "
+            "Checkpoints go to checkpoints/v3-extended/ — v1/v2/v3 checkpoints "
+            "still play as pool/h2h opponents (sliced per token)."
+        ),
+    )
+    parser.add_argument(
         "--num-envs",
         type=int,
         default=8,
@@ -216,9 +227,9 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     args = parser.parse_args()
-    if args.obs_v2 and args.obs_v3:
-        parser.error("--obs-v2 and --obs-v3 are mutually exclusive")
-    if args.obs_v2 or args.obs_v3:
+    if sum([args.obs_v2, args.obs_v3, args.obs_v3_extended]) > 1:
+        parser.error("--obs-v2, --obs-v3, and --obs-v3-extended are mutually exclusive")
+    if args.obs_v2 or args.obs_v3 or args.obs_v3_extended:
         args.structured = True
     if args.opponent_mix and args.opponent != "random":
         parser.error("--opponent-mix and --opponent are mutually exclusive")
@@ -298,7 +309,8 @@ def main() -> None:
     else:
         checkpoint_dir = (
             Path(__file__).parent / "checkpoints"
-            / ("v3" if args.obs_v3 else "v2" if args.obs_v2
+            / ("v3-extended" if args.obs_v3_extended else "v3" if args.obs_v3
+               else "v2" if args.obs_v2
                else "structured" if args.structured else ".")
         )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -313,11 +325,11 @@ def main() -> None:
     # The opponent family is set per reset by _switch_family() below, so the
     # constructor doesn't need spawn-time opponent flags.
     env = VecGymClient(num_envs, structured=args.structured, obs_v2=args.obs_v2,
-                       obs_v3=args.obs_v3)
+                       obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended)
 
     def _flatten(o):
         # The MLP consumes flat vectors: (N, 12, D) -> (N, 12*D) in structured
-        # mode (D=65 v1, 77 v2, 86 v3); flat mode is already (N, 100).
+        # mode (D=65 v1, 77 v2, 86 v3, 87 v3-extended); flat mode is (N, 100).
         return o.reshape(num_envs, -1) if args.structured else o
 
     def _flatten_seat(state):
@@ -397,7 +409,7 @@ def main() -> None:
 
     print(
         f"Starting PPO training: {total_budget} steps | "
-        f"obs_mode={'v3' if args.obs_v3 else 'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
+        f"obs_mode={'v3-extended' if args.obs_v3_extended else 'v3' if args.obs_v3 else 'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
         f"(obs_size={obs_size}) | "
         f"rollout={rollout_steps} steps | "
         f"num_envs={num_envs} | device={agent.device} | "

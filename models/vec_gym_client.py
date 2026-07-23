@@ -41,6 +41,7 @@ class VecGymClient:
         selfplay: bool = False,
         obs_v2: bool = False,
         obs_v3: bool = False,
+        obs_v3_extended: bool = False,
     ):
         if n_envs < 1:
             raise ValueError(f"n_envs must be >= 1, got {n_envs}")
@@ -50,7 +51,7 @@ class VecGymClient:
         self._clients = [
             GymClient(
                 structured=structured, opponent=opponent, selfplay=selfplay,
-                obs_v2=obs_v2, obs_v3=obs_v3,
+                obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended,
             )
             for _ in range(n_envs)
         ]

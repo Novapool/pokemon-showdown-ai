@@ -1,10 +1,74 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-22
+Last updated: 2026-07-23
 
 ---
 
 ## Current Work
+
+**M8 Phase 1A (obs refinement — speed-ratio dim) — ⏳ INFRA COMPLETE
+2026-07-23, A/B RUN PENDING.** Built the `structured-v3-extended` schema
+(87 dims/token, obs 1044): v3's 86 dims byte-identical, plus **dim 86 = own/opp
+active base-speed ratio** placed identically on all 12 tokens (like the Sleep
+Clause flag). Encoding: `min(ownBaseSpe/oppBaseSpe, 2) / 2` → [0,1], equal
+speed = 0.5, ≥2x faster = 1.0, unknown opponent → neutral 0.5. Base speeds are
+pure dex lookups (`Dex.mod('gen1').species.get().baseStats.spe`) — no gym
+tracker state needed, so it's computed in the extractor from data it already
+has (own = `request.side.pokemon[0]`, opp = revealed active). Rolled out across
+the full v3 pipeline, mirroring the M7 pattern: `type-chart-v3.ts`
+(TOKEN_DIM_V3_EXT=87, V3_SPEED_RATIO=86, `gen1BaseSpeed`/`encodeSpeedRatio`),
+`feature-extractor.ts` (`V3Info.extended`, `fillSpeedRatio`),
+`pokemon-gym.ts` + `battle-sim.ts` (obsMode `structured-v3-extended`),
+`gym_bridge.js` (`--obs-v3-extended`), `gym_client.py`/`vec_gym_client.py`
+(`obs_v3_extended`, per-token `slice_structured_obs` handles 1044→1032/924/780
+automatically), `train.py` (`--obs-v3-extended` → checkpoints/v3-extended/),
+`evaluate.py` (threaded through all five runners incl. cross-schema h2h),
+`ladder-bot.js` (1044 → obsV3Ext auto-detect), `infer_server.py` (obs-agnostic,
+docstring only). **Verified:** `./build` green; 99/99 tool tests pass (16 new
+v3-extended tests — 7 extractor incl. dim 0–85 byte-equality + speed-ratio
+math/placement/neutral-fallback, 2 gym reset/full-battle stability); Python
+smokes clean — GymClient/VecGymClient → (12,87)/(2,12,87) finite + mutual-
+exclusion guard; `train.py --obs-v3-extended` → obs_size 1044, checkpoint
+saved, loss healthy; `evaluate.py` vec+serial both opponents + opp-head
+accuracy; cross-schema h2h v3-extended(p1) vs v3(p2) slices 1044→1032 with no
+reshape errors; MCTS eval on a v3-extended ckpt clean (~21ms latency — the
+battle-sim obs path is correctly sized, no M7-style reshape bug). **Next: the
+Phase 1A A/B experiment** — a 1–2M-step v3-extended PPO run (M7 opponent-mix
+recipe) vs the v3 control, raw-policy eval at 150 battles vs Random/DamageFirst.
+Gate (Criterion A): >+2pp on both → escalate Phase 1B (full 5M); ≤2pp/negative
+→ escalate Phase 2 (AlphaZero value targeting).
+
+**A/B run HANDED OFF to user 2026-07-23** (user runs the multi-hour training on
+their own machine, same as the 5M runs; Claude analyzes the resulting
+checkpoints/logs). Pool `models/ppo/checkpoints/v3-extended/` is seeded
+(M2 + M3.3-best, copied from `v3/`). The **v3 control at 2M already exists**
+(`models/ppo/checkpoints/v3/ppo_step_2000015.pt`) — only the v3-extended arm
+needs training. Commands:
+```
+# Train the v3-extended arm (M7 opponent-mix recipe), 2M steps
+python models/ppo/train.py --obs-v3-extended --steps 2000000 \
+    --checkpoint-every 250000 --num-envs 8 \
+    --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"
+# Raw-policy A/B eval (150 battles each; run for BOTH checkpoints):
+#   arm     = checkpoints/v3-extended/ppo_step_2000000_final.pt  (--obs-v3-extended)
+#   control = checkpoints/v3/ppo_step_2000015.pt                 (--obs-v3)
+python models/evaluate.py --model ppo --obs-v3-extended \
+    --checkpoint models/ppo/checkpoints/v3-extended/ppo_step_2000000_final.pt \
+    --battles 150 --opponent random
+python models/evaluate.py --model ppo --obs-v3-extended \
+    --checkpoint models/ppo/checkpoints/v3-extended/ppo_step_2000000_final.pt \
+    --battles 150 --opponent damagefirst
+python models/evaluate.py --model ppo --obs-v3 \
+    --checkpoint models/ppo/checkpoints/v3/ppo_step_2000015.pt \
+    --battles 150 --opponent random
+python models/evaluate.py --model ppo --obs-v3 \
+    --checkpoint models/ppo/checkpoints/v3/ppo_step_2000015.pt \
+    --battles 150 --opponent damagefirst
+```
+Gate: v3-extended raw beats the v3 control by >+2pp on BOTH opponents → Phase 1B
+(full 5M v3-extended run); otherwise → Phase 2.
+
+
 
 **M8 Phase 0 (websocket reconnect) ✅ DONE 2026-07-22.** `tools/ladder-bot/
 ladder-bot.js` now survives disconnects: exponential backoff (1s → 30s cap,

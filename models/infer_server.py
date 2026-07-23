@@ -12,7 +12,8 @@ Protocol (one JSON object per line):
   in : {"cmd": "act_tracked", "obs": [...], "mask": [...],
         "formatid": "gen1randombattle", "seat": "p1"|"p2",
         "request": <move request JSON>, "trackers": <TrackerSnapshot>,
-        "turn": <int>, "obs_mode": "structured-v3"|"structured-v2"|"structured"}
+        "turn": <int>,
+        "obs_mode": "structured-v3-extended"|"structured-v3"|"structured-v2"|"structured"}
   out: {"action": <int 0-8>, "sims": <int>, "fallback": <str?>}
        (M6 P2 — only in --mcts mode: determinized UCT over a battle
         reconstructed from the client's request + tracker snapshot via the

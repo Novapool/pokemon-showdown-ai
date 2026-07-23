@@ -8,9 +8,9 @@
  */
 
 const assert = require('../assert');
-const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, TOKEN_DIM_V2, TOKEN_DIM_V3, N_TOKENS } =
+const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, TOKEN_DIM_V2, TOKEN_DIM_V3, TOKEN_DIM_V3_EXT, N_TOKENS } =
 	require('../../dist/sim/tools/feature-extractor');
-const { V3_TYPE_EFF, V3_FLAG_SELFKO, V3_SLEEP_CLAUSE } =
+const { V3_TYPE_EFF, V3_FLAG_SELFKO, V3_SLEEP_CLAUSE, V3_SPEED_RATIO } =
 	require('../../dist/sim/tools/type-chart-v3');
 const { PokemonGymEnv, ObservationTrackers } = require('../../dist/sim/tools/pokemon-gym');
 
@@ -356,6 +356,23 @@ describe('PokemonGymEnv', () => {
 				env.destroy();
 			}
 		});
+
+		it('should return a v3-extended observation of length N_TOKENS * TOKEN_DIM_V3_EXT in structured-v3-extended obsMode', async function () {
+			this.timeout(20000);
+			const env = new PokemonGymEnv({ seed: [1, 2, 3, 4], obsMode: 'structured-v3-extended' });
+			try {
+				const obs = await env.reset();
+				assert.equal(TOKEN_DIM_V3_EXT, 87);
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V3_EXT);
+				assert([...obs].every(v => !isNaN(v) && isFinite(v)), 'v3-extended observation from reset() must not contain NaN/inf');
+				for (let t = 0; t < N_TOKENS; t++) {
+					const v = obs[t * TOKEN_DIM_V3_EXT + V3_SPEED_RATIO];
+					assert(v >= 0 && v <= 1, `speed-ratio dim out of range on token ${t}: ${v}`);
+				}
+			} finally {
+				env.destroy();
+			}
+		});
 	});
 
 	describe('validActions', () => {
@@ -502,6 +519,48 @@ describe('PokemonGymEnv', () => {
 					steps++;
 				}
 				assert(done, 'Battle must terminate within 300 steps');
+			} finally {
+				env.destroy();
+			}
+		});
+
+		it('should keep v3-extended obs shape stable with speed ratio in [0,1] across a full battle', async function () {
+			this.timeout(60000);
+			const env = new PokemonGymEnv({ seed: [19, 20, 21, 22], obsMode: 'structured-v3-extended' });
+			try {
+				let obs = await env.reset();
+				assert.equal(obs.length, N_TOKENS * TOKEN_DIM_V3_EXT);
+				let done = false;
+				let steps = 0;
+				let sawNonNeutralSpeed = false;
+				while (!done && steps < 300) {
+					const mask = env.validActions();
+					const action = mask.findIndex(v => v);
+					const result = await env.step(action >= 0 ? action : 0);
+					assert.equal(result.obs.length, N_TOKENS * TOKEN_DIM_V3_EXT, `v3-extended obs shape changed at step ${steps}`);
+					assert([...result.obs].every(v => !isNaN(v) && isFinite(v)), `NaN/inf in v3-extended obs at step ${steps}`);
+					// Every extension dim (v3 dims 65–85 + the appended speed ratio) is bounded [0, 1].
+					for (let t = 0; t < N_TOKENS; t++) {
+						for (let d = TOKEN_DIM_V2; d < TOKEN_DIM_V3_EXT; d++) {
+							const v = result.obs[t * TOKEN_DIM_V3_EXT + d];
+							assert(v >= 0 && v <= 1, `v3-extended dim out of range at step ${steps}, token ${t}, dim ${d}: ${v}`);
+						}
+						// Speed ratio is placed identically on every token.
+						assert.equal(
+							result.obs[t * TOKEN_DIM_V3_EXT + V3_SPEED_RATIO],
+							result.obs[0 * TOKEN_DIM_V3_EXT + V3_SPEED_RATIO],
+							`speed ratio not uniform across tokens at step ${steps}`
+						);
+					}
+					if (result.obs[V3_SPEED_RATIO] !== 0.5) sawNonNeutralSpeed = true;
+					obs = result.obs;
+					done = result.done;
+					steps++;
+				}
+				assert(done, 'Battle must terminate within 300 steps');
+				// A full non-mirror battle should reveal the opponent and produce a
+				// real (non-neutral) speed ratio at some point.
+				assert(sawNonNeutralSpeed, 'expected at least one non-neutral (≠0.5) speed ratio across the battle');
 			} finally {
 				env.destroy();
 			}

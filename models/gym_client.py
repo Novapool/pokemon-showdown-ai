@@ -16,7 +16,8 @@ structured=False to run the bridge with --flat and get the legacy 100-dim
 vector instead (M1 MLP baseline regression checks), or obs_v2=True (M3.4)
 for the (12, 77) schema-v2 observation (boost stages + volatile flags), or
 obs_v3=True (M7) for the (12, 86) schema-v3 observation (type effectiveness,
-move-effect flags, Sleep Clause signal).
+move-effect flags, Sleep Clause signal), or obs_v3_extended=True (M8 Phase 1A)
+for the (12, 87) schema (v3 + own/opp active base-speed ratio).
 """
 
 import json
@@ -31,6 +32,7 @@ N_TOKENS = 12
 TOKEN_DIM = 65
 TOKEN_DIM_V2 = 77
 TOKEN_DIM_V3 = 86
+TOKEN_DIM_V3_EXT = 87
 
 # Set to True to print every send/receive for hang debugging
 DEBUG = False
@@ -58,14 +60,15 @@ def with_opp_action(info: dict) -> dict:
 def slice_structured_obs(obs_flat: np.ndarray, agent_obs_size: int, n_tokens: int = N_TOKENS) -> np.ndarray:
     """Adapt a flattened structured observation batch to an agent's obs size.
 
-    Schema v2 tokens are v1 tokens with extra dims APPENDED, and schema v3
-    tokens are v2 tokens with further dims APPENDED (dims 0-76 of a v3 token
-    are byte-identical to a native v2 token), so a v1 view of a v2 or v3
-    observation is exactly the first 65 dims of each token, and a v2 view of
-    a v3 observation is exactly the first 77 dims of each 86-dim token. This
-    lets v1/v2 checkpoints (the M2 baseline, the M3.3 self-play best, the
-    M3.4/M6 v2 best) act inside a v3 env — self-play pool seeding and
-    cross-schema head-to-head (M3.4, M7).
+    Every schema APPENDS dims to the previous one (v2 = v1 + 12, v3 = v2 + 9,
+    v3-extended = v3 + 1), so the first d_agent dims of each env token are
+    byte-identical to a native d_agent-wide token. A v1 view of a v2/v3/v3-ext
+    observation is the first 65 dims of each token; a v2 view of a v3 obs is
+    the first 77 dims of each 86-dim token; a v3 view of a v3-extended obs is
+    the first 86 dims of each 87-dim token. This lets older checkpoints (the M2
+    baseline, the M3.3 self-play best, the M3.4/M6 v2 best, the M7 v3 best) act
+    inside a richer env — self-play pool seeding and cross-schema head-to-head
+    (M3.4, M7, M8).
 
     Args:
         obs_flat:       (N, n_tokens * d_env) float32 batch.
@@ -97,29 +100,38 @@ class GymClient:
         selfplay: bool = False,
         obs_v2: bool = False,
         obs_v3: bool = False,
+        obs_v3_extended: bool = False,
     ):
         """opponent: 'random' (legacy default) or 'damagefirst' (M3.3 heuristic).
         selfplay=True runs the bridge in dual-seat mode (opponent seat driven
         externally) — use reset_dual()/step_dual() instead of reset()/step().
         obs_v2=True (M3.4) selects the (12, 77) schema-v2 observation.
         obs_v3=True (M7) selects the (12, 86) schema-v3 observation.
+        obs_v3_extended=True (M8 Phase 1A) selects the (12, 87) schema — v3 plus
+        the own/opp active base-speed ratio at dim 86.
         set_opponent() switches the opponent (and single/dual protocol) for
         subsequent resets — used by --opponent-mix training."""
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
-        if (obs_v2 or obs_v3) and not structured:
-            raise ValueError("obs_v2=True/obs_v3=True requires structured=True")
-        if obs_v2 and obs_v3:
-            raise ValueError("obs_v2 and obs_v3 are mutually exclusive")
+        if (obs_v2 or obs_v3 or obs_v3_extended) and not structured:
+            raise ValueError("obs_v2/obs_v3/obs_v3_extended requires structured=True")
+        if sum([obs_v2, obs_v3, obs_v3_extended]) > 1:
+            raise ValueError("obs_v2, obs_v3, and obs_v3_extended are mutually exclusive")
         self._bridge_path = bridge_path
         self._structured = structured
-        self._token_dim = TOKEN_DIM_V3 if obs_v3 else (TOKEN_DIM_V2 if obs_v2 else TOKEN_DIM)
+        self._token_dim = (
+            TOKEN_DIM_V3_EXT if obs_v3_extended else
+            TOKEN_DIM_V3 if obs_v3 else
+            (TOKEN_DIM_V2 if obs_v2 else TOKEN_DIM)
+        )
         self._selfplay = selfplay
         self._opponent = "self" if selfplay else opponent
         args = ["node", bridge_path]
         if not structured:
             args.append("--flat")
-        if obs_v3:
+        if obs_v3_extended:
+            args.append("--obs-v3-extended")
+        elif obs_v3:
             args.append("--obs-v3")
         elif obs_v2:
             args.append("--obs-v2")

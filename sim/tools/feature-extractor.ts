@@ -19,12 +19,16 @@ import {
 	V3_FLAG_PRIORITY,
 	V3_INFLICTED_STATUS,
 	V3_SLEEP_CLAUSE,
+	TOKEN_DIM_V3_EXT,
+	V3_SPEED_RATIO,
 	MOVE_STATUS_ID_MAX,
 	typeEffDim,
 	getMoveEffectFlags,
+	gen1BaseSpeed,
+	encodeSpeedRatio,
 } from './type-chart-v3';
 
-export { TOKEN_DIM_V3 } from './type-chart-v3';
+export { TOKEN_DIM_V3, TOKEN_DIM_V3_EXT } from './type-chart-v3';
 
 export const OBS_SIZE = 100;
 
@@ -494,6 +498,12 @@ export interface OpponentPokemonInfo {
 export interface V3Info {
 	/** 1 while an opponent Pokémon WE put to sleep is still asleep (bench-persistent). */
 	sleepClause: boolean;
+	/**
+	 * M8 Phase 1A: select the v3-extended schema (87 dims/token) — appends the
+	 * own/opp active base-speed ratio at dim 86. When absent/false the v3 (86)
+	 * schema is produced. Dims 0–85 are byte-identical either way.
+	 */
+	extended?: boolean;
 }
 
 /** Internal per-call v3 context threaded into token filling. */
@@ -706,6 +716,10 @@ function fillOpponentTokens(
  * per-move-slot type effectiveness vs the opponent active (77–80), aggregated
  * recharge/self-KO/priority flags (81–83), inflicted-status id (84), and the
  * global Sleep Clause flag (85). Dims 0–76 are never altered by the v3 path.
+ *
+ * Passing `v3Info.extended` (M8 Phase 1A) switches to schema v3-extended:
+ * 87-dim tokens whose first 86 dims are byte-identical to v3, with the global
+ * own/opp active base-speed ratio appended at dim 86 (all 12 tokens).
  */
 export function extractFeaturesStructured(
 	request: ChoiceRequest,
@@ -713,7 +727,8 @@ export function extractFeaturesStructured(
 	volatiles?: { own: ActiveVolatiles, opp: ActiveVolatiles } | null,
 	v3Info?: V3Info | null,
 ): Float32Array {
-	const tokenDim = v3Info ? TOKEN_DIM_V3 : (volatiles ? TOKEN_DIM_V2 : TOKEN_DIM);
+	const v3Ext = !!(v3Info && v3Info.extended);
+	const tokenDim = v3Ext ? TOKEN_DIM_V3_EXT : (v3Info ? TOKEN_DIM_V3 : (volatiles ? TOKEN_DIM_V2 : TOKEN_DIM));
 	const obs = new Float32Array(N_TOKENS * tokenDim);
 	const v3ctx: V3FillContext | undefined = v3Info ?
 		{ defenderTypes: opponentActiveTypes(opponent) } : undefined;
@@ -722,6 +737,7 @@ export function extractFeaturesStructured(
 		fillOpponentTokens(obs, opponent, tokenDim, v3ctx);
 		if (volatiles) fillVolatileDims(obs, 6 * tokenDim, volatiles.opp);
 		if (v3Info) fillSleepClause(obs, tokenDim, v3Info);
+		if (v3Ext) fillSpeedRatio(obs, tokenDim, request, opponent);
 		return obs;
 	}
 
@@ -760,8 +776,29 @@ export function extractFeaturesStructured(
 	}
 
 	if (v3Info) fillSleepClause(obs, tokenDim, v3Info);
+	if (v3Ext) fillSpeedRatio(obs, tokenDim, request, opponent);
 
 	return obs;
+}
+
+/**
+ * Place the own/opp active base-speed ratio (dim 86) identically on every token
+ * — a battle-wide scalar, like the Sleep Clause flag, so token-pooling models
+ * see it regardless of which token they attend to. Own active is the requesting
+ * side's `pokemon[0]`; opp active is the revealed opponent active. Either side
+ * unknown → neutral 0.5 (see `encodeSpeedRatio`). v3-extended only.
+ */
+function fillSpeedRatio(
+	obs: Float32Array, tokenDim: number, request: ChoiceRequest, opponent: OpponentPokemonInfo[]
+): void {
+	const ownActive = request.side?.pokemon?.[0];
+	const ownSpe = ownActive ? gen1BaseSpeed(ownActive.details.split(',')[0].trim()) : null;
+	const oppActive = opponent.find(p => p.active);
+	const oppSpe = oppActive ? gen1BaseSpeed(oppActive.details.split(',')[0].trim()) : null;
+	const value = encodeSpeedRatio(ownSpe, oppSpe);
+	for (let t = 0; t < N_TOKENS; t++) {
+		obs[t * tokenDim + V3_SPEED_RATIO] = value;
+	}
 }
 
 /**

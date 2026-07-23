@@ -17,7 +17,7 @@ import { RandomPlayerAI } from './random-player-ai';
 import { DamageFirstAI } from './damage-first-ai';
 import { extractFeatures, extractFeaturesStructured, BOOST_ORDER, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2 } from './feature-extractor';
 import type { OpponentPokemonInfo, ActiveVolatiles, V3Info } from './feature-extractor';
-import { TOKEN_DIM_V3 } from './type-chart-v3';
+import { TOKEN_DIM_V3, TOKEN_DIM_V3_EXT } from './type-chart-v3';
 import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
 
 // ---------------------------------------------------------------------------
@@ -34,8 +34,11 @@ import type { ChoiceRequest, MoveRequest, SwitchRequest } from '../side';
  * (M7) returns the (12, 86) schema-v3 observation — v2's 77 dims byte-identical
  * plus per-move type-effectiveness, move-effect flags, inflicted-status id, and
  * the log-derived Sleep Clause flag — flattened to 1032 floats.
+ * 'structured-v3-extended' (M8 Phase 1A) returns the (12, 87) schema — v3's 86
+ * dims byte-identical plus the own/opp active base-speed ratio appended at dim
+ * 86 on every token — flattened to 1044 floats.
  */
-export type ObsMode = 'flat' | 'structured' | 'structured-v2' | 'structured-v3';
+export type ObsMode = 'flat' | 'structured' | 'structured-v2' | 'structured-v3' | 'structured-v3-extended';
 
 /**
  * Who sits in the p2 seat (M3.3):
@@ -1063,6 +1066,7 @@ export class PokemonGymEnv {
 			// Stream closed before any actionable request — terminal filler
 			const size = this._obsMode === 'flat' ? 100 :
 				N_TOKENS * (
+					this._obsMode === 'structured-v3-extended' ? TOKEN_DIM_V3_EXT :
 					this._obsMode === 'structured-v3' ? TOKEN_DIM_V3 :
 					this._obsMode === 'structured-v2' ? TOKEN_DIM_V2 : TOKEN_DIM
 				);
@@ -1081,7 +1085,8 @@ export class PokemonGymEnv {
 	 * mode. Both v2 and v3 keep dims 65–76 (boosts/volatiles), so both need this.
 	 */
 	private _getVolatilesFor(viewer: 'p1' | 'p2'): { own: ActiveVolatiles, opp: ActiveVolatiles } | null {
-		if (this._obsMode !== 'structured-v2' && this._obsMode !== 'structured-v3') return null;
+		if (this._obsMode !== 'structured-v2' && this._obsMode !== 'structured-v3' &&
+			this._obsMode !== 'structured-v3-extended') return null;
 		return this._trackers.volatilesFor(viewer);
 	}
 
@@ -1092,8 +1097,11 @@ export class PokemonGymEnv {
 	 * Sleep Clause flag is log-tracked here and must be handed in.
 	 */
 	private _getV3InfoFor(viewer: 'p1' | 'p2'): V3Info | undefined {
-		if (this._obsMode !== 'structured-v3') return undefined;
-		return { sleepClause: this._trackers.sleepClauseFlagFor(viewer) === 1 };
+		if (this._obsMode !== 'structured-v3' && this._obsMode !== 'structured-v3-extended') return undefined;
+		return {
+			sleepClause: this._trackers.sleepClauseFlagFor(viewer) === 1,
+			extended: this._obsMode === 'structured-v3-extended',
+		};
 	}
 
 	/** The `viewer` seat's revealed knowledge of the OTHER side's team. */

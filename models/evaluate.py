@@ -103,7 +103,7 @@ def _load_agent(model: str, checkpoint: str, device: str | None = None):
 def _run_battles_vec(
     agent, n_battles: int, num_envs: int, structured: bool, flatten: bool,
     opponent: str = "random", obs_v2: bool = False, obs_v3: bool = False,
-    track_opp: bool = False,
+    obs_v3_extended: bool = False, track_opp: bool = False,
 ) -> BattleResult:
     """Run n_battles episodes across num_envs parallel envs; return
     (wins, total, opp_correct, opp_total).
@@ -119,7 +119,7 @@ def _run_battles_vec(
     """
     num_envs = max(1, min(num_envs, n_battles))
     env = VecGymClient(num_envs, structured=structured, opponent=opponent,
-                       obs_v2=obs_v2, obs_v3=obs_v3)
+                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -177,7 +177,7 @@ def _run_battles_vec(
 
 def _run_battles_h2h(
     agent, opponent_agent, n_battles: int, num_envs: int, structured: bool,
-    obs_v2: bool = False, obs_v3: bool = False,
+    obs_v2: bool = False, obs_v3: bool = False, obs_v3_extended: bool = False,
 ) -> BattleResult:
     """Head-to-head (M3.3): agent (seat p1) vs a second checkpoint (seat p2).
 
@@ -192,7 +192,7 @@ def _run_battles_h2h(
     """
     num_envs = max(1, min(num_envs, n_battles))
     env = VecGymClient(num_envs, structured=structured, selfplay=True,
-                       obs_v2=obs_v2, obs_v3=obs_v3)
+                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -252,7 +252,7 @@ def _run_battles_h2h(
 
 def _run_battles_mcts(
     mcts, n_battles: int, opponent: str = "random", obs_v2: bool = False,
-    obs_v3: bool = False,
+    obs_v3: bool = False, obs_v3_extended: bool = False,
 ) -> BattleResult:
     """MCTS evaluation (M4): one env, search runs per decision via sim_* commands.
 
@@ -262,7 +262,8 @@ def _run_battles_mcts(
     """
     import time
 
-    env = GymClient(structured=True, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3)
+    env = GymClient(structured=True, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3,
+                    obs_v3_extended=obs_v3_extended)
     wins = 0
     latencies = []
     log_every = min(50, max(1, n_battles // 10))
@@ -298,6 +299,7 @@ def _run_battles_mcts(
 
 def _run_battles_mcts_h2h(
     mcts, opponent_agent, n_battles: int, obs_v2: bool = False, obs_v3: bool = False,
+    obs_v3_extended: bool = False,
 ) -> BattleResult:
     """Head-to-head (M4): MCTS vs a raw PPO checkpoint via dual-seat self-play.
 
@@ -307,7 +309,8 @@ def _run_battles_mcts_h2h(
     """
     import time
 
-    env = GymClient(structured=True, selfplay=True, obs_v2=obs_v2, obs_v3=obs_v3)
+    env = GymClient(structured=True, selfplay=True, obs_v2=obs_v2, obs_v3=obs_v3,
+                    obs_v3_extended=obs_v3_extended)
     wins = 0
     latencies = []
     log_every = min(50, max(1, n_battles // 10))
@@ -357,7 +360,7 @@ def _run_battles_mcts_h2h(
 def _run_battles(
     agent, n_battles: int, structured: bool = False, flatten: bool = True,
     opponent: str = "random", obs_v2: bool = False, obs_v3: bool = False,
-    track_opp: bool = False,
+    obs_v3_extended: bool = False, track_opp: bool = False,
 ) -> BattleResult:
     """Run n_battles greedy episodes; return (wins, total, opp_correct, opp_total).
 
@@ -368,7 +371,8 @@ def _run_battles(
     consumes the (12, 65) observation directly, so its caller passes
     structured=True, flatten=False.
     """
-    env = GymClient(structured=structured, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3)
+    env = GymClient(structured=structured, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3,
+                    obs_v3_extended=obs_v3_extended)
     wins = 0
     opp_correct = 0
     opp_total = 0
@@ -460,6 +464,19 @@ def main():
         ),
     )
     parser.add_argument(
+        "--obs-v3-extended",
+        action="store_true",
+        help=(
+            "M8 Phase 1A: evaluate a PPO checkpoint trained with train.py "
+            "--obs-v3-extended (the (12,87)->1044 schema — v3 plus the own/opp "
+            "active base-speed ratio). Implies --structured. With "
+            "--vs-checkpoint, the opponent checkpoint may still be v1/v2/v3 — "
+            "its view is sliced down per token (dims 0-85 of a v3-extended "
+            "token are byte-identical to a native v3 token), which is the "
+            "v3-extended-vs-v3 head-to-head A/B mechanism."
+        ),
+    )
+    parser.add_argument(
         "--num-envs",
         type=int,
         default=8,
@@ -532,11 +549,11 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.obs_v2 and args.obs_v3:
-        parser.error("--obs-v2 and --obs-v3 are mutually exclusive")
-    if args.obs_v2 or args.obs_v3:
+    if sum([args.obs_v2, args.obs_v3, args.obs_v3_extended]) > 1:
+        parser.error("--obs-v2, --obs-v3, and --obs-v3-extended are mutually exclusive")
+    if args.obs_v2 or args.obs_v3 or args.obs_v3_extended:
         if args.model not in ("ppo", "mcts"):
-            parser.error("--obs-v2/--obs-v3 is only meaningful with --model ppo/mcts")
+            parser.error("--obs-v2/--obs-v3/--obs-v3-extended is only meaningful with --model ppo/mcts")
         args.structured = True
     if args.structured and args.model not in ("ppo", "mcts"):
         parser.error(
@@ -574,12 +591,13 @@ def main():
             opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
             result = _run_battles_mcts_h2h(
                 mcts, opponent_agent, args.battles, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
+                obs_v3_extended=args.obs_v3_extended,
             )
             opponent_name = args.vs_checkpoint
         else:
             result = _run_battles_mcts(
                 mcts, args.battles, opponent=args.opponent, obs_v2=args.obs_v2,
-                obs_v3=args.obs_v3,
+                obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
             )
             opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
         wins, total = result.wins, result.total
@@ -607,18 +625,20 @@ def main():
         opponent_agent = _load_agent("ppo", args.vs_checkpoint, device=args.device)
         result = _run_battles_h2h(
             agent, opponent_agent, args.battles, args.num_envs, structured=structured,
-            obs_v2=args.obs_v2, obs_v3=args.obs_v3,
+            obs_v2=args.obs_v2, obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
         )
         opponent_name = args.vs_checkpoint
     elif args.num_envs > 1:
         result = _run_battles_vec(
             agent, args.battles, args.num_envs, structured=structured, flatten=flatten,
-            opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3, track_opp=track_opp,
+            opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
+            obs_v3_extended=args.obs_v3_extended, track_opp=track_opp,
         )
     else:
         result = _run_battles(
             agent, args.battles, structured=structured, flatten=flatten,
-            opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3, track_opp=track_opp,
+            opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
+            obs_v3_extended=args.obs_v3_extended, track_opp=track_opp,
         )
     wins, total, opp_correct, opp_total = result
     win_rate = wins / total if total > 0 else 0.0

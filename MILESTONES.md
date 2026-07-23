@@ -1422,6 +1422,18 @@ M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value ta
   - ✅ **If yes** (>2pp improvement confirmed at 2M steps): escalate Phase 1B → full 5M run, skip Phase 2.
   - ❌ **If no** (≤2pp or negative): abort Phase 1B, escalate to Phase 2 (value targets).
 - **Effort:** 4–6 hours (code, test, training, eval).
+- **Infra built 2026-07-23:** `structured-v3-extended` schema (87 dims/token,
+  obs 1044) — v3's 86 dims byte-identical + **dim 86 = own/opp active base-speed
+  ratio** (`min(ownBaseSpe/oppBaseSpe,2)/2` → [0,1]; equal=0.5, ≥2x=1.0, unknown
+  opponent→neutral 0.5), placed on all 12 tokens like the Sleep Clause flag and
+  computed from pure gen1-dex base-speed lookups (no gym tracker state). Rolled
+  out across the full v3 pipeline (type-chart-v3/feature-extractor/pokemon-gym/
+  battle-sim + bridge/gym_client/vec/train.py `--obs-v3-extended` →
+  checkpoints/v3-extended/ /evaluate.py all runners incl. cross-schema h2h/
+  ladder-bot 1044 auto-detect). `./build` green, 99/99 tool tests (16 new),
+  Python train/eval/h2h/MCTS smokes all clean (obs_size 1044, per-token slicing
+  1044→1032 works, MCTS battle-sim path correctly sized). **A/B training run
+  still pending** — that's the actual Criterion A experiment.
 
 **Phase 1B (if Phase 1A gates positive):** Full v3-extended PPO run
 

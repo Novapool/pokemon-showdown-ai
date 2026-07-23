@@ -16,6 +16,10 @@
  *   Dim  84    : inflicted-status id (0 = none, 1–6 = brn/frz/par/psn/slp/tox)
  *   Dim  85    : Sleep Clause flag (1 = an opponent mon WE slept is still asleep)
  *
+ * v3-extended (M8 Phase 1A) appends ONE more dim to the above, keeping 0–85
+ * byte-identical:
+ *   Dim  86    : own/opp active base-speed ratio (min(own/opp,2)/2; 0.5 = equal)
+ *
  * This module intentionally contains NO dims-77–85 extraction/placement logic
  * (that is Job 1.1) — only the reusable lookups, encoders, and offset constants.
  *
@@ -44,6 +48,59 @@ export const V3_INFLICTED_STATUS = 84;
 
 /** Sleep Clause flag dim (fed by the tracker in pokemon-gym.ts, Job 1.2). */
 export const V3_SLEEP_CLAUSE = 85;
+
+// ---- v3-extended (M8 Phase 1A) ---------------------------------------------
+//
+// The v3 schema (86 dims) plus ONE appended dim: the own-active / opp-active
+// base-speed ratio. Dims 0–85 stay byte-identical to v3, so a v3-extended obs
+// slices cleanly back to v3 (drop the last per-token dim) for cross-schema
+// head-to-head evals. Speed is the single highest-value scalar missing from
+// v3 — gen1 turn order is decided almost entirely by base speed, and the net
+// has no other way to infer "do I move first?" from the token features.
+
+/** Full per-token width of a v3-extended observation (v3 + speed ratio). */
+export const TOKEN_DIM_V3_EXT = 87;
+
+/** Speed-ratio dim (own active base speed / opp active base speed, encoded). */
+export const V3_SPEED_RATIO = 86;
+
+/**
+ * Ratio clamp: own/opp base speed is clamped to [0, SPEED_RATIO_CLAMP] before
+ * scaling into [0, 1]. 2 means "twice as fast" saturates the dim; equal speed
+ * encodes to exactly 0.5, matching the [0,1] scale of every other dim.
+ */
+export const SPEED_RATIO_CLAMP = 2;
+
+/**
+ * gen1 base Speed for a species name (the capitalised dex form as it appears
+ * in a Pokémon's `details`). Returns null for unknown/empty species so the
+ * caller can fall back to the neutral encoding — never NaN.
+ */
+export function gen1BaseSpeed(speciesName: string): number | null {
+	if (!speciesName) return null;
+	try {
+		const species = GEN1_DEX.species.get(speciesName);
+		if (species.exists && species.baseStats && typeof species.baseStats.spe === 'number') {
+			return species.baseStats.spe;
+		}
+	} catch {
+		// fall through
+	}
+	return null;
+}
+
+/**
+ * Encode the own/opp base-speed ratio into dim 86's [0, 1] value:
+ *   min(own/opp, 2) / 2
+ * so equal speed = 0.5, ≥2x faster = 1.0, much slower → toward 0.0. When either
+ * speed is unknown (opponent not yet revealed, unparseable species) or the
+ * opponent's speed is 0, returns the neutral 0.5 rather than a misleading value.
+ */
+export function encodeSpeedRatio(ownSpe: number | null, oppSpe: number | null): number {
+	if (ownSpe === null || oppSpe === null || oppSpe <= 0) return 0.5;
+	const ratio = Math.min(SPEED_RATIO_CLAMP, ownSpe / oppSpe);
+	return ratio / SPEED_RATIO_CLAMP;
+}
 
 // ---- Type effectiveness -----------------------------------------------------
 //
