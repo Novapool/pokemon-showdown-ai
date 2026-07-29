@@ -74,7 +74,11 @@ pip-log.txt
 
 # ML training artifacts
 __pycache__/
+# Intermediate/sweep checkpoints stay local — only the machine that trained a
+# run needs them. Final checkpoints ARE committed (~2MB each) so any machine
+# can pick up evals, MCTS runs and fine-tunes without a bulk transfer.
 models/**/checkpoints/**/*.pt
+!models/**/checkpoints/**/*_final.pt
 models/**/checkpoints/**/*.pkl
 models/q_learning/qtable.pkl
 output/
