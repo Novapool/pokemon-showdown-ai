@@ -86,6 +86,9 @@ data/metamon_cache/
 # M5.5 human-replay data pipeline (scraped logs + derived trajectories)
 data/replays/
 data/replay_trajs/
+
+# M8 Phase 2 value-target datasets (collect_value_data.py .npz shards)
+data/value_targets/
 models/transformer/checkpoints/m32/train.log
 
 # Showdown ladder-bot credentials (M6) — never commit

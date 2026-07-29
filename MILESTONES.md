@@ -1432,8 +1432,25 @@ M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value ta
   checkpoints/v3-extended/ /evaluate.py all runners incl. cross-schema h2h/
   ladder-bot 1044 auto-detect). `./build` green, 99/99 tool tests (16 new),
   Python train/eval/h2h/MCTS smokes all clean (obs_size 1044, per-token slicing
-  1044→1032 works, MCTS battle-sim path correctly sized). **A/B training run
-  still pending** — that's the actual Criterion A experiment.
+  1044→1032 works, MCTS battle-sim path correctly sized).
+
+- **A/B run ✅ COMPLETE 2026-07-28 (user-run) — CRITERION A FAILED, NEGATIVE
+  RESULT.** 2M-step v3-extended arm trained (`--opp-coef` default nonzero
+  routed the checkpoint to `checkpoints/opp/ppo_step_2000003_final.pt`
+  instead of `checkpoints/v3-extended/` — a `train.py` checkpoint-dir
+  routing quirk: the `elif args.opp_coef != 0.0` branch precedes the
+  `--obs-v3-extended` branch, so any run without `--opp-coef 0` lands in
+  `checkpoints/opp/` regardless of obs schema; obs schema itself trained
+  correctly, this is a path-naming issue only). Raw-policy 150-battle eval:
+  **58% (87/150) vs Random, 61% (91/150) vs DamageFirst**. v3 control
+  (`v3/ppo_step_2000015.pt`, existing sweep data, no re-run needed): **61%
+  (92/150) vs Random**; DamageFirst has no exact-step reading (nearest,
+  step 2500025: 55%/200, not directly comparable — checkpoint transfer to
+  re-run the true control was skipped as not worth the effort). **Result:
+  Random −3pp (wrong direction), failing the "both opponents >+2pp" gate
+  outright regardless of the DamageFirst comparison.** Per the pre-registered
+  rule, Phase 1A gates negative → **Phase 1B (full 5M run) is skipped;
+  escalate to Phase 2 (AlphaZero value targeting).**
 
 **Phase 1B (if Phase 1A gates positive):** Full v3-extended PPO run
 
@@ -1462,6 +1479,43 @@ If obs refinement doesn't move the needle, the binding constraint is likely that
 - **Expected payoff:** Value head becomes a better leaf evaluator; MCTS should improve downstream (less dominated by luck at leaf nodes).
 - **Effort:** 8–12 hours (self-play collection infrastructure, value fine-tune loop, testing).
 - **Risk:** Self-play data quality depends on the policy; if the policy is weak, the value targets are weak. Mitigated by using the already-strong M7 checkpoint.
+- **Infra built 2026-07-28:** two scripts plus a small MCTS instrumentation change.
+  - `models/mcts/mcts_agent.py` — `act()` now also exposes `last_root_visits`
+    (root visit counts) and `last_root_value` (root Q = mean backup return,
+    NaN when no search ran at that decision, e.g. forced/locked choices).
+    Search behaviour is unchanged.
+  - `models/collect_value_data.py` — self-play collection. Tuned MCTS drives one
+    seat (seats alternate per game for balance), a frozen raw-policy checkpoint
+    (`--opponent-checkpoint`, default the same checkpoint) drives the other.
+    Every searched decision records obs (sliced to the checkpoint's `obs_size`),
+    root visits, root Q, the shaped gym reward accumulated to the next decision
+    **in the searching seat's perspective** (p2 rewards negated, same
+    pending-transition accounting the PPO trainer uses), and the game outcome.
+    `.npz` shards flush every `--shard-games` games and re-running resumes from
+    disk; `--workers N` runs N independent bridges (~600 games/h per worker at
+    `--sims 100` on CPU).
+  - `models/value_finetune.py` — value-head fine-tune. Targets are derived at
+    train time from one dataset: `--target outcome` (final result, pure
+    AlphaZero), `mc` (discounted shaped return, `--gamma`), or `root` (search
+    root Q; NaN rows dropped). Train/val split is by whole game (no leakage);
+    reports val MSE + sign agreement before and after. Trains **the value head
+    only** — trunk/policy head/opp head come out bit-identical (verified), so
+    the MCTS prior is unchanged and the Criterion C delta is attributable to
+    leaf evaluation. `--unfreeze-trunk` opts out (and forfeits the clean A/B).
+    Output is a normal PPO checkpoint (`evaluate.py`/`infer_server.py`/ladder-bot
+    load it unchanged).
+  - **Verified:** collection smokes on the v3-extended 2M checkpoint (single
+    worker, 2 parallel workers, resume-after-kill), reward signs match outcomes
+    on both seats, all obs finite; fine-tune smokes on all three targets;
+    fine-tuned checkpoint plays through `evaluate.py --model mcts` end-to-end;
+    diff of the saved checkpoint confirms only `value_head` changed. Early
+    signal from the smoke data: the PPO-trained value head reads clearly
+    optimistic (root Q ≈ +0.24…+0.58 in games the seat went on to lose; val
+    sign agreement 0.08 vs outcomes) — consistent with the Phase 2 thesis,
+    though the smoke sample is far too small to be evidence.
+  - **Not yet run:** the actual collection + fine-tune + Criterion C A/B, which
+    need the M7 v3 checkpoint (not present on this machine). Runbook in
+    `docs/TRAINING-COMMANDS.md` → **M8 Phase 2**.
 
 ---
 
@@ -1499,6 +1553,9 @@ If Phase 2's value-head fine-tuning moves the MCTS needle, scale it up: a full s
 **Criterion A (Phase 1A gate):** Speed-ratio A/B run (1–2M steps) shows >+2pp signal vs Random and DamageFirst on the quick 150-battle evals.
 - ✅ **Pass:** escalate to Phase 1B or 4 (skip 2/3).
 - ❌ **Fail:** escalate to Phase 2.
+- **Result 2026-07-28: FAILED.** v3-extended 58%R/61%DF vs v3 control
+  61%R/~55%DF (approx) — Random moved −3pp (wrong direction). Phase 1B
+  skipped; escalating to Phase 2 (Criterion C next).
 
 **Criterion B (Phase 1B gate, if A passes):** v3-extended full run (5M) beats v3 on both bot opponents by ≥+2pp at n=500 OR ties (≤+1pp, ≥−1pp).
 - ✅ **Pass or tie:** escalate to Phase 4.

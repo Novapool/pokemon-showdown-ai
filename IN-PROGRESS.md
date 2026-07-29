@@ -1,13 +1,55 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-23
+Last updated: 2026-07-28
 
 ---
 
 ## Current Work
 
-**M8 Phase 1A (obs refinement — speed-ratio dim) — ⏳ INFRA COMPLETE
-2026-07-23, A/B RUN PENDING.** Built the `structured-v3-extended` schema
+**M8 Phase 2 (AlphaZero-style value targeting) — 🟡 INFRA BUILT 2026-07-28,
+AWAITING THE USER-RUN COLLECTION + A/B.** Phase 1A gated negative, so per the
+pre-registered rule we escalated to Phase 2. Built three pieces:
+
+- `models/mcts/mcts_agent.py`: `act()` now records `last_root_visits` and
+  `last_root_value` (root Q = mean backup return; NaN when no search ran at
+  that decision). Search behaviour itself is untouched.
+- `models/collect_value_data.py`: MCTS self-play collection. Tuned MCTS drives
+  one seat (alternating per game), a frozen raw-policy checkpoint the other;
+  each searched decision stores obs (sliced to the checkpoint's `obs_size`),
+  root visits, root Q, the shaped reward accumulated to the next decision in
+  the **searching seat's** perspective (p2 negated), and the game outcome.
+  `.npz` shards flush every `--shard-games` games and re-running the same
+  command resumes; `--workers N` runs N bridges in parallel (~600 games/h per
+  worker at `--sims 100` on CPU, so 2000 games ≈ 1h at 4 workers).
+- `models/value_finetune.py`: value-head-only fine-tune. One dataset serves
+  three targets (`--target outcome | mc | root`); split is by whole game;
+  prints val MSE + sign agreement before/after. Trunk, policy head and opp head
+  come out **bit-identical** (verified by a state-dict diff), so the search
+  prior is unchanged and the Criterion C delta isolates leaf evaluation.
+
+**Verified:** collection smokes (1 worker, 2 workers, resume-after-kill) —
+reward signs match outcomes on both seats, obs all finite; fine-tune smokes on
+all three targets; the fine-tuned checkpoint plays through
+`evaluate.py --model mcts` end-to-end. Suggestive early signal from the smoke
+data (far too small to count as evidence): the PPO-trained value head is
+clearly optimistic — root Q ≈ +0.24…+0.58 in games the searching seat lost,
+val sign agreement 0.08 against outcomes.
+
+**Next (user-run, needs the M7 v3 checkpoint — not on this machine):** the
+3-step runbook in `docs/TRAINING-COMMANDS.md` → **M8 Phase 2** — collect ~2000
+games → fine-tune → Criterion C A/B (tuned MCTS vs DamageFirst, 200 battles,
+base vs fine-tuned, gate ≥+3pp). Pass → Phase 3; fail → Phase 4 ladder on the
+M7 checkpoint.
+
+**Carried gotcha (unfixed):** `train.py`'s checkpoint-dir routing checks
+`elif args.opp_coef != 0.0` before the obs-schema branches, so any run without
+an explicit `--opp-coef 0` lands in `checkpoints/opp/` regardless of schema.
+Left alone deliberately (out of Phase 2 scope) — pass `--checkpoint-dir`
+explicitly on M8 runs.
+
+
+**M8 Phase 1A (obs refinement — speed-ratio dim) — ✅ COMPLETE 2026-07-28,
+CRITERION A FAILED (negative result).** Built the `structured-v3-extended` schema
 (87 dims/token, obs 1044): v3's 86 dims byte-identical, plus **dim 86 = own/opp
 active base-speed ratio** placed identically on all 12 tokens (like the Sleep
 Clause flag). Encoding: `min(ownBaseSpe/oppBaseSpe, 2) / 2` → [0,1], equal
@@ -32,41 +74,34 @@ exclusion guard; `train.py --obs-v3-extended` → obs_size 1044, checkpoint
 saved, loss healthy; `evaluate.py` vec+serial both opponents + opp-head
 accuracy; cross-schema h2h v3-extended(p1) vs v3(p2) slices 1044→1032 with no
 reshape errors; MCTS eval on a v3-extended ckpt clean (~21ms latency — the
-battle-sim obs path is correctly sized, no M7-style reshape bug). **Next: the
-Phase 1A A/B experiment** — a 1–2M-step v3-extended PPO run (M7 opponent-mix
-recipe) vs the v3 control, raw-policy eval at 150 battles vs Random/DamageFirst.
-Gate (Criterion A): >+2pp on both → escalate Phase 1B (full 5M); ≤2pp/negative
-→ escalate Phase 2 (AlphaZero value targeting).
+battle-sim obs path is correctly sized, no M7-style reshape bug).
 
-**A/B run HANDED OFF to user 2026-07-23** (user runs the multi-hour training on
-their own machine, same as the 5M runs; Claude analyzes the resulting
-checkpoints/logs). Pool `models/ppo/checkpoints/v3-extended/` is seeded
-(M2 + M3.3-best, copied from `v3/`). The **v3 control at 2M already exists**
-(`models/ppo/checkpoints/v3/ppo_step_2000015.pt`) — only the v3-extended arm
-needs training. Commands:
-```
-# Train the v3-extended arm (M7 opponent-mix recipe), 2M steps
-python models/ppo/train.py --obs-v3-extended --steps 2000000 \
-    --checkpoint-every 250000 --num-envs 8 \
-    --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"
-# Raw-policy A/B eval (150 battles each; run for BOTH checkpoints):
-#   arm     = checkpoints/v3-extended/ppo_step_2000000_final.pt  (--obs-v3-extended)
-#   control = checkpoints/v3/ppo_step_2000015.pt                 (--obs-v3)
-python models/evaluate.py --model ppo --obs-v3-extended \
-    --checkpoint models/ppo/checkpoints/v3-extended/ppo_step_2000000_final.pt \
-    --battles 150 --opponent random
-python models/evaluate.py --model ppo --obs-v3-extended \
-    --checkpoint models/ppo/checkpoints/v3-extended/ppo_step_2000000_final.pt \
-    --battles 150 --opponent damagefirst
-python models/evaluate.py --model ppo --obs-v3 \
-    --checkpoint models/ppo/checkpoints/v3/ppo_step_2000015.pt \
-    --battles 150 --opponent random
-python models/evaluate.py --model ppo --obs-v3 \
-    --checkpoint models/ppo/checkpoints/v3/ppo_step_2000015.pt \
-    --battles 150 --opponent damagefirst
-```
-Gate: v3-extended raw beats the v3 control by >+2pp on BOTH opponents → Phase 1B
-(full 5M v3-extended run); otherwise → Phase 2.
+**A/B run ✅ COMPLETE 2026-07-28 (user-run on home machine).** Trained
+`--obs-v3-extended --steps 2000000` with the M7 opponent-mix recipe. **Gotcha
+found:** the checkpoint landed in `checkpoints/opp/ppo_step_2000003_final.pt`,
+not `checkpoints/v3-extended/` — `train.py`'s checkpoint-dir routing checks
+`elif args.opp_coef != 0.0` (default 0.1) *before* the `--obs-v3-extended`
+branch, so any run without an explicit `--opp-coef 0` gets routed to
+`checkpoints/opp/` regardless of obs schema. Obs schema itself trained
+correctly (1044-dim v3-extended); this is a path-naming quirk only, worth
+fixing in `train.py` if the routing order ever bites again — reorder the
+`elif` so `--obs-v3-extended`/`--obs-v3` schema routing takes priority over
+the opp-coef default, or require an explicit `--checkpoint-dir` for the M8
+A/B runs.
+
+**Results (150 raw-policy battles each):**
+| | v3-extended | v3 control |
+|---|---|---|
+| vs Random | 58% (87/150) | 61% (92/150, existing sweep data, no re-run) |
+| vs DamageFirst | 61% (91/150) | ~55% (200/battles @ step 2500025 — nearest existing reading, not the exact 2M control step; transferring the control checkpoint to get an exact-step number was judged not worth it) |
+
+**Verdict: Criterion A FAILED.** Random moved **−3pp** (wrong direction),
+failing the "both opponents >+2pp" gate regardless of the (favorable but
+inexact) DamageFirst comparison. Per the pre-registered rule: **Phase 1B
+(full 5M v3-extended run) is skipped. Next: Phase 2 (AlphaZero-style
+value-head targeting on the M7 checkpoint)** — see `MILESTONES.md` → M8 →
+Phase 2 for the design (self-play + MCTS value targets, Criterion C gate:
+≥+3pp vs DamageFirst on tuned MCTS, 200 battles).
 
 
 
@@ -175,8 +210,8 @@ loss healthy to the end, late rollout win rates 0.40–0.45 vs the mixed pool.
 
 ## Recently Completed
 
-**M8: Value-Head Targeting + Ladder Infrastructure — ⏳ SCOPED 2026-07-22**
-Contingency-based escalation: Phase 0 (websocket reconnect) mandatory; Phase 1A (obs refinement, speed-ratio A/B) as a quick gate; Phase 2 (AlphaZero value targeting) if obs fails. Full 6-phase plan in `MILESTONES.md` → M8. Pre-registered success criteria: bot evals ≥93%/≥84%, ladder GXE ≥35% or <25% (same noise band as M7). Most likely path: Phase 1A → 1B or 2 → ladder validation = ~12–16 hours.
+**M8: Value-Head Targeting + Ladder Infrastructure — 🟡 IN PROGRESS**
+Contingency-based escalation: Phase 0 (websocket reconnect) ✅ done 2026-07-22; Phase 1A (obs refinement, speed-ratio A/B) ✅ complete 2026-07-28 — **failed (Random −3pp)**, Phase 1B skipped. **Phase 2 (AlphaZero value targeting): infra built 2026-07-28** (`collect_value_data.py` + `value_finetune.py` + MCTS root-stat instrumentation), collection/fine-tune/Criterion C A/B pending a user run on the M7 checkpoint — see Current Work above and MILESTONES.md → M8 → Phase 2. Full 6-phase plan in `MILESTONES.md` → M8. Pre-registered success criteria: bot evals ≥93%/≥84%, ladder GXE ≥35% or <25% (same noise band as M7).
 
 **M7 (Observation Schema v3) — ✅ COMPLETE 2026-07-20**
 Criterion A ✅, Criterion B ✅ (new best agent: 93.0% R / 84.2% DF), Criterion C 🟡 inconclusive (Elo 1034.6 / GXE 28.2% vs M6's 1017/23.9%, landed in 25–34% noise band). v3 adds type effectiveness, move-effect flags, Sleep Clause tracking — the highest-leverage obs features humans use every game. Bug fix: battle-sim.ts now supports v3 (obs-shape-agnostic MCTS now truly holds). Full results in `MILESTONES.md` → M7.

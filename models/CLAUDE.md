@@ -17,6 +17,8 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `bc_pretrain_mlp.py` | M5.5: BC of the MLP `PPOAgent` (v2 obs) on replay shards — multi-format weighted (gen1randombattle+gen1ou), `--min-rating` + tournament-unrated filter, opp-head aux CE; saves `checkpoints/bc_mlp_gen1.pt` (a normal PPO checkpoint) |
 | `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
 | `mcts/` | `mcts_agent.py` — inference-time determinized UCT over a PPO checkpoint (M4); `results/` — eval battery logs |
+| `collect_value_data.py` | M8 P2: MCTS self-play collection of AlphaZero-style value targets → `.npz` shards (obs, root visits/Q, seat-perspective rewards, game outcome); `--workers` parallel, resumable |
+| `value_finetune.py` | M8 P2: retrains a checkpoint's **value head only** (policy/opp head/trunk left bit-identical) on those targets — `--target outcome\|mc\|root` |
 | `checkpoints/` | BC pretraining checkpoints |
 | `infer_server.py` | M6: stdio JSON inference server over a PPO checkpoint (reverse of `gym_bridge.js`); spawned by `tools/ladder-bot/ladder-bot.js` |
 
@@ -25,6 +27,8 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 Python training code cannot call Node.js APIs directly, so `gym_bridge.js` runs as a child process spawned by `gym_client.py` via `subprocess.Popen`. All communication between Python and the bridge is line-delimited JSON over stdin/stdout — one command object per line in, one response object per line out. The bridge wraps `PokemonGymEnv` from `dist/sim/tools/pokemon-gym.js`, so the TypeScript simulator must be compiled before the bridge can run. Build it once with `./build` (or `npm run build`) at the repo root before starting any training script.
 
 **Observation modes (M2/M3.4):** `GymClient()` defaults to the structured `(12, 65)` per-Pokémon token observation. Pass `GymClient(structured=False)` (bridge: `--flat`) for the legacy 100-dim flat vector — required for `q_learning/`, `dqn/`, and `ppo/`-flat, whose networks are hardcoded to that shape. `GymClient(obs_v2=True)` (bridge: `--obs-v2`) selects **schema v2** `(12, 77)` (M3.4): v1 tokens with 12 dims appended per token — 7 boost stages (atk/def/spe/spa/accuracy/evasion/spd, stage/6) + Reflect/Light Screen/Substitute/Leech Seed flags + toxic counter, non-zero only on the two active tokens. Dims 0–64 are byte-identical to v1, so `gym_client.slice_structured_obs()` gives a v1 agent its native view of a v2 observation — this is how v1 checkpoints act as self-play opponents (pool seeding) and head-to-head opponents inside a v2 env.
+
+**Value-head targeting (M8 Phase 2):** `collect_value_data.py` plays self-play games with tuned MCTS driving one seat (seats alternate per game) and a frozen raw-policy checkpoint the other, recording every searched decision: the obs (already sliced to the checkpoint's `obs_size`), the search's root visit counts and root Q, the shaped gym reward accumulated to the next decision **in the searching seat's perspective**, and the game outcome. Targets are derived at training time, so one dataset serves all three: `value_finetune.py --target outcome` (final result, pure AlphaZero), `mc` (discounted return of the shaped rewards, `--gamma`), or `root` (the search's own root Q; decisions where no search ran carry NaN and are dropped). The fine-tune trains **the value head only** — trunk, policy head and opp head come out bit-identical, so the MCTS prior is unchanged and any strength delta is attributable to leaf evaluation (`--unfreeze-trunk` opts out and is not a clean A/B). Output is a normal PPO checkpoint, loadable by `evaluate.py`, `infer_server.py` and the ladder bot unchanged. Throughput: ~600 games/h per worker at `--sims 100` on CPU; `--workers N` runs N independent bridges, and shards flush every `--shard-games` games so a killed run resumes in place.
 
 **Parallelism (M3.1):** the PPO/transformer trainers and `evaluate.py` run `--num-envs` parallel simulations (default 8, ~5x throughput) via `VecGymClient`; `--num-envs 1` reproduces the serial path. `--device {cpu,mps,cuda}` overrides device auto-detection; checkpoints never store the device and are portable Mac↔CUDA. See `docs/ML-TRAINING.md` → **Parallel Training** for benchmarks and the CUDA-machine setup note.
 
@@ -140,6 +144,22 @@ python models/evaluate.py --model mcts --checkpoint models/ppo/checkpoints/selfp
 python models/evaluate.py --model ppo --obs-v2 --checkpoint models/ppo/checkpoints/v2/ppo_step_5000000_final.pt --battles 500
 python models/evaluate.py --model ppo --obs-v2 --checkpoint models/ppo/checkpoints/v2/ppo_step_5000000_final.pt \
     --vs-checkpoint models/ppo/checkpoints/selfplay/ppo_step_4750059.pt --battles 500
+
+# M8 Phase 2: AlphaZero-style value-head targeting on the M7 (v3) checkpoint.
+# 1) collect MCTS self-play targets (~600 games/h/worker at sims=100; resumable)
+python models/collect_value_data.py --obs-v3 \
+    --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+    --games 2000 --workers 4 --out-dir data/value_targets/m8_v3
+# 2) fine-tune the value head only (policy/opp head/trunk stay bit-identical)
+python models/value_finetune.py --target outcome \
+    --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+    --data-dir data/value_targets/m8_v3 \
+    --out models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt
+# 3) Criterion C A/B: tuned MCTS vs DamageFirst, base vs fine-tuned, 200 battles each
+python models/evaluate.py --model mcts --obs-v3 --opponent damagefirst --battles 200 \
+    --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt --device cpu
+python models/evaluate.py --model mcts --obs-v3 --opponent damagefirst --battles 200 \
+    --checkpoint models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt --device cpu
 ```
 
 For the full message type reference and troubleshooting, see `docs/ML-TRAINING.md` -> **Python-Node Bridge Protocol**.

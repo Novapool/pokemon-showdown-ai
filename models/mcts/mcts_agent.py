@@ -142,8 +142,12 @@ class MCTSAgent:
                 opp_sampler = "policy"
         self.opp_sampler = opp_sampler
 
-        # Stats for latency reporting (evaluate.py --model mcts)
+        # Stats for latency reporting (evaluate.py --model mcts) and for the
+        # M8 Phase 2 value-target collector, which reads the root statistics of
+        # the search that produced the last action.
         self.last_search_sims = 0
+        self.last_root_visits = np.zeros(9, dtype=np.int64)
+        self.last_root_value = 0.0
 
     # ------------------------------------------------------------------
     # Network helpers
@@ -230,6 +234,8 @@ class MCTSAgent:
         legal = np.flatnonzero(np.asarray(valid_mask, dtype=bool))
         if len(legal) == 1:
             self.last_search_sims = 0
+            self.last_root_visits = np.zeros(9, dtype=np.int64)
+            self.last_root_value = float("nan")  # no search ran at this node
             return int(legal[0])
 
         sims_per_det = max(1, self.n_sims // self.n_determinizations)
@@ -257,13 +263,18 @@ class MCTSAgent:
             client.sim_free_all()
 
         self.last_search_sims = ran_sims
+        self.last_root_visits = total_visits.copy()
         if total_visits.sum() == 0:
             # Search couldn't run (e.g. every determinization auto-completed
             # our locked choice) — fall back to the raw policy.
             probs, _ = self._policy_value(
                 self._fit_obs(np.asarray(obs, dtype=np.float32).reshape(-1)), valid_mask,
             )
+            self.last_root_value = float("nan")
             return int(np.argmax(probs))
+        # Root Q: mean backup return over all root simulations — the search's
+        # own estimate of this position's value, in this seat's perspective.
+        self.last_root_value = float(total_value.sum() / total_visits.sum())
 
         # Mask to live-battle-legal actions: the live mask is authoritative.
         visits = np.where(np.asarray(valid_mask, dtype=bool), total_visits, -1)

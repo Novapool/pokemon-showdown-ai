@@ -133,6 +133,58 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 
 ---
 
+## M8 Phase 2 — value-head targeting runbook
+
+Three steps, all on the M7 checkpoint
+(`models/ppo/checkpoints/v3/ppo_step_5000002_final.pt`). Steps 1 and 3 are the
+long ones; step 2 takes a couple of minutes.
+
+**1. Collect MCTS self-play value targets** (~600 games/h per worker at
+`--sims 100` on CPU, so 2000 games ≈ 1 h at `--workers 4`; pick `--workers`
+≈ physical cores, each hosts its own Node bridge):
+
+```bash
+python models/collect_value_data.py --obs-v3 \
+  --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+  --games 2000 --workers 4 --out-dir data/value_targets/m8_v3
+```
+
+Shards flush every 25 games; re-running the identical command resumes from
+what's on disk (`--no-resume` to start over). Expect ~40 decisions/game, so
+2000 games ≈ 80k training rows (~350 MB of `.npz`, gitignored).
+
+**2. Fine-tune the value head** (trunk, policy head and opp head come out
+bit-identical — the search prior is untouched, so the A/B isolates leaf
+evaluation):
+
+```bash
+python models/value_finetune.py --target outcome \
+  --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+  --data-dir data/value_targets/m8_v3 \
+  --out models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt
+```
+
+`--target outcome` is the pure AlphaZero target (final result at every state).
+`mc` (discounted shaped return, `--gamma 0.99`) and `root` (the search's own
+root Q) reuse the same dataset — cheap to try all three and A/B the winner.
+The script prints val MSE and sign agreement before and after, which is the
+first read on whether the old value head was miscalibrated at all.
+
+**3. Criterion C A/B** — tuned MCTS vs DamageFirstAI, 200 battles each, base
+vs fine-tuned. The gate is **≥ +3pp for the fine-tuned checkpoint**:
+
+```bash
+python models/evaluate.py --model mcts --obs-v3 --opponent damagefirst --battles 200 \
+  --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt --device cpu
+python models/evaluate.py --model mcts --obs-v3 --opponent damagefirst --battles 200 \
+  --checkpoint models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt --device cpu
+```
+
+Pass → Phase 3 (full MCTS value training run). Fail → Phase 3 is skipped and
+the M7 checkpoint carries into the Phase 4 ladder run.
+
+---
+
 ## Running the ladder bot (live official server)
 
 `tools/ladder-bot/ladder-bot.js` connects to the real Showdown ladder
