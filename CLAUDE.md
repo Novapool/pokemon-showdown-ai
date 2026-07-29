@@ -20,6 +20,7 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 | File | Read when |
 |---|---|
 | `docs/SETUP.md` | Setting up the repo, rebuilding after pulls |
+| `docs/MULTI-MACHINE.md` | **Read first when a file/checkpoint seems missing, or when a job needs the home machine.** Mac ↔ home-machine inventory, what syncs via git vs never, SSH/tmux recipes |
 | `docs/CLI.md` | Using `./pokemon-showdown` commands (team gen, format inspection) |
 | `docs/SIMULATOR-API.md` | Using `BattleStream` in Node.js for high-throughput simulation |
 | `docs/PARALLEL-SIMULATION.md` | Running thousands of concurrent battles for ML training |
