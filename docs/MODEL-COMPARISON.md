@@ -27,6 +27,7 @@ Running record of every evaluated model/run in this project. Evaluation is
 | MLP-PPO BC-warm-started anchored fine-tune, raw (M5.5 final) | BC + 5.0M | 54.6% (273/500) | 42.0% (84/200) | 🟨 Raw peer of the 51–57% band; first BC→RL transfer that improves on BC (raw 22% → 55%) instead of eroding. Sweep 35–58%, no collapse |
 | MCTS over M5.5 fine-tuned final (policy sampler, tuned knobs) | inference-time | 90.6% (453/500) | 79.2% (396/500) | ✅ Prior best agent (+4.6pp R / +6.6pp DF over the M5 best, outside noise at n=500); seat-balanced h2h vs the raw M5 checkpoint 78.4% (392/500). Human prior + anchored RL + search compounds. Checkpoint: `models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt` |
 | MLP-PPO obs-v3 (type-eff + move-effect flags + Sleep Clause), raw (M7 final) | 5.0M | 70.0% (350/500) | 52.0% (104/200) | 🟨 Best raw-policy numbers in project history (prior best raw: 57% R M3.3). Checkpoint: `models/ppo/checkpoints/v3/ppo_step_5000002_final.pt` |
+| MCTS over M8 Phase 2 value-head fine-tune (`--target outcome`) | inference-time value-head-only FT | — | **80.0% (160/200)** vs base **82.5% (165/200)** | ❌ **Negative result (M8 Phase 2).** Value head retrained on AlphaZero outcome targets from 2000 MCTS self-play games (66,459 decisions); trunk/policy/opp heads bit-identical, so the delta isolates leaf evaluation. **−2.5pp against a ≥+3pp gate → Criterion C failed, Phase 3 skipped.** Notable: the fine-tune *worked* in-distribution (val MSE 0.7414 → 0.5907 vs a constant-predictor baseline of 0.7396, i.e. **R² 0.00 → 0.20**; the PPO-trained head scored *below* a constant) and none of it transferred to play strength. Delta is inside noise (SE ~3.9pp at n=200) — not established as harmful, but fails a point gate. Log: `models/mcts/results/m8_phase2_valft_criterionC.log`; checkpoint `models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt` |
 | **MCTS over M7 obs-v3 final (policy sampler, tuned knobs)** | inference-time | **93.0% (465/500)** | **84.2% (421/500)** | ✅ **Current best agent by bot eval** (+2.4pp R / +5.0pp DF over the M5.5 best). **Ladder read (Criterion C, 100 games): Elo 1034.6 / GXE 28.2%, vs M6's 1017/23.9%** — directionally up (+9pp raw win rate) but lands in the pre-registered 25–34% inconclusive band, not a confirmed ladder win. Eval logs: `models/mcts/results/m7_v3_mcts_{random,damagefirst}.log`; ladder log: `data/replays/self_ladder/m7_ladder_run.log` |
 
 ## Reference points
@@ -42,6 +43,22 @@ Running record of every evaluated model/run in this project. Evaluation is
 
 - 150-battle evals carry roughly ±8pp noise; 500-battle evals ±4.5pp. Treat
   single-checkpoint differences under that as ties.
+- **Powering an A/B (added after M8 Phase 2).** The noise figures above are for
+  a *single* win rate. Comparing two arms is worse: the SE on the difference is
+  ~√2× a single arm's, so at n=200/arm near p≈0.8 it is **~3.9pp**, and at
+  n=500/arm **~2.5pp**. M8 Phase 2's pre-registered "≥+3pp" gate at n=200 was
+  therefore underpowered — a true +3pp effect would have been detected only
+  about a third of the time. **Any future A/B meant to resolve ±3pp needs
+  ~500–800 battles per arm.** Also note the asymmetry this creates: a gate can
+  fail on a point estimate (as Phase 2 did at −2.5pp) while the delta is still
+  statistically indistinguishable from zero. Record both readings.
+- **In-distribution metric gains need not transfer to play strength (M8
+  Phase 2).** The value-head fine-tune moved val MSE from no-better-than-a-
+  constant to R² ≈ 0.20 and still lost 2.5pp of win rate. Plausible mechanism:
+  MCTS selection depends on *relative* leaf values between siblings, so a large
+  share of an MSE gain that comes from learning the base rate is a constant
+  offset that buys nothing. Judge value-targeting work on head-to-head play,
+  not on MSE or sign agreement.
 - The M3.2 run confirmed the M3 conclusion with the untrained-value-head
   problem treated: the fixes eliminated the collapse/decay mechanism (the
   policy holds at its BC plateau for 3.5M steps, and decay resumes exactly as

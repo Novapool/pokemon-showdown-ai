@@ -1,14 +1,59 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-28
+Last updated: 2026-07-29
 
 ---
 
 ## Current Work
 
-**M8 Phase 2 (AlphaZero-style value targeting) — 🟡 INFRA BUILT 2026-07-28,
-AWAITING THE USER-RUN COLLECTION + A/B.** Phase 1A gated negative, so per the
-pre-registered rule we escalated to Phase 2. Built three pieces:
+**M8 Phase 2 (AlphaZero-style value targeting) — ❌ COMPLETE 2026-07-29,
+CRITERION C FAILED (negative result). Phase 3 skipped; next is Phase 4
+(ladder run on the unchanged M7 checkpoint).** Full log:
+`models/mcts/results/m8_phase2_valft_criterionC.log`; write-up in
+`MILESTONES.md` → M8 → Phase 2.
+
+| | vs DamageFirst, tuned MCTS, 200 battles |
+|---|---|
+| Base (`v3/ppo_step_5000002_final.pt`) | **82.5% (165/200)** |
+| Fine-tuned (`v3_valft/ppo_v3_valft_outcome.pt`) | **80.0% (160/200)** |
+| Delta | **−2.5pp** (gate: ≥+3pp) ❌ |
+
+Collection ran on the MacBook in ~35 min (2000 games, 66,459 decisions, 84
+shards, 6 workers) — data clean, obs finite at 1032 dims, seats balanced.
+The `--target outcome` fine-tune worked *well* in-distribution: val MSE
+0.7414 → 0.5907 against a constant-predictor baseline of 0.7396, i.e. **R²
+0.00 → 0.20**, and sign agreement 0.713 → 0.800 against a base rate of 0.755.
+**The PPO-trained value head was scoring below a constant predictor** —
+hypothesis (a) of the M8 thesis confirmed outright.
+
+**And none of it transferred.** That's the substantive finding: better leaf
+evaluation did not produce better search outcomes. Two candidate causes worth
+carrying forward — (1) MCTS uses *relative* leaf values and much of the MSE
+gain was learning the base rate (+0.51), a constant offset; (2) the targets
+were collected against a frozen raw-policy opponent (searcher won 75.5%) but
+the A/B is against DamageFirst.
+
+**Open decision (deferred):** `--target mc` and `--target root` reuse the same
+dataset, ~1.5h for both including evals. Prior is weak — `outcome` was the
+strongest target a priori. If run, pre-commit that any arm clearing +3pp needs
+confirmation at 500 battles/arm. Otherwise go straight to Phase 4.
+
+**Methodological note (project-wide): the +3pp gate at n=200 was underpowered**
+— SE on the difference is ~3.9pp, so a true +3pp effect would be caught only
+~1/3 of the time. Future A/Bs resolving ±3pp want ~500–800 battles per arm.
+The −2.5pp delta here is inside noise, so the fine-tune is not *established* as
+harmful; it simply fails a point gate.
+
+**Multi-machine setup documented 2026-07-29:** `docs/MULTI-MACHINE.md` records
+the Mac ↔ home-machine inventory, which artifacts cross via git vs never sync,
+and the planned Tailscale + SSH + tmux workflow. **Not yet implemented** —
+Tailscale setup is pending physical access to the home machine. Final
+checkpoints are now committed to git (`344def9ef`, 14 files / 24 MB), so evals
+and fine-tunes no longer strand on the wrong machine.
+
+---
+
+### Phase 2 infrastructure (built 2026-07-28, all of it exercised by the run above)
 
 - `models/mcts/mcts_agent.py`: `act()` now records `last_root_visits` and
   `last_root_value` (root Q = mean backup return; NaN when no search ran at
@@ -19,8 +64,11 @@ pre-registered rule we escalated to Phase 2. Built three pieces:
   root visits, root Q, the shaped reward accumulated to the next decision in
   the **searching seat's** perspective (p2 negated), and the game outcome.
   `.npz` shards flush every `--shard-games` games and re-running the same
-  command resumes; `--workers N` runs N bridges in parallel (~600 games/h per
-  worker at `--sims 100` on CPU, so 2000 games ≈ 1h at 4 workers).
+  command resumes; `--workers N` runs N bridges in parallel. **Measured
+  2026-07-29 on the M4 MacBook: ~1100 games/h per worker at `--sims 100`, so
+  2000 games took ~35 min at `--workers 6`** (the earlier ~600 games/h estimate
+  was conservative). Use `--workers ≈ physical cores − few`; each worker is a
+  Python process *and* a Node bridge.
 - `models/value_finetune.py`: value-head-only fine-tune. One dataset serves
   three targets (`--target outcome | mc | root`); split is by whole game;
   prints val MSE + sign agreement before/after. Trunk, policy head and opp head
@@ -30,16 +78,15 @@ pre-registered rule we escalated to Phase 2. Built three pieces:
 **Verified:** collection smokes (1 worker, 2 workers, resume-after-kill) —
 reward signs match outcomes on both seats, obs all finite; fine-tune smokes on
 all three targets; the fine-tuned checkpoint plays through
-`evaluate.py --model mcts` end-to-end. Suggestive early signal from the smoke
-data (far too small to count as evidence): the PPO-trained value head is
-clearly optimistic — root Q ≈ +0.24…+0.58 in games the searching seat lost,
-val sign agreement 0.08 against outcomes.
+`evaluate.py --model mcts` end-to-end. All of this held up on the full run.
 
-**Next (user-run, needs the M7 v3 checkpoint — not on this machine):** the
-3-step runbook in `docs/TRAINING-COMMANDS.md` → **M8 Phase 2** — collect ~2000
-games → fine-tune → Criterion C A/B (tuned MCTS vs DamageFirst, 200 battles,
-base vs fine-tuned, gate ≥+3pp). Pass → Phase 3; fail → Phase 4 ladder on the
-M7 checkpoint.
+**Correction to the smoke-data reading:** the smoke sample suggested val sign
+agreement of **0.08** against outcomes. The full 66k-decision dataset put it at
+**0.794** (root Q vs eventual outcome), and the value head's *own* val sign
+agreement at **0.713**. The 0.08 figure was small-sample noise and should not be
+cited. The optimism it pointed at is real but far milder than implied: root Q
+averages **+0.289 in games the searching seat went on to lose** (vs +0.683 in
+wins) — miscalibrated specifically in losing positions, not globally broken.
 
 **Carried gotcha (unfixed):** `train.py`'s checkpoint-dir routing checks
 `elif args.opp_coef != 0.0` before the obs-schema branches, so any run without
@@ -210,8 +257,17 @@ loss healthy to the end, late rollout win rates 0.40–0.45 vs the mixed pool.
 
 ## Recently Completed
 
-**M8: Value-Head Targeting + Ladder Infrastructure — 🟡 IN PROGRESS**
-Contingency-based escalation: Phase 0 (websocket reconnect) ✅ done 2026-07-22; Phase 1A (obs refinement, speed-ratio A/B) ✅ complete 2026-07-28 — **failed (Random −3pp)**, Phase 1B skipped. **Phase 2 (AlphaZero value targeting): infra built 2026-07-28** (`collect_value_data.py` + `value_finetune.py` + MCTS root-stat instrumentation), collection/fine-tune/Criterion C A/B pending a user run on the M7 checkpoint — see Current Work above and MILESTONES.md → M8 → Phase 2. Full 6-phase plan in `MILESTONES.md` → M8. Pre-registered success criteria: bot evals ≥93%/≥84%, ladder GXE ≥35% or <25% (same noise band as M7).
+**M8: Value-Head Targeting + Ladder Infrastructure — 🟡 IN PROGRESS (both
+technical bets spent; Phase 4 ladder is what's left)**
+Contingency-based escalation. Phase 0 (websocket reconnect) ✅ 2026-07-22.
+Phase 1A (obs refinement, speed-ratio A/B) ❌ 2026-07-28 — Criterion A failed
+(Random −3pp), Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌
+2026-07-29 — infra built and fully exercised, but Criterion C failed (82.5% →
+80.0%, −2.5pp vs a ≥+3pp bar), so Phase 3 is skipped. The two structural ideas
+M8 was built to test have both come back negative, and the shipping agent is
+still the unchanged M7 checkpoint. **Next: Phase 4 ladder run on M7** — GXE
+≥35% for a win, <25% for clear regression, same band as M7's inconclusive
+28.2%/32.9% readings. See Current Work above and `MILESTONES.md` → M8.
 
 **M7 (Observation Schema v3) — ✅ COMPLETE 2026-07-20**
 Criterion A ✅, Criterion B ✅ (new best agent: 93.0% R / 84.2% DF), Criterion C 🟡 inconclusive (Elo 1034.6 / GXE 28.2% vs M6's 1017/23.9%, landed in 25–34% noise band). v3 adds type effectiveness, move-effect flags, Sleep Clause tracking — the highest-leverage obs features humans use every game. Bug fix: battle-sim.ts now supports v3 (obs-shape-agnostic MCTS now truly holds). Full results in `MILESTONES.md` → M7.

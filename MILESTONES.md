@@ -1513,13 +1513,59 @@ If obs refinement doesn't move the needle, the binding constraint is likely that
     optimistic (root Q ≈ +0.24…+0.58 in games the seat went on to lose; val
     sign agreement 0.08 vs outcomes) — consistent with the Phase 2 thesis,
     though the smoke sample is far too small to be evidence.
-  - **Not yet run:** the actual collection + fine-tune + Criterion C A/B, which
-    need the M7 v3 checkpoint (not present on this machine). Runbook in
-    `docs/TRAINING-COMMANDS.md` → **M8 Phase 2**.
+- **A/B run ✅ COMPLETE 2026-07-29 (user-run on the MacBook) — CRITERION C
+  FAILED, NEGATIVE RESULT.** Full log:
+  `models/mcts/results/m8_phase2_valft_criterionC.log`.
+
+  **Collection:** 2000 games / 66,459 decisions / 84 shards in
+  `data/value_targets/m8_v3` (6 workers, ~1100 games/h each, ~35 min wall).
+  Data clean: all obs finite at 1032 dims, seats balanced 33251/33208, 3.75%
+  NaN root values (forced/locked choices, expected). **Label skew: the
+  searching seat won 75.5%** vs the frozen raw-policy opponent.
+
+  **Fine-tune (`--target outcome`):** val MSE 0.7414 → 0.5907, sign agreement
+  0.713 → 0.800. Read against the right baselines this is a large in-distribution
+  gain: target variance is 0.860² = 0.7396 (the MSE of a constant predictor), so
+  **R² went from ~0.00 to ~0.20** — and the BEFORE number was marginally *worse*
+  than a constant. Base-rate sign agreement (always guess "win") is 0.755, so
+  **BEFORE 0.713 was below that floor.** The PPO-trained value head had
+  essentially no discriminative power over outcomes — a direct confirmation of
+  hypothesis (a) in the M8 thesis.
+
+  **Criterion C A/B (tuned MCTS vs DamageFirstAI, 200 battles each):**
+  base **82.5% (165/200)**, fine-tuned **80.0% (160/200)** → **−2.5pp against a
+  ≥+3pp gate.** Control sanity-checks against the M7 battery's 84.2% at n=500
+  (consistent within noise). SE on the difference is ~3.9pp, so the delta is
+  −2.5 ± 3.9pp — the fine-tune is *not* established as harmful, but it plainly
+  fails a +3pp point gate. Per the pre-registered rule: **Phase 3 is SKIPPED;
+  the M7 checkpoint carries into the Phase 4 ladder run.**
+
+  **Substantive finding: leaf-value calibration improved a lot and none of it
+  transferred to play strength.** Two candidate explanations, both actionable
+  if this is retried: (1) MCTS selection depends on *relative* leaf values, and
+  much of the MSE gain came from learning the base rate (+0.51) — a constant
+  offset that doesn't discriminate between sibling nodes; (2) distribution
+  mismatch — targets were collected against a frozen raw-policy opponent, but
+  the A/B is against DamageFirst.
+
+  **Methodological note (applies project-wide): the +3pp gate at n=200 was
+  underpowered.** A true +3pp effect would have been detected only ~1/3 of the
+  time. Future A/Bs resolving ±3pp need ~500–800 battles per arm.
+
+  **Untried:** `--target mc` and `--target root` reuse the same dataset (~1.5h
+  for both incl. evals). Prior is weak — `outcome` was the strongest target a
+  priori. If run, any arm clearing +3pp must be confirmed at 500 battles/arm
+  before it counts as a pass. Runbook: `docs/TRAINING-COMMANDS.md` → **M8
+  Phase 2**.
 
 ---
 
-**Phase 3 (if Phase 2 gates positive): Full MCTS value training run**
+**Phase 3 (if Phase 2 gates positive): Full MCTS value training run** — ❌
+**SKIPPED 2026-07-29.** Phase 2 gated negative (−2.5pp vs a ≥+3pp bar), so per
+the pre-registered rule this phase is not run and the M7 checkpoint carries
+into Phase 4. The design below is retained for reference: it would only become
+live if a future value-targeting attempt (e.g. the untried `mc`/`root` targets,
+or collection against a stronger opponent) clears Criterion C.
 
 If Phase 2's value-head fine-tuning moves the MCTS needle, scale it up: a full self-play + PPO loop where the policy trains on MCTS trajectories with value targets.
 
@@ -1653,4 +1699,4 @@ Best action
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
 | M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
 | M7: Observation Schema v3 | ✅ | **New best agent (bot evals)** — tuned MCTS 93.0% R / 84.2% DF, +2.4/+5.0pp vs prior best. **Ladder: inconclusive** — Elo 1034.6 / GXE 28.2% (M6: 1017/23.9%), lands in the pre-registered 25–34% noise band; directionally up (+9pp raw win rate) but not a confirmed win. **50-game follow-up (2026-07-23): still inconclusive** — 21/50 raw (42%), Elo 1101.4 / GXE 32.9%, 2.1pp under the ≥35% win bar; trend over 150 games monotonic (23.9→28.2→32.9) | M8 |
-| **M8: Value-Head Targeting + Ladder Infra** | ⏳ Scoped | **Contingency-based escalation:** if obs refinement (base-stats) doesn't move ladder, pivot to AlphaZero-style self-play value training. Ladder-bot websocket reconnect fix mandatory in Phase 0. Bot bars 93%/84% (repeat M7 evals as baseline), ladder GXE ≥35% for win or <25% for clear regression (same ±35 noise band). | — |
+| **M8: Value-Head Targeting + Ladder Infra** | 🟡 In progress | **Contingency escalation, both technical bets now spent.** Phase 0 (ladder-bot websocket reconnect) ✅. Phase 1A (obs refinement, speed-ratio dim) ❌ Criterion A failed (Random −3pp) → Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌ Criterion C failed (base 82.5% → fine-tuned 80.0%, −2.5pp vs a ≥+3pp bar) → Phase 3 skipped. **Notable:** the fine-tune fixed the value head in-distribution (R² 0.00 → 0.20; the PPO-trained head scored *below* a constant predictor) and none of it transferred to play strength. **Next: Phase 4 ladder run on the unchanged M7 checkpoint**, GXE ≥35% for a win or <25% for clear regression. | — |

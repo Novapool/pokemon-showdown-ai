@@ -1,0 +1,63 @@
+M8 Phase 2 — Criterion C A/B (value-head fine-tune vs base)
+Run 2026-07-29, user-run on the MacBook (M4, 10 cores, --device cpu).
+
+Dataset: data/value_targets/m8_v3 — 2000 games, 66,459 decisions, 84 shards.
+  collect_value_data.py --obs-v3 --games 2000 --workers 6
+  checkpoint = opponent-checkpoint = v3/ppo_step_5000002_final.pt
+  sims=100 det=1 c_puct=0.5 opp_sampler=policy seed=0
+  Searching seat won 75.5% of games vs the frozen raw-policy opponent
+  (label skew: 50,186 wins / 16,273 losses).
+
+--- Step 2: value_finetune.py --target outcome ---
+target=outcome | n=66459 | mean +0.510 | std 0.860
+train 60048 | val 6411
+BEFORE fine-tune | val MSE 0.7414 | sign agreement 0.713
+epoch 1/2        | train MSE 0.5946 | val MSE 0.5934 | sign agreement 0.797
+epoch 2/2        | train MSE 0.5799 | val MSE 0.5907 | sign agreement 0.800
+saved -> models/ppo/checkpoints/v3_valft/ppo_v3_valft_outcome.pt
+
+Interpretation: target variance = 0.860^2 = 0.7396, i.e. the MSE of a constant
+predictor at the mean. So R^2 goes from ~0.00 (BEFORE was marginally WORSE than
+a constant) to ~0.20. Base-rate sign agreement (always guess "win") = 0.755;
+BEFORE 0.713 was BELOW that floor, AFTER 0.800 is +4.5pp above it. The
+PPO-trained value head had essentially no discriminative power over outcomes.
+
+--- Step 3: Criterion C A/B, tuned MCTS vs DamageFirstAI, 200 battles each ---
+sims=100, det=1, c_puct=0.5, determinize=True, seat=p1, opp_sampler=policy
+
+BASE      v3/ppo_step_5000002_final.pt        0.825 (165/200)
+          search latency ms: mean 55 / p95 106 / max 157
+
+FINETUNED v3_valft/ppo_v3_valft_outcome.pt    0.800 (160/200)
+          search latency ms: mean 57 / p95 107 / max 156
+
+DELTA: -2.5pp   (gate: >= +3pp)   ==> CRITERION C FAILED
+
+Statistics: SE on the difference at n=200/arm, p~0.81, is ~3.9pp, so the delta
+is -2.5 +/- 3.9pp (95% CI ~ [-10, +5]). The fine-tune is NOT established as
+harmful — the delta is inside noise — but it plainly fails a >= +3pp point gate.
+
+NOTE ON POWER: the pre-registered +3pp gate at n=200 was underpowered; a true
++3pp effect would be detected only ~1/3 of the time. Future A/Bs resolving
++/-3pp need ~500-800 battles per arm.
+
+Control sanity check: 82.5% here vs the M7 battery's 84.2% at n=500 — consistent
+within noise, so the harness and checkpoint are behaving.
+
+--- Verdict ---
+Phase 2 gates NEGATIVE. Per the pre-registered rule, Phase 3 (full AlphaZero
+self-play + policy co-training) is SKIPPED and the M7 checkpoint carries into
+the Phase 4 ladder run.
+
+Substantive finding: leaf-value calibration improved a lot in-distribution
+(R^2 0.00 -> 0.20) and none of it transferred to play strength. Two candidate
+explanations, both actionable if this is ever retried:
+  1. MCTS selection depends on RELATIVE leaf values; much of the MSE gain came
+     from learning the base rate (+0.51), a constant offset that does not help
+     discriminate between sibling nodes.
+  2. Distribution mismatch — targets were collected against a frozen raw-policy
+     opponent (searcher win rate 75.5%), but the A/B is against DamageFirst.
+
+Untried (cheap, ~1.5h): --target mc and --target root reuse the same dataset.
+Prior is weak — `outcome` was the strongest target a priori. If run, any arm
+clearing +3pp must be confirmed at 500 battles/arm before counting as a pass.
