@@ -153,6 +153,26 @@ Shards flush every 25 games; re-running the identical command resumes from
 what's on disk (`--no-resume` to start over). Expect ~40 decisions/game, so
 2000 games ≈ 80k training rows (~350 MB of `.npz`, gitignored).
 
+**1b. Collect against the bot the A/B is judged on** (the 2026-07-29 retry).
+The original dataset was collected against a *frozen policy checkpoint* while
+Criterion C is scored against *DamageFirst* — one of the two standing
+explanations for why the fine-tune fixed calibration without moving strength.
+`--opponent damagefirst` uses the single-seat bridge, so the searcher is always
+p1 and rewards need no sign flip:
+
+```bash
+python models/collect_value_data.py --opponent damagefirst --obs-v3 \
+  --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+  --games 2000 --workers 10 --out-dir data/value_targets/m8_v3_df
+```
+
+Much faster than self-play collection — ~550 games/h per worker (games vs
+DamageFirst are shorter and there's only one net to run), so 2000 games is
+~20 min at `--workers 10`. **Known cost:** the searcher wins ~84% against
+DamageFirst vs 75.5% in self-play, so the outcome labels are *more* skewed. That
+cuts against the other explanation (that the MSE gain was mostly learning the
+base rate), so read a win here carefully rather than as a clean fix.
+
 **2. Fine-tune the value head** (trunk, policy head and opp head come out
 bit-identical — the search prior is untouched, so the A/B isolates leaf
 evaluation):
