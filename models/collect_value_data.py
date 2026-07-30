@@ -1,10 +1,9 @@
 """
-collect_value_data.py — self-play value-target collection (M8 Phase 2).
+collect_value_data.py — MCTS value-target collection (M8 Phase 2).
 
-Plays games with tuned MCTS driving one seat and a frozen policy checkpoint
-driving the other, recording, at every decision point the searcher actually
-made, the state it saw plus everything needed to build an AlphaZero-style
-value target for it:
+Plays games with tuned MCTS driving the searching seat, recording, at every
+decision point the searcher actually made, the state it saw plus everything
+needed to build an AlphaZero-style value target for it:
 
   obs         the observation, already sliced to the checkpoint's obs_size
   visits      root visit counts of the search that chose the action (9,)
@@ -18,6 +17,19 @@ Targets themselves are computed at training time (`value_finetune.py`), so a
 dataset can be re-used for outcome / discounted-MC / root-Q targets without
 recollecting.
 
+The opponent is chosen with `--opponent`:
+
+  checkpoint    (default) dual-seat self-play against a frozen policy
+                checkpoint, seats alternating per game so the dataset is
+                seat-balanced (p2 rewards negated into the searcher's frame).
+  random        single-seat against the bridge's scripted bot. The searcher is
+  damagefirst   always p1, so rewards need no sign flip. `damagefirst` matches
+                the distribution the Criterion C A/B is actually judged on —
+                the M8 Phase 2 dataset was collected against a frozen policy
+                but evaluated against DamageFirst, which is one of the two
+                standing explanations for why its calibration gain did not
+                transfer to play strength.
+
 Shards are written as compressed .npz every `--shard-games` games, so a
 killed run keeps everything it had already flushed; re-running the same
 command resumes from the games already on disk.
@@ -28,6 +40,12 @@ Example
         --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
         --obs-v3 --games 1000 --workers 4 \
         --out-dir data/value_targets/m8_v3
+
+    # against the bot the A/B is judged on
+    python models/collect_value_data.py --opponent damagefirst \
+        --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+        --obs-v3 --games 2000 --workers 10 \
+        --out-dir data/value_targets/m8_v3_df
 """
 
 import argparse
@@ -164,6 +182,52 @@ def _play_game(env, mcts, opponent_agent, seat: str, game_id: int) -> dict:
     return rows
 
 
+def _play_game_scripted(env, mcts, game_id: int) -> dict:
+    """One game vs a scripted bot opponent; returns the searcher's rows.
+
+    Single-seat mode: the bridge drives the opponent internally, so the
+    searcher is always p1 and every reward already arrives in its perspective
+    (no seat alternation, no sign flip). This is deliberately the same
+    configuration `evaluate.py --model mcts --opponent damagefirst` measures,
+    which is the point of collecting this way — the dual-seat path trains
+    against a frozen policy but the Criterion C A/B is judged against a bot.
+    """
+    rows = {f: [] for f in _ShardWriter.FIELDS}
+    searched = 0
+
+    obs, mask = env.reset()
+    obs = obs.reshape(-1)
+    done = False
+    info = {}
+    step_idx = 0
+    while not done:
+        rows["obs"].append(slice_structured_obs(
+            obs[None, :], mcts.agent._hparams["obs_size"])[0])
+        action = mcts.act(env, obs, mask)
+        rows["visits"].append(np.asarray(mcts.last_root_visits, dtype=np.int32))
+        rows["root_value"].append(mcts.last_root_value)
+        rows["reward"].append(0.0)
+        rows["seat"].append(0)
+        rows["step_idx"].append(step_idx)
+        rows["game_id"].append(game_id)
+        step_idx += 1
+        if mcts.last_search_sims > 0:
+            searched += 1
+
+        obs, reward, done, info, mask = env.step(action)
+        obs = obs.reshape(-1)
+        # Same pending-transition accounting as the dual-seat path: reward
+        # earned on the way to the next decision belongs to this one.
+        rows["reward"][-1] += reward
+
+    winner = info.get("winner")
+    outcome = 1.0 if winner == "Gym" else 0.0 if winner is None else -1.0
+    rows["outcome"] = [outcome] * len(rows["obs"])
+    rows["_searched"] = searched
+    rows["_outcome"] = outcome
+    return rows
+
+
 def _worker(worker_id: int, n_games: int, args: argparse.Namespace) -> None:
     import torch
 
@@ -180,7 +244,10 @@ def _worker(worker_id: int, n_games: int, args: argparse.Namespace) -> None:
 
     agent = PPOAgent.load(args.checkpoint, device=args.device)
     agent.eval()
-    if args.opponent_checkpoint:
+    scripted = args.opponent != "checkpoint"
+    if scripted:
+        opponent_agent = None
+    elif args.opponent_checkpoint:
         opponent_agent = PPOAgent.load(args.opponent_checkpoint, device=args.device)
         opponent_agent.eval()
     else:
@@ -201,21 +268,32 @@ def _worker(worker_id: int, n_games: int, args: argparse.Namespace) -> None:
         for s in ("p1", "p2")
     }
 
-    env = GymClient(
-        structured=True, selfplay=True,
-        obs_v2=args.obs_v2, obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
-    )
+    if scripted:
+        # Single-seat: the bridge plays the scripted bot, searcher is always p1.
+        env = GymClient(
+            structured=True, opponent=args.opponent,
+            obs_v2=args.obs_v2, obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
+        )
+    else:
+        env = GymClient(
+            structured=True, selfplay=True,
+            obs_v2=args.obs_v2, obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
+        )
     writer = _ShardWriter(args.out_dir, worker_id, args.shard_games, start_shard)
     wins = 0
     t0 = time.perf_counter()
     try:
         for g in range(already, n_games):
-            # Alternate seats so the dataset is seat-balanced.
-            seat = "p1" if g % 2 == 0 else "p2"
+            # Alternate seats so the dataset is seat-balanced. Scripted
+            # opponents are single-seat only, so the searcher is always p1.
+            seat = "p1" if (scripted or g % 2 == 0) else "p2"
             # game_id is namespaced by worker so shards from parallel workers
             # merge without collisions.
-            rows = _play_game(env, searchers[seat], opponent_agent, seat,
-                              worker_id * 1_000_000 + g)
+            game_id = worker_id * 1_000_000 + g
+            if scripted:
+                rows = _play_game_scripted(env, searchers["p1"], game_id)
+            else:
+                rows = _play_game(env, searchers[seat], opponent_agent, seat, game_id)
             wins += rows["_outcome"] > 0
             writer.add_game(rows)
             played = g - already + 1
@@ -237,8 +315,16 @@ def main():
     )
     parser.add_argument("--checkpoint", required=True,
                         help="PPO checkpoint the search runs over (the searching seat)")
+    parser.add_argument("--opponent", choices=["checkpoint", "random", "damagefirst"],
+                        default="checkpoint",
+                        help="who the searcher plays. 'checkpoint' (default) is "
+                             "dual-seat self-play vs --opponent-checkpoint with "
+                             "alternating seats; 'random'/'damagefirst' use the "
+                             "single-seat bridge bot, searcher always p1 — matches "
+                             "the distribution the Criterion C A/B is judged on")
     parser.add_argument("--opponent-checkpoint", default=None,
-                        help="frozen raw-policy opponent (default: the same checkpoint)")
+                        help="frozen raw-policy opponent (default: the same checkpoint). "
+                             "Only used with --opponent checkpoint")
     parser.add_argument("--games", type=int, default=1000, help="total games to collect")
     parser.add_argument("--out-dir", required=True, help="directory for .npz shards")
     parser.add_argument("--shard-games", type=int, default=25,
@@ -264,12 +350,17 @@ def main():
         parser.error("--obs-v2, --obs-v3 and --obs-v3-extended are mutually exclusive")
     if args.workers < 1:
         parser.error("--workers must be >= 1")
+    if args.opponent != "checkpoint" and args.opponent_checkpoint:
+        parser.error("--opponent-checkpoint only applies to --opponent checkpoint")
 
     os.makedirs(args.out_dir, exist_ok=True)
     with open(os.path.join(args.out_dir, "meta.json"), "w") as fh:
         json.dump({
             "checkpoint": args.checkpoint,
-            "opponent_checkpoint": args.opponent_checkpoint or args.checkpoint,
+            "opponent": args.opponent,
+            "opponent_checkpoint": (None if args.opponent != "checkpoint"
+                                    else args.opponent_checkpoint or args.checkpoint),
+            "seats": "p1 only" if args.opponent != "checkpoint" else "alternating",
             "games": args.games,
             "sims": args.sims,
             "determinizations": args.determinizations,
