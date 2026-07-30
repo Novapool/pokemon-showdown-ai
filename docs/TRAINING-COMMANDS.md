@@ -195,8 +195,10 @@ node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
   --checkpoint <path/to/checkpoint.pt> --battles <N> --mcts
 ```
 
-**Have the user run this one themselves, not Claude.** It has no websocket
-reconnect logic (known gap, tracked in `IN-PROGRESS.md`), and in practice it
+**Have the user run this one themselves, not Claude.** (It *does* have websocket
+reconnect logic as of M8 Phase 0, 2026-07-22 — backoff, re-login, rejoin of
+in-flight battles — so the original reason for this rule is gone, but the
+behavioural pattern below is not.) In practice it
 runs reliably end-to-end when launched from the user's own terminal but has
 repeatedly dropped connection mid-run when launched from Claude's sandboxed
 background-task execution. Root cause isn't confirmed, but the pattern is

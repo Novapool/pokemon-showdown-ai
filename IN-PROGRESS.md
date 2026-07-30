@@ -44,12 +44,33 @@ confirmation at 500 battles/arm. Otherwise go straight to Phase 4.
 The −2.5pp delta here is inside noise, so the fine-tune is not *established* as
 harmful; it simply fails a point gate.
 
-**Multi-machine setup documented 2026-07-29:** `docs/MULTI-MACHINE.md` records
-the Mac ↔ home-machine inventory, which artifacts cross via git vs never sync,
-and the planned Tailscale + SSH + tmux workflow. **Not yet implemented** —
-Tailscale setup is pending physical access to the home machine. Final
-checkpoints are now committed to git (`344def9ef`, 14 files / 24 MB), so evals
-and fine-tunes no longer strand on the wrong machine.
+**Multi-machine setup ✅ LIVE and verified 2026-07-29.** Tailscale + SSH
+(`ssh homebox`) works from the Mac; `docs/MULTI-MACHINE.md` holds the inventory
+and the three-tier sync model. Final checkpoints are committed to git
+(`344def9ef`, 14 files / 24 MB), so evals and fine-tunes no longer strand on the
+wrong machine.
+
+**`scripts/homebox-preflight.sh` added 2026-07-29** — mandatory before any
+remote job. Fast-forwards the home checkout (stale checkout = *wrong weights*
+now that checkpoints are committed), asserts node ≥22 and `.venv` torch+CUDA,
+rebuilds `dist/` when TS is newer, lists which tier-2 data dirs exist. Non-zero
+exit ⇒ don't launch. **Two gotchas it encodes:** non-interactive
+`ssh homebox '...'` gets system **node 18** (nvm loads only in a login shell, and
+`./build` hard-rejects <22) — so wrap remote commands in `bash -lc "..."`; and
+the home box's system `python3` has **no torch** — always `.venv/bin/python`.
+Also fixed: MULTI-MACHINE's tmux/rsync recipes pointed at a nonexistent
+`~/pokemon-showdown` (real path `~/Projects/pokemon-showdown-ai`) and a bare
+`python`, so none of them would have run as written.
+
+**Home box validated end-to-end 2026-07-29:** preflight exit 0, then
+`train.py --obs-v3 --steps 400` ran on **`device=cuda` (RTX 3080)**, loss 0.230,
+checkpoint saved (smoke dir deleted after). Node bridge + venv + GPU + checkpoint
+path all confirmed, so a 5M-step run there needs no further setup.
+**Data caveat:** the home box has *no* tier-2 data — `data/replays`,
+`data/replay_trajs`, `data/value_targets`, `data/metamon_cache`, `vendor/` are
+all absent. Checkpoint-only jobs (PPO training, bot evals, MCTS collection) run
+there immediately; BC pretrain does not (needs 1.7 GB of trajectories).
+`data/value_targets/m8_v3` is only 5.3 MB and rsyncs in seconds.
 
 ---
 
