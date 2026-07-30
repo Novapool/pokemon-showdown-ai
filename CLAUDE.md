@@ -21,6 +21,20 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 |---|---|
 | `docs/SETUP.md` | Setting up the repo, rebuilding after pulls |
 | `docs/MULTI-MACHINE.md` | **Read first when a file/checkpoint seems missing, or when a job needs the home machine.** Mac ↔ home-machine inventory, what syncs via git vs never, SSH/tmux recipes |
+
+## Home machine (`homebox`)
+
+Before **any** command on the home box, `git push` from here, then run the
+preflight — it fast-forwards the remote checkout, verifies node 22 / `.venv`
+torch+CUDA, and rebuilds `dist/` if stale. Non-zero exit ⇒ do not launch the job.
+
+```
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-preflight.sh"'
+```
+
+Every other remote command needs `bash -lc "..."` (node 22 lives in nvm; a plain
+`ssh` gets node 18) and `.venv/bin/python` (system `python3` has no torch).
+Details + data inventory: `docs/MULTI-MACHINE.md`.
 | `docs/CLI.md` | Using `./pokemon-showdown` commands (team gen, format inspection) |
 | `docs/SIMULATOR-API.md` | Using `BattleStream` in Node.js for high-throughput simulation |
 | `docs/PARALLEL-SIMULATION.md` | Running thousands of concurrent battles for ML training |

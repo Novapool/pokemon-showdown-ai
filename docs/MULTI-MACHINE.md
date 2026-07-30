@@ -26,12 +26,12 @@ The fix has two halves:
 | | **Mac** (portable) | **Home machine** (compute) |
 |---|---|---|
 | Name | `MacBook-Pro-90` / "MacBook Pro (3)" | `Home-PC` (WSL2 hostname) |
-| Tailscale name/IP | _TODO: fill in_ | `100.97.203.71` |
+| Tailscale name/IP | `100.74.212.114` | `100.97.203.71` |
 | Hardware | Apple M4, 10 physical cores, 16 GB, arm64 | Intel i7-13700K, 24 threads, 16 GB (WSL2 alloc), RTX 3080 |
 | OS | macOS 26.5.2 | Windows + WSL2 (kernel 6.6.87.2-microsoft-standard-WSL2) |
 | Repo path | `/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown` | `/home/laith/Projects/pokemon-showdown-ai` |
-| Python | 3.13.12 via in-repo `.venv/` | 3.12.3 |
-| Node | v25.8.2 | v22.20.0 |
+| Python | 3.13.12 via in-repo `.venv/` | 3.12.3 — **only the in-repo `.venv/` has torch**; system `python3` does not |
+| Node | v25.8.2 | v22.20.0 **via nvm only**; system node is v18.19.1 and `./build` rejects it |
 | SSH user | — | `laith` |
 | Role | Editing, planning, short runs, MCTS self-play collection | Long PPO training runs (5M steps), big sweeps — has the GPU |
 
@@ -114,6 +114,64 @@ PowerShell block above from an elevated prompt**, not a Tailscale or SSH key
 problem. Turning this into a Windows Scheduled Task (run at startup, as
 Administrator) is a known TODO to stop this from being a manual step.
 
+## Start of every home-machine session: run the preflight
+
+**Before any training / eval / collection command on the home box, run this
+once. No exceptions.**
+
+```bash
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-preflight.sh"'
+```
+
+Exit 0 means it is safe to launch the job. **Non-zero means do not launch it** —
+the script's job is to fail loudly instead of letting a run proceed on stale
+code, stale weights, or the wrong toolchain. It:
+
+1. **Sources nvm** and asserts node ≥ 22 (see the gotcha below).
+2. **Asserts the in-repo `.venv` has torch**, and reports whether CUDA is
+   visible — a silent CPU fallback turns a 2-hour run into a 20-hour one.
+3. **Fast-forwards to `origin/master`** and refuses to continue if still behind.
+   Since final checkpoints are committed, a stale checkout is a *wrong weights*
+   bug, not just old code. A dirty tree is reported and the pull is skipped
+   rather than forced.
+4. **Rebuilds `dist/`** if any `.ts` under `sim/ data/ tools/ config/` is newer
+   than `dist/sim/index.js`. `dist/` is what Node actually runs; a `git pull`
+   that touches TypeScript leaves it stale.
+5. **Lists which tier-2 data dirs exist on the box**, since none of them sync.
+
+Flags: `--no-pull` (report git state, don't move HEAD), `--build` (force a
+rebuild).
+
+Push from the Mac *before* running it, or the fast-forward has nothing to fetch:
+`git push origin master` → preflight → launch.
+
+### The two toolchain gotchas this exists to prevent
+
+- **`ssh homebox 'node ...'` gets node v18, not v22.** nvm initializes from
+  `~/.bashrc`, which a non-interactive SSH command does not read. `./build`
+  hard-exits with "We require Node.js version 22 or later"; the gym bridge and
+  `battle-sim` are subtler. **Always wrap remote commands in `bash -lc "..."`.**
+- **`python3` on the home box has no torch.** Use `.venv/bin/python`
+  explicitly in every remote command — a bare `python3 models/ppo/train.py`
+  dies on `import torch`.
+
+Both are handled inside the preflight, but they still bite every *other* remote
+command you send, so the `bash -lc` + `.venv/bin/python` habit is the rule.
+
+### Home box data state (2026-07-29)
+
+`data/replays`, `data/replay_trajs`, `data/value_targets`, `data/metamon_cache`
+and `vendor/` are **all absent** on the home box. It holds source + committed
+checkpoints + `dist/` + `node_modules` + `.venv` only. So:
+
+- Jobs needing only a **committed checkpoint** (PPO training, bot evals, MCTS
+  self-play collection) run there immediately.
+- Jobs needing **replay trajectories** (BC pretrain) do not — 1.7 GB, regenerate
+  or keep on the Mac.
+- `data/value_targets/m8_v3` is only **5.3 MB**, so it rsyncs in seconds if a
+  value-head fine-tune should run there:
+  `rsync -avz data/value_targets/ homebox:~/Projects/pokemon-showdown-ai/data/value_targets/`
+
 ## Daily use
 
 The model is: **one Claude session, on the Mac.** Claude reaches the home
@@ -123,14 +181,18 @@ nothing to keep in sync conversationally.
 Long jobs go in `tmux` on the home machine so they survive a closed laptop or a
 dropped connection:
 
+Note the shape of these: `bash -lc` (for nvm/node 22), the real repo path
+`~/Projects/pokemon-showdown-ai`, and `.venv/bin/python` — not `python3`.
+
 ```bash
 # launch a long training run, detached
-ssh homebox 'cd ~/pokemon-showdown && tmux new -d -s train \
-  "python models/ppo/train.py --obs-v3 --steps 5000000 --checkpoint-dir checkpoints/v3 2>&1 | tee train.log"'
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && tmux new -d -s train \
+  \".venv/bin/python models/ppo/train.py --obs-v3 --steps 5000000 \
+    --checkpoint-dir checkpoints/v3 2>&1 | tee train.log\""'
 
 # check on it later, from anywhere
 ssh homebox 'tmux capture-pane -pt train | tail -30'
-ssh homebox 'tail -20 ~/pokemon-showdown/train.log'
+ssh homebox 'tail -20 ~/Projects/pokemon-showdown-ai/train.log'
 
 # list what's running
 ssh homebox 'tmux ls'
@@ -143,11 +205,12 @@ Pull a result back when a run finishes:
 
 ```bash
 # small: just commit it on the home box and pull
-ssh homebox 'cd ~/pokemon-showdown && git add models/**/*_final.pt && git commit -m "..." && git push'
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && git add models/**/*_final.pt \
+  && git commit -m \"...\" && git push"'
 git pull
 
 # large (a dataset you genuinely need locally):
-rsync -avz --progress homebox:~/pokemon-showdown/data/value_targets/ data/value_targets/
+rsync -avz --progress homebox:~/Projects/pokemon-showdown-ai/data/value_targets/ data/value_targets/
 ```
 
 ### Choosing a machine
@@ -159,8 +222,12 @@ rsync -avz --progress homebox:~/pokemon-showdown/data/value_targets/ data/value_
 
 ### Rules of thumb
 
-- Always `git pull` on both ends before starting work. Committed checkpoints
-  mean a stale checkout is now a *wrong weights* bug, not just old code.
+- **Run `scripts/homebox-preflight.sh` before every remote job** (see above). It
+  exists so "always `git pull` on both ends" is enforced rather than remembered
+  — committed checkpoints mean a stale checkout is now a *wrong weights* bug,
+  not just old code.
+- **Wrap every remote command in `bash -lc "..."`** (node 22 via nvm) and call
+  **`.venv/bin/python`**, never `python3`.
 - Pass `--checkpoint-dir` explicitly on training runs. `train.py`'s routing
   checks `elif args.opp_coef != 0.0` before the obs-schema branches, so runs
   land in `checkpoints/opp/` unexpectedly (this is how the M8 Phase 1A
