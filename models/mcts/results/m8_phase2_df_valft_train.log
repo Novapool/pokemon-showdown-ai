@@ -1,0 +1,7 @@
+loaded 90 shards | 57747 decisions | 2000 games
+target=outcome | n=57747 | mean +0.624 | std 0.781 | min -1.000 | max +1.000
+train 51992 decisions | val 5755 decisions
+BEFORE fine-tune | val MSE 0.6917 | sign agreement 0.758
+epoch 1/2 | train MSE 0.4861 | val MSE 0.4908 | sign agreement 0.840
+epoch 2/2 | train MSE 0.4653 | val MSE 0.4915 | sign agreement 0.840
+saved fine-tuned checkpoint -> models/ppo/checkpoints/v3_valft/ppo_v3_df_valft_outcome.pt

@@ -1,22 +1,48 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-29
+Last updated: 2026-07-30
 
 ---
 
 ## Current Work
 
-**M8 Phase 2 (AlphaZero-style value targeting) — ❌ COMPLETE 2026-07-29,
-CRITERION C FAILED (negative result). Phase 3 skipped; next is Phase 4
-(ladder run on the unchanged M7 checkpoint).** Full log:
-`models/mcts/results/m8_phase2_valft_criterionC.log`; write-up in
-`MILESTONES.md` → M8 → Phase 2.
+**M8 Phase 2 (AlphaZero-style value targeting) — ❌ COMPLETE, CRITERION C
+FAILED TWICE (negative result, replicated 2026-07-30). Phase 3 skipped; next is
+Phase 4 (ladder run on the unchanged M7 checkpoint).** Logs:
+`models/mcts/results/m8_phase2_valft_criterionC.log` (run 1) and
+`models/mcts/results/m8_phase2_df_valft_{criterionC,train}.log` (run 2);
+write-up in `MILESTONES.md` → M8 → Phase 2.
 
 | | vs DamageFirst, tuned MCTS, 200 battles |
 |---|---|
 | Base (`v3/ppo_step_5000002_final.pt`) | **82.5% (165/200)** |
-| Fine-tuned (`v3_valft/ppo_v3_valft_outcome.pt`) | **80.0% (160/200)** |
-| Delta | **−2.5pp** (gate: ≥+3pp) ❌ |
+| Run 1 — targets from self-play (`v3_valft/ppo_v3_valft_outcome.pt`) | **80.0% (160/200)** |
+| Run 2 — targets from DamageFirst (`v3_valft/ppo_v3_df_valft_outcome.pt`) | **80.0% (160/200)** |
+| Delta, both runs | **−2.5pp** (gate: ≥+3pp) ❌ |
+
+**Run 2 (2026-07-30) killed the distribution-mismatch hypothesis.** Cause (2)
+below said the targets were collected against a frozen policy while the A/B is
+scored against DamageFirst. So the collection was repeated with
+`--opponent damagefirst` (2000 games, 57,747 decisions, 90 shards, 10 workers,
+~21 min on the home box) and the fine-tune rerun. It **landed on exactly the
+same 160/200.** Same in-distribution story as run 1: val MSE 0.6917 → 0.4915
+against a constant-predictor baseline of 0.610 (**R² −0.13 → +0.19**), sign
+agreement 0.758 → 0.840. Matching the collection distribution to the eval
+distribution changes nothing about play strength.
+
+**That leaves cause (1) as the live explanation, and run 2 adds evidence for
+it:** these labels are much more skewed (target mean **+0.624**; the searcher
+beats DamageFirst ~84% vs 75.5% in self-play), and the post-FT sign agreement
+of 0.840 is essentially the base rate. A value head that has mostly learned
+"this seat usually wins" is better calibrated in MSE while adding a near-constant
+offset — and MCTS compares leaf values *relatively*, so a constant offset is
+invisible to it. Val MSE also flattened between epoch 1 (0.4908) and epoch 2
+(0.4915), so this is not an undertraining artifact.
+
+**Read the pair, not either run.** Each delta is −2.5pp against SE ~3.9pp, i.e.
+inside noise, so neither run establishes the fine-tune as *harmful*. Two
+independent nulls from two differently-collected datasets is a much stronger
+negative than either alone, and it is enough to stop spending on this thesis.
 
 Collection ran on the MacBook in ~35 min (2000 games, 66,459 decisions, 84
 shards, 6 workers) — data clean, obs finite at 1032 dims, seats balanced.
@@ -27,16 +53,19 @@ The `--target outcome` fine-tune worked *well* in-distribution: val MSE
 hypothesis (a) of the M8 thesis confirmed outright.
 
 **And none of it transferred.** That's the substantive finding: better leaf
-evaluation did not produce better search outcomes. Two candidate causes worth
-carrying forward — (1) MCTS uses *relative* leaf values and much of the MSE
-gain was learning the base rate (+0.51), a constant offset; (2) the targets
-were collected against a frozen raw-policy opponent (searcher won 75.5%) but
-the A/B is against DamageFirst.
+evaluation did not produce better search outcomes. Two candidate causes were
+carried forward — (1) MCTS uses *relative* leaf values and much of the MSE gain
+was learning the base rate (+0.51), a constant offset; (2) the targets were
+collected against a frozen raw-policy opponent (searcher won 75.5%) but the A/B
+is against DamageFirst. **Run 2 (above) tested and eliminated (2).**
 
-**Open decision (deferred):** `--target mc` and `--target root` reuse the same
-dataset, ~1.5h for both including evals. Prior is weak — `outcome` was the
-strongest target a priori. If run, pre-commit that any arm clearing +3pp needs
-confirmation at 500 battles/arm. Otherwise go straight to Phase 4.
+**Open decision (deferred, prior now weaker):** `--target mc` and `--target
+root` reuse either dataset, ~1.5h for both including evals. `outcome` was the
+strongest target a priori and has now failed twice, and cause (1) — the
+surviving explanation — is a property of what MCTS does with leaf values, not of
+which target the head is fit to, so it predicts `mc` and `root` fail too. If run
+anyway, pre-commit that any arm clearing +3pp needs confirmation at 500
+battles/arm. Otherwise go straight to Phase 4.
 
 **Methodological note (project-wide): the +3pp gate at n=200 was underpowered**
 — SE on the difference is ~3.9pp, so a true +3pp effect would be caught only
@@ -66,11 +95,12 @@ Also fixed: MULTI-MACHINE's tmux/rsync recipes pointed at a nonexistent
 `train.py --obs-v3 --steps 400` ran on **`device=cuda` (RTX 3080)**, loss 0.230,
 checkpoint saved (smoke dir deleted after). Node bridge + venv + GPU + checkpoint
 path all confirmed, so a 5M-step run there needs no further setup.
-**Data caveat:** the home box has *no* tier-2 data — `data/replays`,
-`data/replay_trajs`, `data/value_targets`, `data/metamon_cache`, `vendor/` are
-all absent. Checkpoint-only jobs (PPO training, bot evals, MCTS collection) run
+**Data caveat:** the home box has almost no tier-2 data — `data/replays`,
+`data/replay_trajs`, `data/metamon_cache`, `vendor/` are all absent. The one
+exception as of 2026-07-30 is `data/value_targets/m8_v3_df` (4.7 MB, collected
+there). Checkpoint-only jobs (PPO training, bot evals, MCTS collection) run
 there immediately; BC pretrain does not (needs 1.7 GB of trajectories).
-`data/value_targets/m8_v3` is only 5.3 MB and rsyncs in seconds.
+Value-target dirs are only ~5 MB each and rsync in seconds.
 
 ---
 
@@ -283,8 +313,10 @@ technical bets spent; Phase 4 ladder is what's left)**
 Contingency-based escalation. Phase 0 (websocket reconnect) ✅ 2026-07-22.
 Phase 1A (obs refinement, speed-ratio A/B) ❌ 2026-07-28 — Criterion A failed
 (Random −3pp), Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌
-2026-07-29 — infra built and fully exercised, but Criterion C failed (82.5% →
-80.0%, −2.5pp vs a ≥+3pp bar), so Phase 3 is skipped. The two structural ideas
+2026-07-29, **replicated ❌ 2026-07-30** — infra built and fully exercised, but
+Criterion C failed (82.5% → 80.0%, −2.5pp vs a ≥+3pp bar) and failed *again* at
+exactly 160/200 when the targets were re-collected against DamageFirst to rule
+out distribution mismatch, so Phase 3 is skipped. The two structural ideas
 M8 was built to test have both come back negative, and the shipping agent is
 still the unchanged M7 checkpoint. **Next: Phase 4 ladder run on M7** — GXE
 ≥35% for a win, <25% for clear regression, same band as M7's inconclusive
