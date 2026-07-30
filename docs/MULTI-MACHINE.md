@@ -1,10 +1,9 @@
 # Multi-Machine Setup (Mac ↔ home machine)
 
-> **Status: NOT YET IMPLEMENTED as of 2026-07-29.** Tailscale is not installed
-> on either machine and no SSH alias exists yet. Everything under
-> [Setup](#setup-one-time) is the plan; everything under
-> [Daily use](#daily-use) will only work once setup is done. Update this banner
-> the moment it's live.
+> **Status: LIVE as of 2026-07-29.** Tailscale is installed on both machines,
+> SSH from the Mac to the home machine (via the `homebox` alias) is verified
+> working. Home machine is WSL2 (Windows Subsystem for Linux), reached through
+> a Windows port-proxy — see [WSL2 note](#wsl2-note-on-the-home-machine) below.
 
 ## Why this exists
 
@@ -26,14 +25,15 @@ The fix has two halves:
 
 | | **Mac** (portable) | **Home machine** (compute) |
 |---|---|---|
-| Name | `MacBook-Pro-90` / "MacBook Pro (3)" | _TODO: fill in at setup_ |
-| Tailscale name | _TODO_ | _TODO_ |
-| Hardware | Apple M4, 10 physical cores, 16 GB, arm64 | _TODO: CPU / RAM / GPU_ |
-| OS | macOS 26.5.2 | _TODO_ |
-| Repo path | `/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown` | _TODO_ |
-| Python | 3.13.12 via in-repo `.venv/` | _TODO_ |
-| Node | v25.8.2 | _TODO_ |
-| Role | Editing, planning, short runs, MCTS self-play collection | Long PPO training runs (5M steps), big sweeps |
+| Name | `MacBook-Pro-90` / "MacBook Pro (3)" | `Home-PC` (WSL2 hostname) |
+| Tailscale name/IP | _TODO: fill in_ | `100.97.203.71` |
+| Hardware | Apple M4, 10 physical cores, 16 GB, arm64 | Intel i7-13700K, 24 threads, 16 GB (WSL2 alloc), RTX 3080 |
+| OS | macOS 26.5.2 | Windows + WSL2 (kernel 6.6.87.2-microsoft-standard-WSL2) |
+| Repo path | `/Users/laithassaf/Documents/Programs/Archived/pokemon-showdown` | `/home/laith/Projects/pokemon-showdown-ai` |
+| Python | 3.13.12 via in-repo `.venv/` | 3.12.3 |
+| Node | v25.8.2 | v22.20.0 |
+| SSH user | — | `laith` |
+| Role | Editing, planning, short runs, MCTS self-play collection | Long PPO training runs (5M steps), big sweeps — has the GPU |
 
 **Fill the TODO column in at setup time.** An accurate inventory here is the
 whole point of the file — it's what stops every new chat from re-deriving it.
@@ -68,30 +68,51 @@ models/**/checkpoints/**/*.pt
 If a run produces something another machine will need, **make it a `_final.pt`
 or commit it deliberately** — don't leave it as an intermediate and hope.
 
-## Setup (one-time)
+## Setup (one-time) — done, kept for reference
 
-Do this when physically at the home machine.
-
-1. **Install Tailscale on both machines** (`brew install --cask tailscale` on
-   the Mac; the distro package or the official installer on the home box). Sign
-   both into the same account. They get stable private IPs and MagicDNS names
-   that work from any network — no port forwarding, no dynamic DNS, no exposing
-   SSH to the public internet.
-2. **Enable SSH on the home machine.** macOS: System Settings → General →
-   Sharing → Remote Login. Linux: `sudo systemctl enable --now sshd`.
-3. **Copy the Mac's key over:** `ssh-copy-id <user>@<tailscale-name>` (run
-   `ssh-keygen -t ed25519` on the Mac first if there's no key yet).
-4. **Add an SSH alias** so commands stay short. In `~/.ssh/config` on the Mac:
+1. **Tailscale on both machines**, signed into the same account. On the home
+   machine, Tailscale is installed **on Windows**, not inside WSL2 — WSL2
+   shares Windows' network stack via NAT, so an inbound connection needs to
+   hit Windows first. `tailscale ip -4` on Windows gave the stable IP
+   `100.97.203.71`.
+2. **SSH server inside WSL2** (not on Windows): `sudo apt install -y
+   openssh-server && sudo systemctl enable --now ssh`.
+3. **Windows port-proxy**, because WSL2's internal IP (`hostname -I` inside
+   WSL2, currently `172.20.218.172`) changes across reboots and Tailscale only
+   sees the Windows host. Elevated PowerShell:
+   ```powershell
+   $wslIp = (wsl hostname -I).Trim().Split(" ")[0]
+   netsh interface portproxy delete v4tov4 listenport=22 listenaddress=0.0.0.0 2>$null
+   netsh interface portproxy add v4tov4 listenport=22 listenaddress=0.0.0.0 connectport=22 connectaddress=$wslIp
+   New-NetFirewallRule -DisplayName "WSL2 SSH" -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow
+   ```
+   See [WSL2 note](#wsl2-note-on-the-home-machine) — **this must be re-run
+   after every Windows reboot** until it's turned into a startup task.
+4. **Copy the Mac's key over:** `ssh-copy-id laith@100.97.203.71` (key already
+   existed at `~/.ssh/id_ed25519.pub` on the Mac).
+5. **SSH alias** in `~/.ssh/config` on the Mac:
    ```
    Host homebox
-       HostName <tailscale-name>
-       User <user>
+       HostName 100.97.203.71
+       User laith
        ServerAliveInterval 60
    ```
-5. **Verify:** `ssh homebox 'hostname && nproc && python -V'`.
-6. **Clone/pull the repo there**, install deps, and run `./build`.
-7. **Come back and update this file** — fill the TODO column, flip the status
-   banner, record anything that differed from these steps.
+6. **Verified:** `ssh homebox 'hostname && nproc && python3 -V'` →
+   `Home-PC` / `24` / `Python 3.12.3`, no password prompt.
+7. Repo already present at `/home/laith/Projects/pokemon-showdown-ai` on the
+   home machine (this is the same checkout — the setup was done sitting at the
+   home machine, then verified from the Mac).
+
+## WSL2 note (on the home machine)
+
+The home machine's SSH server runs **inside WSL2**, but Tailscale runs on
+**Windows** (the host). These are different network namespaces, so a
+Windows-side port-proxy forwards port 22 to whatever WSL2's current internal
+IP is. That internal IP is not stable across Windows reboots — **if `ssh
+homebox` stops connecting, the fix is almost always re-running the port-proxy
+PowerShell block above from an elevated prompt**, not a Tailscale or SSH key
+problem. Turning this into a Windows Scheduled Task (run at startup, as
+Administrator) is a known TODO to stop this from being a manual step.
 
 ## Daily use
 
