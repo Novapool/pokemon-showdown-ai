@@ -19,6 +19,8 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 
 | File | Read when |
 |---|---|
+| `docs/DATA-INVENTORY.md` | **Read first before proposing any data-acquisition work.** What human data exists (the gen 1 archive is exhausted), what we hold, and what BC training actually consumes — vs what the manifest suggests |
+| `docs/LADDER-MEASUREMENT.md` | **Read first before quoting, comparing or gating on any ladder number.** Why GXE/Elo readings from M6–M8 don't support per-run conclusions, measured instrument noise, and required sample sizes |
 | `docs/SETUP.md` | Setting up the repo, rebuilding after pulls |
 | `docs/MULTI-MACHINE.md` | **Read first when a file/checkpoint seems missing, or when a job needs the home machine.** Mac ↔ home-machine inventory, what syncs via git vs never, SSH/tmux recipes |
 
@@ -34,7 +36,9 @@ ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-pref
 
 Every other remote command needs `bash -lc "..."` (node 22 lives in nvm; a plain
 `ssh` gets node 18) and `.venv/bin/python` (system `python3` has no torch).
-Details + data inventory: `docs/MULTI-MACHINE.md`.
+Details + machine inventory: `docs/MULTI-MACHINE.md`. **The home box is now
+authoritative for both replay corpora** (`data/replays/gen1ou`,
+`data/replays/gen1randombattle`) — rsync back before editing them on the Mac.
 | `docs/CLI.md` | Using `./pokemon-showdown` commands (team gen, format inspection) |
 | `docs/SIMULATOR-API.md` | Using `BattleStream` in Node.js for high-throughput simulation |
 | `docs/PARALLEL-SIMULATION.md` | Running thousands of concurrent battles for ML training |

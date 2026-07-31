@@ -4,6 +4,37 @@ Last updated: 2026-07-31
 
 ---
 
+## Where We Stand (2026-07-31)
+
+**Shipping agent: still the unchanged M7 checkpoint** (`v3/ppo_step_5000002_final.pt`),
+93.0% vs Random / 84.2% vs DamageFirst. Nothing since M7 has beaten it.
+
+**Four hypotheses have now been tested and closed:**
+
+| Hypothesis | Verdict |
+|---|---|
+| (b) Obs richness is the constraint | ❌ M8 Phase 1A — Criterion A failed |
+| (a) Value head miscalibration is the constraint | ❌ M8 Phase 2 — failed twice, −2.5pp each, distribution mismatch eliminated |
+| More gen 1 human data can be scraped | ❌ M9 Phase 2b — archive exhausted, we hold ~all of it |
+| Unrated tour games are an untapped pool | ❌ already in training, and 74% of it |
+
+**(c) opponent-pool / data distribution is the last untested hypothesis from the
+M8 thesis** — deprioritized on reasoning, never on evidence.
+
+**The blocking problem is measurement, not modeling.** Three consecutive
+inconclusive ladder readings, and the same checkpoint swung 42% → 27% between
+runs. Every conclusion M6–M8 drew from ladder numbers rests on statistics that
+could not support them. **M9 Phase 1 (evaluation methodology) gates everything
+else** — running another training experiment before it just buys a fourth
+inconclusive reading.
+
+**Ground-truth docs written this session — read these before re-proposing
+anything in the table above:**
+- `docs/DATA-INVENTORY.md` — what data exists, what we hold, what BC consumes
+- `docs/LADDER-MEASUREMENT.md` — why the ladder numbers don't mean what they looked like
+
+---
+
 ## Current Work
 
 **M9 SCOPED (2026-07-31): Evaluation Methodology + Data Distribution Hypothesis.** M8 spent both its technical bets (obs richness Phase 1A, value-head targeting Phase 2) on the M7 checkpoint and both failed. Three methodological defects also came to light: (1) GXE is account-level cumulative (506 games M6-M8), not per-run; (2) same M7 checkpoint shows 42%→27% win-rate variance across runs (~1.8 SD); (3) +3pp gate at n=200 is underpowered (SE ~3.9pp; a true +3pp effect caught only ~1/3 of the time). The surviving hypothesis — opponent-pool/data distribution (constraint c) — was deprioritized on reasoning alone, never tested. **M9 addresses both:** Phase 1 fixes evaluation methodology (per-run GXE isolation, pre-registered sample sizes), Phase 2 tests the data/distribution hypothesis (randbats-only BC, richer replay corpus, opp-pool saturation), Phase 3 ladders with proper instrumentation, Phase 4 makes a stopping decision. See MILESTONES.md → M9 for full scope.

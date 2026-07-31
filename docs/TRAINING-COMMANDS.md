@@ -207,6 +207,12 @@ the M7 checkpoint carries into the Phase 4 ladder run.
 
 ## Running the ladder bot (live official server)
 
+> ⚠️ **Read `docs/LADDER-MEASUREMENT.md` before interpreting anything this
+> produces.** GXE from a shared account is not a per-run measurement, the same
+> checkpoint has swung 42% → 27% raw between runs, and resolving a +10pp effect
+> needs ~350 games per arm. Three milestones drew conclusions these numbers
+> could not support.
+
 `tools/ladder-bot/ladder-bot.js` connects to the real Showdown ladder
 (`wss://sim3.psim.us/showdown/websocket`) and plays rated games:
 

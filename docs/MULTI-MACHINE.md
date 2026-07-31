@@ -158,18 +158,35 @@ Push from the Mac *before* running it, or the fast-forward has nothing to fetch:
 Both are handled inside the preflight, but they still bite every *other* remote
 command you send, so the `bash -lc` + `.venv/bin/python` habit is the rule.
 
-### Home box data state (2026-07-29)
+### Home box data state (updated 2026-07-31)
 
-`data/replays`, `data/replay_trajs`, `data/value_targets`, `data/metamon_cache`
-and `vendor/` are **all absent** on the home box. It holds source + committed
-checkpoints + `dist/` + `node_modules` + `.venv` only. So:
+| Dir | Home box | Notes |
+|---|---|---|
+| `data/replays/gen1ou` | ✅ **98,983 logs, ~400 MB** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
+| `data/replays/gen1randombattle` | ✅ **21,583 logs** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
+| `data/value_targets/m8_v3_df` | ✅ 4.7 MB | collected there |
+| `data/replay_trajs` | ❌ absent | 1.7 GB — needed for BC pretrain |
+| `data/metamon_cache` | ❌ absent | |
+| `vendor/` | ❌ absent | |
+
+⚠️ **Both replay corpora are authoritative on the home box.** They were grown
+there by backfill runs on 2026-07-31 and the Mac copies are now behind. **Rsync
+back before editing either on the Mac**, or the corpora fork:
+
+```bash
+rsync -a homebox:Projects/pokemon-showdown-ai/data/replays/ data/replays/
+```
+
+Consequences for job placement:
 
 - Jobs needing only a **committed checkpoint** (PPO training, bot evals, MCTS
-  self-play collection) run there immediately.
-- Jobs needing **replay trajectories** (BC pretrain) do not — 1.7 GB, regenerate
-  or keep on the Mac.
-- `data/value_targets/m8_v3` is only **5.3 MB**, so it rsyncs in seconds if a
-  value-head fine-tune should run there:
+  self-play collection) run on the home box immediately.
+- **Replay scraping/backfill** should run there — that is where the corpora live
+  now, and it is the machine that stays up.
+- **BC pretrain** still does not run there: it needs `data/replay_trajs`
+  (1.7 GB, absent). Either rsync it or regenerate with
+  `models/replay_adapter_cli.js` from the replays already present.
+- `data/value_targets/*` dirs are ~5 MB each and rsync in seconds:
   `rsync -avz data/value_targets/ homebox:~/Projects/pokemon-showdown-ai/data/value_targets/`
 
 ## Daily use

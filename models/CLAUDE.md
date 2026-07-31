@@ -14,7 +14,7 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `metamon_adapter.py` | Streams Metamon human-replay trajectories as `(obs (12,65), action, done)`; M2.5 |
 | `bc_pretrain.py` | Behavior-cloning pretraining on Metamon replays (transformer, M2.5); saves to `checkpoints/bc_pretrain_gen1ou.pt` |
 | `replay_adapter_cli.js` | M5.5: batch-converts scraped replay logs (`data/replays/<fmt>/`) into BC shards (`data/replay_trajs/<fmt>/shard-*.jsonl.gz`) via `sim/tools/replay-adapter.ts` (v2 obs, both seats, opp-head labels) |
-| `bc_pretrain_mlp.py` | M5.5: BC of the MLP `PPOAgent` (v2 obs) on replay shards — multi-format weighted (gen1randombattle+gen1ou), `--min-rating` + tournament-unrated filter, opp-head aux CE; saves `checkpoints/bc_mlp_gen1.pt` (a normal PPO checkpoint) |
+| `bc_pretrain_mlp.py` | M5.5: BC of the MLP `PPOAgent` (v2 obs) on replay shards — multi-format weighted (gen1randombattle+gen1ou), `--min-rating` + tournament-unrated filter, opp-head aux CE; saves `checkpoints/bc_mlp_gen1.pt` (a normal PPO checkpoint). **Record filter (line 82): rated kept if `>= --min-rating`; unrated kept iff the battle id is NOT a plain `<format>-…` id — so every `smogtours-` tour game is already in, and lowering `--min-rating` does nothing for unrated records.** BC currently consumes 3,949,828 of 8,451,696 gen1ou records (46.7%), of which smogtours is 2.94M = **74%**. Numbers + the tiers it drops: `docs/DATA-INVENTORY.md` |
 | `transformer/` | `transformer_policy.py` — shared `TransformerPolicy` net + `load_pretrain_checkpoint()`; `transformer_agent.py` — PPO wrapper (M3); `train.py` — PPO training loop, `checkpoints/{scratch,pretrained}/` |
 | `mcts/` | `mcts_agent.py` — inference-time determinized UCT over a PPO checkpoint (M4); `results/` — eval battery logs |
 | `collect_value_data.py` | M8 P2: MCTS self-play collection of AlphaZero-style value targets → `.npz` shards (obs, root visits/Q, seat-perspective rewards, game outcome); `--workers` parallel, resumable |
@@ -67,8 +67,11 @@ bash scripts/download_metamon.sh
 python models/bc_pretrain.py --epochs 5 --format gen1ou --checkpoint_dir models/checkpoints
 
 # M5.5: human-replay BC for the MLP — scrape/bootstrap logs, convert, train
+# NOTE: --backfill is EXHAUSTED for both gen 1 formats as of 2026-07-31. The
+# gen1ou archive was scanned to "history exhausted" (103,436 entries) and we hold
+# ~all of the >=1300 tier. Only --top-up (new games, ~30-44/day) still adds data.
+# Read docs/DATA-INVENTORY.md before proposing any data-acquisition work.
 python scripts/scrape_replays.py                     # top-up gen1randombattle+gen1ou (rated >=1300)
-python scripts/scrape_replays.py --backfill --max-replays 10000   # page back into history
 python scripts/bootstrap_gen1ou_replays.py           # 98k historical gen1ou logs from HF (once)
 node models/replay_adapter_cli.js --format gen1randombattle --shard-size 1000
 node models/replay_adapter_cli.js --format gen1ou --shard-size 1000
