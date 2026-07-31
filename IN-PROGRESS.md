@@ -81,13 +81,38 @@ Last updated: 2026-07-31
    **Ceiling on gen 1 human data at the ≥1300 bar: ~32k replays total**
    (~10.7k gen1ou + ~21.6k randbats). That is the whole pool.
 
-   **The one large untapped asset: the 58,300 unrated gen1ou replays** (56% of
-   the archive). Many are Smogon tour games — unrated but high-level, per
-   `models/bc_pretrain_mlp.py`'s docstring. The scraper *always* skips unrated
-   entries, so lowering `--min-rating` cannot reach them; they need a different
-   selection rule (tour-name heuristics, player-identity filtering, or accepting
-   unrated for gen1ou wholesale). **This is now the largest remaining source of
-   gen 1 human data and the natural successor to Phase 2b.**
+   **CORRECTION (2026-07-31, investigated): the "58,300 untapped unrated
+   replays" claim was wrong — that harvest was already done, years ago.**
+   `bc_pretrain_mlp.py:82` keeps any unrated record whose battle id is not plain
+   `<format>-…`, which catches every `smogtours-` tournament game by default.
+   Measured over all 99 gen1ou trajectory shards:
+
+   | Category | records | kept by BC today |
+   |---|---|---|
+   | smogtours | 2,941,686 | ✅ all |
+   | rated ≥1300 | 941,436 | ✅ all |
+   | other-server | 66,706 | ✅ all |
+   | rated <1300 | 2,380,136 | ❌ dropped |
+   | unrated main-ladder | 2,121,732 | ❌ dropped |
+   | **total** | **8,451,696** | **3,949,828 (46.7%)** |
+
+   **Smogon tour games are already 74% of BC's gen1ou training data.** What is
+   actually unused is the *casual* tier: 26,791 unrated main-ladder replays
+   (2.12M records) plus 2.38M records of rated-<1300 play, both dropped
+   deliberately as weak, not overlooked.
+
+   **Residual option, costed:** ratings are absent on the casual tier, so the
+   only available quality signal is player identity — keep games whose players
+   also appear in the ≥1300 corpus (3,174 distinct players). Yield: both players
+   strong **4,955 games (18.5%)**, one player strong 8,089 (30.2%), neither
+   13,747 (51.3%). Seat-aware (keep only the strong seat in one-strong games)
+   that is ~18,000 of 53,582 seat-trajectories ≈ **+720k records, +18%** on the
+   3.95M already in use. **Not recommended as a priority:** it is a modest,
+   uncertain-quality increment, and nothing in the project's evidence says data
+   *volume* is the binding constraint — BC already trains on 3.95M
+   tournament-dominated records and BC-only still scored 22% raw. Implement only
+   if a data-scaling experiment is wanted for its own sake; ~30 lines in
+   `ReplayShardDataset` plus a strong-player set built from `manifest.csv`.
 
    **A projection made during this run was wrong and is corrected here:** early
    yield of 14.9% was extrapolated to "~24,000 new replays, tripling the corpus."

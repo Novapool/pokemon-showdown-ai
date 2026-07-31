@@ -1760,10 +1760,17 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
      tier. **Ceiling on gen 1 human data at ≥1300: ~32k replays total** (~10.7k
      gen1ou + ~21.6k randbats). The sub-item below is retained for its
      estimates, all of which proved optimistic; treat it as superseded.
-     **Successor task:** harvest the 58,300 unrated gen1ou replays, which are
-     the largest remaining pool and include high-level Smogon tour games. The
-     scraper always skips unrated entries, so this needs a new selection rule,
-     not a lower `--min-rating`. **Also relevant to any format decision:** a
+     **The proposed successor task — "harvest the 58,300 unrated gen1ou
+     replays" — was investigated 2026-07-31 and is already done.**
+     `bc_pretrain_mlp.py:82` keeps unrated records whose battle id is not plain
+     `<format>-…`, so every `smogtours-` tour game is already in training. Over
+     all 99 gen1ou shards, BC consumes 3,949,828 of 8,451,696 records (46.7%),
+     of which **smogtours alone is 2,941,686 — 74% of the training data.** The
+     genuinely unused remainder is the *casual* tier (26,791 unrated main-ladder
+     replays / 2.12M records, plus 2.38M rated-<1300 records), dropped
+     deliberately as weak play. A player-identity filter over the casual tier
+     (players also seen in ≥1300 games) would add ~+18%, of uncertain quality —
+     costed in IN-PROGRESS.md, not recommended as a priority. **Also relevant to any format decision:** a
      replay-volume census put gen9randombattle at 1,873/day and gen9ou at
      2,407/day versus gen1's 31–44/day (~45×) — gen 9 is where both the data and
      the ladder traffic are, at the cost of rewriting the gen1-hardcoded
