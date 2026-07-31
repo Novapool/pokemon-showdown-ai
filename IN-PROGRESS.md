@@ -7,7 +7,16 @@ Last updated: 2026-07-31
 ## Where We Stand (2026-07-31)
 
 **Shipping agent: still the unchanged M7 checkpoint** (`v3/ppo_step_5000002_final.pt`),
-93.0% vs Random / 84.2% vs DamageFirst. Nothing since M7 has beaten it.
+93.0% vs Random / 84.2% vs DamageFirst. Nothing since M7 has beaten it —
+including M9 Phase 2c, which came in **6–7pp below M7** despite starting from a
+demonstrably better BC checkpoint (see Phase 2 below). **M7 is the Phase 3
+candidate as well as the control.**
+
+**M7 re-measured at n=2,000 on 2026-07-31: 69.7% vs Random / 59.4% vs
+DamageFirst as a raw policy** (the 93.0/84.2 figures are with tuned MCTS on
+top). Its historical raw reading was 70.0% at n=500 — a clean replication, and
+the first time any baseline in this project has been re-measured rather than
+quoted.
 
 **Four hypotheses have now been tested and closed:**
 
@@ -18,9 +27,11 @@ Last updated: 2026-07-31
 | More gen 1 human data can be scraped | ❌ M9 Phase 2b — archive exhausted, we hold ~all of it |
 | Unrated tour games are an untapped pool | ❌ already in training, and 74% of it |
 
-**(c) opponent-pool / data distribution was the last untested hypothesis from
-the M8 thesis — and as of 2026-07-31 it is the first one to come back
-POSITIVE.** M9 Phase 2a trained a BC checkpoint on gen1randombattle replays
+**(c) opponent-pool / data distribution: POSITIVE at the BC stage, NEGATIVE
+after RL.** Phase 2a is a clean, well-powered win for format alignment; Phase
+2c then carried that checkpoint through M7's exact 5M-step recipe and came out
+**6–7pp below M7**. The advantage did not compound — it inverted. **Read both
+2a and 2c below before citing either.** M9 Phase 2a trained a BC checkpoint on gen1randombattle replays
 only, against the mixed gen1ou+randbats BC that every checkpoint from M5.5
 through M7 was built on. Identical recipe, identical schema, only the corpus
 differs. At n=5,000 per arm:
@@ -99,7 +110,66 @@ Delivered:
   1.10M records/epoch, 201 s on the Mac). Raw counts:
   `models/checkpoints/m9p2a_ab_results.txt`; runner `run_m9p2a_ab.sh`.
 - **2b: ❌ CLOSED 2026-07-31** — gen 1 replay archive exhausted, see Next Steps.
-- **2c: 🟡 RUNNING (launched 2026-07-31 18:02 local, home box, ~4 h).**
+- **2c: ✅ COMPLETE 2026-07-31 — gate PASSES against M5.5, but the candidate
+  is measurably WORSE than M7, so the pre-registered rule sends M7 to Phase 3.**
+  5M steps in ~68 min on the RTX 3080, 20 checkpoints, clean finish.
+
+  | arm | vs Random | vs DamageFirst |
+  |---|---:|---:|
+  | M5.5 (`bcft`, v2) | 52.8% | 43.2% |
+  | **M7 (`v3`, the control)** | **69.7%** | **59.4%** |
+  | 2c final (5.00M) | 63.3% | 51.9% |
+  | 2c best-sweep (4.00M) | 62.1% | 53.7% |
+
+  All arms n=2,000, same machine, same session. Differences:
+
+  | comparison | vs Random | vs DamageFirst |
+  |---|---|---|
+  | 2c − M5.5 | **+10.5pp [+7.4, +13.5]** | **+8.7pp [+5.6, +11.8]** |
+  | 2c − M7 | **−6.3pp [−9.2, −3.4]** | **−7.5pp [−10.5, −4.4]** |
+
+  **Decision: Phase 3 ladders M7, not 2c** — decision table row 2, fixed in
+  advance. **This is exactly the case the amendment was written for**: judged
+  only against the literal M5.5 gate, 2c passes by a wide margin and would have
+  been sent to a ~2-day paired ladder run while being 6–7pp weaker than its own
+  control arm.
+
+  **M7 replicated at 69.7% (n=2,000) against its historical 70.0% (n=500)** —
+  independent evidence that the eval pipeline is sound and that the 2c gap is
+  real rather than an artifact of the harness.
+
+  **The substantive finding: 2a's BC-stage advantage did not merely fail to
+  compound, it inverted.**
+
+  | lineage | BC | after 5M PPO | RL gain |
+  |---|---:|---:|---:|
+  | mixed BC → M7 | 33.9% | 69.7% | **+35.8pp** |
+  | randbats BC → 2c | 39.5% | 63.3% | **+23.8pp** |
+
+  The format-aligned checkpoint was **the better imitator and the worse RL
+  substrate.** The most plausible reading is that the gen1ou half of the corpus
+  buys behavioural *breadth* that is useless for imitating randbats play but
+  valuable as an exploration prior and KL anchor across 5M steps — a narrower
+  anchor constrains the policy toward a smaller region. That is a hypothesis,
+  not a measurement.
+
+  **⚠️ CONFOUND, and it is not small: training-run-to-run variance has never
+  been measured in this project, and both lineages are n=1.** The CIs above
+  quantify **eval sampling noise only**. Comparing two checkpoints from two
+  different training runs also contains a *training-seed* variance component
+  that no amount of eval battles can shrink — running n=20,000 evals would
+  narrow those CIs to nothing while leaving the attribution exactly as
+  uncertain. **So "format-aligned BC hurts RL" is NOT established; what is
+  established is that this particular 2c run is 6–7pp below M7.** Resolving it
+  needs a second PPO run (≈70 min on the home box now that throughput is known)
+  — ideally re-running M7's own recipe from the mixed BC with a fresh seed, to
+  measure the spread directly. **Until that exists, no PPO A/B in this project
+  — including M7-vs-M5.5 — can separate recipe effects from seed effects.**
+
+  Artifacts: `models/ppo/checkpoints/m9p2c/{train.log,sweep_results.txt,
+  confirm_results.txt,ppo_step_5000004_final.pt}`.
+
+- **2c (superseded launch note): RUN 2026-07-31 18:02 local, home box.**
   Warm-starts 2a's randbats-only BC into the *exact* M5.5/M7 anchored-PPO
   recipe — same 5M steps, same `selfplay=0.5,damagefirst=0.3,random=0.2` mix,
   same `--bc-anchor-coef 0.05`, same 200k value warmup, same M2 + M3.3-best
@@ -165,6 +235,34 @@ Delivered:
 ---
 
 ### Next Steps
+
+**M9 Phase 2 is COMPLETE (2026-07-31). The Phase 3 candidate is M7.** Phase 2
+spent one bet (2a) that won and one (2c) that lost, and the net effect on the
+shipping agent is zero — M7 still ships. What Phase 2 bought is three things
+worth more than the checkpoint would have been: format alignment is now a
+*measured* effect rather than an assumption, both baselines have well-powered
+n=2,000 readings for the first time, and the gate defect was caught before it
+could spend two days of ladder.
+
+**The single highest-value experiment now is NOT Phase 3.** It is a ~70-minute
+seed replication: re-run M7's exact recipe from the mixed BC with a fresh seed
+and measure the spread. Every A/B this project has ever run compared two
+single training runs and attributed the whole difference to the recipe. That
+includes M7-vs-M5.5, the comparison the entire current lineage rests on. If
+PPO run-to-run spread turns out to be ±6pp, then 2c is inside noise, "format
+alignment hurts RL" is unsupported, **and so is a share of the project's
+existing conclusions.** If the spread is ±1pp, 2c's regression is real and the
+breadth hypothesis is worth pursuing. It is the cheapest question with the
+largest reach, and the M9 Phase 1 lesson (ladder readings were sample size, not
+signal) is the same mistake one level up.
+
+**Phase 3 is ready to run whenever wanted** — accounts registered and verified
+clean, protocol in `docs/EVALUATION-METHODOLOGY.md`, ~350 games/arm for +10pp
+power. **The user runs live ladder sessions, not Claude.** Note the paired
+design now has both arms as M7-derived only if a second candidate emerges; with
+2c rejected, Phase 3's "candidate vs control" has no candidate — so Phase 3
+should wait on either the seed replication or 2d rather than run M7 against
+itself.
 
 0. **✅ DONE 2026-07-31 — M9 Phase 2b (replay backfill) is COMPLETE, and the
    answer is that there is no more gen 1 human data to get.** Both formats were

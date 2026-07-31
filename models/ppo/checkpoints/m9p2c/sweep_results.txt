@@ -1,0 +1,62 @@
+M9 2c sweep (n=500 vs Random) — 2026-07-31T23:11:14Z
+=== models/ppo/checkpoints/m9p2c/ppo_step_250002.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.49 (246/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_500007.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.55 (276/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_750012.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.54 (270/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_1000014.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.53 (267/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_1250019.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.54 (268/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_1500021.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.64 (322/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_1750022.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.60 (299/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_2000026.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.59 (297/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_2250033.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.62 (311/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_2500036.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.63 (313/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_2750040.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.61 (305/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_3000040.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.61 (304/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_3250046.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.55 (274/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_3500051.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.60 (298/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_3750058.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.62 (312/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_4000060.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.65 (324/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_4250063.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.61 (305/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_4500065.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.63 (316/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_4750065.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.63 (313/500)
+=== models/ppo/checkpoints/m9p2c/ppo_step_5000004_final.pt ===
+Battles: 500
+Win rate vs RandomPlayerAI: 0.64 (319/500)
+SWEEP DONE

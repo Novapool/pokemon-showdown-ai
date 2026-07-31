@@ -1,0 +1,26 @@
+M9 2c confirmations (n=2000/arm) — 2026-07-31T23:15:54Z
+=== m5.5 | vs random (n=2000) ===
+Battles: 2000
+Win rate vs RandomPlayerAI: 0.53 (1057/2000)
+=== m5.5 | vs damagefirst (n=2000) ===
+Battles: 2000
+Win rate vs DamageFirstAI: 0.43 (865/2000)
+=== m7 | vs random (n=2000) ===
+Battles: 2000
+Win rate vs RandomPlayerAI: 0.70 (1393/2000)
+=== m7 | vs damagefirst (n=2000) ===
+Battles: 2000
+Win rate vs DamageFirstAI: 0.59 (1188/2000)
+=== 2c:ppo_step_5000004_final.pt | vs random (n=2000) ===
+Battles: 2000
+Win rate vs RandomPlayerAI: 0.63 (1267/2000)
+=== 2c:ppo_step_5000004_final.pt | vs damagefirst (n=2000) ===
+Battles: 2000
+Win rate vs DamageFirstAI: 0.52 (1039/2000)
+=== 2c:ppo_step_4000060.pt | vs random (n=2000) ===
+Battles: 2000
+Win rate vs RandomPlayerAI: 0.62 (1241/2000)
+=== 2c:ppo_step_4000060.pt | vs damagefirst (n=2000) ===
+Battles: 2000
+Win rate vs DamageFirstAI: 0.54 (1074/2000)
+CONFIRM DONE — analyse with scripts/bot_eval_ab.py
