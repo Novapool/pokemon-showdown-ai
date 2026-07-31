@@ -51,6 +51,23 @@ Last updated: 2026-07-31
 
 ### Next Steps
 
+0. **🔄 RUNNING (started 2026-07-31): M9 Phase 2b randbats replay backfill on
+   the home box.** `scripts/scrape_replays.py --formats gen1randombattle=1300
+   --backfill --max-replays 30000`, detached (`setsid nohup`), log
+   `~/Projects/pokemon-showdown-ai/randbats_backfill.log` (Python buffers to
+   file — track progress by `find data/replays/gen1randombattle -type f | wc -l`
+   and the `scrape_state.json` cursor instead). Measured ~68 logs/min ≈
+   4,100/h → **~7h to the 30k cap.** Corpus + cursor + manifest were rsynced
+   Mac → home box first (20,196 logs, 81 MB) so the backfill resumes from the
+   existing 2018 cursor instead of re-paging the archive; **the home box is now
+   the authoritative copy of `data/replays/gen1randombattle` — rsync back before
+   editing it on the Mac.**
+   **Yield warning:** the cursor had already paged back 8 years. A 5-page census
+   found only **33 of 255 scanned replays clear the ≥1300 filter (~13%)**, with
+   51% unrated — old replays frequently have no rating recorded. So the earlier
+   scope note ("backfill should add ~30k more high-Elo games") is optimistic;
+   expect the run to scan ~230k entries to fill the cap, and possibly to exhaust
+   the archive first. Check the realized count before assuming the corpus grew.
 1. **Approve M9 scope** — user sign-off on the four phases and pre-registered gates
 2. **Stage Phase 1** — write EVALUATION-METHODOLOGY.md (runbook for methodology v2), schedule replication baseline run on m9 ladder account
 3. **Identify Phase 2 subset** — prioritize which of 2a/2b/2c/2d to pursue (2c is mandatory; 2b is optional; 2a/2d valuable but time-dependent)
