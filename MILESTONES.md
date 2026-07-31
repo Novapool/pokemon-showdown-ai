@@ -1612,7 +1612,41 @@ If Phase 2's value-head fine-tuning moves the MCTS needle, scale it up: a full s
 
 ---
 
-**Phase 4 (ladder validation): 100+ game ladder run**
+**Phase 4 (ladder validation): 100+ game ladder run** — 🟨 **COMPLETE
+2026-07-31, THIRD CONSECUTIVE INCONCLUSIVE READING.**
+
+  Ran the unchanged M7 checkpoint (Phases 1A and 2 both gated negative, so
+  nothing newer existed to ship): 100 rated gen1randombattle games, tuned MCTS,
+  one session 2026-07-30T21:58 → 2026-07-31T04:34 (~4 min/battle). **Raw 27/100
+  (27.0%).** Account `novapool` after: **Elo 1084.0, GXE 32.9%.**
+
+  | | M6 | M7 main | M7 follow-up (7/23) | **Phase 4** |
+  |---|---|---|---|---|
+  | Raw win rate | — | 30% (n=100) | 42% (n=50) | **27% (n=100)** |
+  | Elo | 1017 | 1034.6 | 1101.4 | **1084.0** |
+  | GXE | 23.9% | 28.2% | 32.9% | **32.9%** |
+
+  **Verdict per Criterion E:** GXE 32.9% is inside the 25–34% band →
+  **inconclusive.** Not the ≥35% win, not the <25% regression.
+
+  **The substantive finding is about the instrument, not the agent.** Phase 4
+  ran the *same M7 checkpoint* as the 7/23 follow-up — the model did not change
+  — yet raw win rate went **42% → 27%** and Elo went **down 17 points**. That is
+  ~1.8 SD, not formally significant, but it is a direct measurement of ladder
+  noise and it invalidates the reading recorded on 2026-07-23 that the
+  "monotonic 23.9 → 28.2 → 32.9 trend" was evidence of progress. It was mostly
+  the ladder wandering. Two compounding defects, both now understood:
+
+  1. **GXE was never a valid per-run gate.** It is an *account-level cumulative*
+     statistic — 506 games spanning M6, M7 and M8 on one shared account. It has
+     enormous inertia (it did not move at all this run: 32.9 → 32.9) and every
+     reading is contaminated by prior runs.
+  2. **Raw win rate is not comparable across runs at different Elo.** Climbing
+     to 1101 means facing stronger opponents, so a falling win rate is partly
+     the ladder working correctly, not the agent degrading.
+
+  Every M6/M7/M8 ladder conclusion rests on these two statistics. Fixing this is
+  the reason M9 Phase 1 exists and is gated ahead of any further training spend.
 
 - **Prerequisite:** Phase 0 (reconnect) must be complete.
 - **Checkpoint:** Use the best checkpoint from whichever phase gates positive (Phase 1B > Phase 2 > Phase 3).
@@ -1674,6 +1708,178 @@ Depends on result:
 
 ---
 
+## M9: Evaluation Methodology + Data Distribution Hypothesis ⏳ SCOPED
+
+**Status:** ⏳ Scoped 2026-07-31 (awaiting user approval to build)
+
+**Context:** M8 tested two structural improvements on the M7 checkpoint (obs richness Phase 1A, value-head targeting Phase 2) and both failed. Three critical methodological defects also emerged: (1) GXE is account-level cumulative (506 games M6-M8), not per-run; (2) the same M7 checkpoint showed 42% → 27% raw win-rate variance across different ladder runs (~1.8 SD), meaning the prior "monotonic GXE trend" (23.9% → 28.2% → 32.9%) was an over-read; (3) the +3pp gate at n=200 is underpowered (SE on the difference ~3.9pp; a true +3pp effect would be detected only ~1/3 of the time). The surviving hypothesis — that opponent-pool/data distribution (constraint c from the M8 thesis) is the binding constraint — was deprioritized on reasoning alone, never tested on evidence. **M9 makes two critical changes: (1) Fix evaluation methodology so future milestones have a reliable signal; (2) Seriously investigate the data/distribution direction, including whether richer human data + RL beats bot-trained lineage on ladder.**
+
+**Key Facts Informing Scope:**
+- M5.5 (human BC + anchored PPO) was the single largest improvement in project history; BC pathway was the only one to beat the bot-trained lineage.
+- Data gap: 474 MB raw human replays (gen1ou-heavy) vs 1.7 GB derived; project ladders on gen1randombattle but replays are gen1ou-focused.
+- M7 achieved 93% vs Random / 84.2% vs DamageFirst (bot eval) but only 28.2% GXE on ladder — a 65pp gap suggesting format variance or opponent-pool misalignment.
+- Constraints (a) and (b) from M8 are now dead. Constraint (c) is the only untested structural lever.
+
+---
+
+### M9 Phases
+
+**Phase 1 (Evaluation Methodology v2):** Fix ladder measurement
+
+- **Goal:** Establish reliable ladder-strength evaluation so future milestones can trust their results.
+- **Scope:**
+  1. **Per-run GXE isolation:** Use a fresh ladder account per major checkpoint (not shared). Existing M7 account (novapool, ~506 games) becomes the M7 baseline control; M9 Phase 3 uses a new "m9" account.
+  2. **Instrument validation.** Note we already have one replication datapoint, for free: the same M7 checkpoint scored **42% (n=50, 7/23)** and **27% (n=100, 7/31)** — a **15pp swing at zero true effect.** Any "expected ±4–5pp noise" assumption is already falsified; design against the observed number, not an optimistic one. One further same-checkpoint replication on the fresh accounts is worth running to confirm the paired design actually suppresses this drift (that is its whole justification), but it is a *validation of the design*, not a discovery task.
+  3. **Required sample size table:** Derive from observed noise. E.g., "To resolve a true +3pp effect at 80% power, need ~400–500 games; for +2pp, ~700–900 games."
+  4. **Head-to-head A/B protocol:** Alternate batches of baseline vs candidate on the same account within one session to isolate checkpoint effect from day-to-day variance.
+- **Deliverable:** `docs/EVALUATION-METHODOLOGY.md` with runbooks for per-run account setup, replication protocol, and interpreting ladder results (e.g., "GXE=31% at n=150; expected noise ±7pp; lower 95% CI ≈24%; inconclusive but directional").
+- **Effort:** 4–6 hours writing + 1–2 hours ladder (replication baseline).
+- **Gate:** Methodology doc specifies what we're measuring and with what precision before Phase 3 ladder work starts.
+
+---
+
+**Phase 2 (Data/Distribution Hypothesis Test):** Investigate whether richer/better-aligned human data beats bot-trained lineage on ladder
+
+M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 trained on bots only (M2, M3.3, M5, M5.5, M7 descendants + DamageFirst heuristic). The remaining question: does richer/better-aligned human data compound the win?
+
+- **Scope:** 4 sub-components (pursue all if time permits; 2c is mandatory):
+
+  1. **2a: Randbats-only BC checkpoint** — Does format alignment matter?
+     - Train BC on gen1randombattle replays only (not mixed gen1ou), compare bot evals vs the existing M5.5 BC.
+     - If randbats-only BC is weaker in-distribution but transfers better to ladder, format gap is real.
+     - Effort: ~3 hours (reshard, train, eval).
+
+  2. **2b: Richer replay corpus** — Can we amplify the human-data signal?
+     - Run `scripts/scrape_replays.py --backfill --max-replays 50000` to top up gen1randombattle (current corpus: ~20k; backfill should add ~30k more high-Elo games).
+     - Optionally: filter Metamon gen1ou replays to ≥1400 Elo only (current corpus is 10k rated ≥1300 + 55k mixed; higher Elo = higher data quality).
+     - Adapter converts new logs to trajectory shards.
+     - Effort: ~3 hours (scrape/filter) + 1 hour (adapt); cost is disk only, no training.
+
+  3. **2c: BC fine-tune on richer data** — Mandatory. Does richer data lift the ceiling?
+     - Train a new BC checkpoint on the expanded corpus (all shards from 2b).
+     - Follow M5.5 anchored PPO recipe: BC warm-start, 5M-step fine-tune with mixed opponents (selfplay/damagefirst/random), pool seeded with M2 + M5.5.
+     - Bot evals: 20-checkpoint sweep vs Random (150 battles each), confirmations at 500 vs Random / 200 vs DamageFirst on top candidates.
+     - Pre-register: if this checkpoint beats M5.5 baseline by ≥+2pp on both opponents at n=500, it's the Phase 3 ladder candidate; else use M5.5.
+     - Effort: ~8 hours training (home box, 8 envs, ~3 hours wall) + 2 hours eval.
+
+  4. **2d: Opponent-pool saturation check** — Is diversity in training opponents the missing lever?
+     - Create a "ladder-like pool" by sampling highest-rated players from the scraped human replays.
+     - Train a checkpoint with `--opponent-mix "human_randbats=0.7,damagefirst=0.2,random=0.1"` (human pool replaces selfplay).
+     - Bot evals: compare vs M7 (which trained on bot descendants + heuristics).
+     - If human-sampler checkpoint transfers better to ladder, opponent-pool diversity matters.
+     - Effort: ~4 hours (build human-sampler opponent code, train, eval).
+
+- **Deliverable:** Best Phase 2 checkpoint, pre-registered against M5.5 baseline.
+- **Gate:** Phase 2 candidate beats M5.5 by ≥+2pp on both bot opponents (n=500), OR use M5.5 for Phase 3 (no failure; fallback is acceptable).
+
+---
+
+**Phase 3 (Ladder Validation with Methodology v2):** Test the Phase 2 candidate reliably
+
+- **Scope:**
+**Design constraint (corrects the original Phase 3 draft):** the gate must NOT
+be "candidate GXE on a new account vs M7's historical 28.2%/32.9%." That repeats
+the exact defect Phase 1 exists to fix — it compares a cumulative account
+statistic at n≈100 against one at n≈506, across accounts, across months of
+ladder drift. GXE only becomes meaningful again on fresh accounts compared at
+**matched game counts in the same time window.**
+
+  1. **3a: Paired concurrent A/B (the core design).** Run the M7 control and the
+     Phase 2 candidate on **two fresh accounts, alternating, in the same
+     sessions.** Both face the same ladder pool over the same period, so
+     day-to-day drift — the confound that produced 42% → 27% on an unchanged
+     checkpoint — cancels in the paired difference. Primary endpoint is the
+     **difference in raw win rate between arms**, not either arm's absolute GXE.
+  2. **3b: Report per-arm Elo/GXE as secondary,** valid only because the accounts
+     are fresh and matched on n. Also report each arm's mean opponent Elo, so a
+     win-rate difference driven by opponent-strength asymmetry is visible rather
+     than hidden.
+  3. **3c: Head-to-head bot A/B (n=1000)** — much cheaper than ladder; run first
+     to decide whether the candidate is even worth ladder time.
+
+- **Power, stated honestly.** For two arms at p≈0.30, 80% power, α=0.05:
+  detecting **+5pp needs ~1,400 games per arm**; **+10pp needs ~350 per arm**;
+  **+15pp needs ~160 per arm**. At the measured ~4 min/battle, 350 games/arm is
+  **~23 hours of ladder per arm.** This is the real reason every prior milestone
+  used an underpowered gate, and it does not go away by wishing.
+  **Pre-registered choice: M9 powers for +10pp (~350/arm, ~2 days wall clock
+  for both arms).** Effects smaller than 10pp are declared *not measurable by
+  this project on the ladder*, and must be judged on bot evals instead.
+- **Deliverable:** Paired ladder results on two fresh accounts, reported as a
+  difference with a 95% CI, plus per-arm opponent-Elo distributions.
+- **Gate (on the paired difference, not on absolute GXE):**
+  - ✅ **Difference ≥ +10pp with CI excluding 0:** clear win.
+  - 🟨 **CI includes 0:** inconclusive — and with 350/arm this now means the
+    effect is genuinely <10pp, which is a *finding*, not a failure to measure.
+  - ❌ **Difference ≤ −10pp with CI excluding 0:** regression; postmortem.
+
+---
+
+**Phase 4 (Stopping Decision):** Determine next direction
+
+Context: M2 → M7 achieved 51% → 93% bot-eval improvement (+42pp) but only 23.9% → 28.2% GXE (+4.3pp). The 65pp gap between bot eval and ladder suggests format intrinsic variance or opponent-pool saturation may be the ceiling, not policy quality.
+
+- **Scope:**
+
+  1. **If Phase 3 succeeds (GXE ≥35%):**
+     - Declare M8/M9 a win; data/distribution was the binding constraint.
+     - Recommend M10 direction: team-specific fine-tuning on ladder favorites, multi-format RL (gen1ou, gen1ou-teambuilder), or online learning (accumulate ladder data to retrain).
+
+  2. **If Phase 3 is inconclusive (25–32% GXE):**
+     - Measure 95% CI on Phase 3b result + Phase 3a replication baseline.
+     - If CI upper bound > 32%: declare "statistically consistent with a real gain"; recommend continued ladder play (accept stalemate, accumulate games for higher n).
+     - If CI ≤ 30%: declare gen1randombattle's intrinsic variance too high to resolve <±5pp effects; recommend pivot: (a) accept offline-only agent mode (no ladder validation), (b) switch to a format with less team luck (gen1ou with fixed teams, constructed), or (c) scale compute (AlphaZero-scale self-play if time/resources allow).
+
+  3. **If Phase 3 regresses (<25% GXE):**
+     - Postmortem: compare Phase 2 candidate bot evals vs M5.5/M7. If bot evals held, data-quality issue (replay corruption/misalignment). If bot evals degraded, Phase 2 candidate is weaker; use M5.5.
+     - Recommendation: pivot to offline-only agent (accept ladder transfer is not fixable), scale compute, or stop project.
+
+- **Deliverable:** Written postmortem + recommendation (continue M10 / accept stalemate / pivot direction / stop).
+- **Effort:** 2–4 hours analysis + doc.
+
+---
+
+### Pre-Registered Success Criteria (M9 Global)
+
+| Phase | Criterion | Pass | Fail | Status |
+|---|---|---|---|---|
+| 1 | Methodology v2 written + replication protocol | Runbook + 1 replication test done | Doc incomplete | ⏳ |
+| 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | Optional |
+| 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | <50k or adapter fails | Optional |
+| 2c | Fine-tune on expanded corpus beats M5.5 | ≥+2pp both opponents at n=500 | <+2pp or regression | Gate |
+| 3a | Replication baseline M7 on m9 account | Variance <±5pp GXE | Variance >±5pp | Test |
+| 3b | Phase 2 candidate ladders | GXE ≥32% (win), or 25–32% (inconclusive) | <25% (regression) | Gate |
+| 4 | Stopping decision made | Postmortem + recommendation written | Analysis incomplete | Deliverable |
+
+---
+
+### Critical Dependencies & Parallelization
+
+- **Phases 1 & 2 can overlap:** Phase 1 (methodology doc + replication baseline ~50 games = ~1–2 hours ladder) runs while Phase 2 training happens on home box (8-hour 5M PPO run).
+- **Phase 3 depends on Phase 2:** Requires the Phase 2 candidate checkpoint (delivered at end of Phase 2 evals).
+- **Phase 4 depends on Phase 3:** Requires Phase 3 ladder result.
+
+---
+
+### Effort & Duration
+
+- **Phase 1:** 4–6 hours doc + 1–2 hours ladder = **5–8 hours total**.
+- **Phase 2:** 3 (2a) + 3 (2b) + 8 (training) + 2 (evals) + 4 (2d) = **12–20 hours** (subset as time permits; 2c is mandatory).
+- **Phase 3:** 2–8 hours ladder depending on win rate.
+- **Phase 4:** 2–4 hours analysis + doc.
+- **Total:** **25–40 hours over 3–4 days**, mostly parallelizable.
+
+**Most likely path (if 2c is mandatory and 2a/2d are deferred):** Phase 1 (5h) + Phase 2c (10h) + Phase 3 (4h) + Phase 4 (3h) = **~22 hours**.
+
+---
+
+### Unblocks & Next Milestones
+
+- **If M9 Phase 3 succeeds (GXE ≥35%):** M10 candidate directions: (a) team-specific fine-tuning (ladder favorites), (b) multi-format RL (gen1ou, gen1ou-teambuilder), (c) online learning (live ladder data retraining), or (d) AlphaZero-scale self-play if compute available.
+- **If M9 Phase 3 inconclusive/regresses:** Decision to accept stalemate (gen1randombattle as-is with current agent), pivot to a different format, or invest in fundamental architectural upgrade (large models, online learning, or AlphaZero-scale).
+
+---
+
 ## Architecture Reference
 
 ```
@@ -1731,4 +1937,4 @@ Best action
 | M5.5: Human Replay Data + BC | ✅ | **Positive — new best agent.** BC on human replays → anchored PPO fine-tune → tuned MCTS = 90.6% R / 79.2% DF (prior best 86.0/72.6); h2h vs M5 best 78.4% (392/500) | M6 |
 | M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
 | M7: Observation Schema v3 | ✅ | **New best agent (bot evals)** — tuned MCTS 93.0% R / 84.2% DF, +2.4/+5.0pp vs prior best. **Ladder: inconclusive** — Elo 1034.6 / GXE 28.2% (M6: 1017/23.9%), lands in the pre-registered 25–34% noise band; directionally up (+9pp raw win rate) but not a confirmed win. **50-game follow-up (2026-07-23): still inconclusive** — 21/50 raw (42%), Elo 1101.4 / GXE 32.9%, 2.1pp under the ≥35% win bar; trend over 150 games monotonic (23.9→28.2→32.9) | M8 |
-| **M8: Value-Head Targeting + Ladder Infra** | 🟡 In progress | **Contingency escalation, both technical bets now spent.** Phase 0 (ladder-bot websocket reconnect) ✅. Phase 1A (obs refinement, speed-ratio dim) ❌ Criterion A failed (Random −3pp) → Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌ Criterion C failed (base 82.5% → fine-tuned 80.0%, −2.5pp vs a ≥+3pp bar) → Phase 3 skipped, and ❌ **failed again on replication 2026-07-30** at exactly 160/200 with targets re-collected against DamageFirst, eliminating distribution mismatch as the explanation. **Notable:** the fine-tune fixed the value head in-distribution both times (R² 0.00 → 0.20, then −0.13 → +0.19; the PPO-trained head scored *below* a constant predictor) and none of it transferred to play strength. **Next: Phase 4 ladder run on the unchanged M7 checkpoint**, GXE ≥35% for a win or <25% for clear regression. | — |
+| **M8: Value-Head Targeting + Ladder Infra** | ✅ COMPLETE 2026-07-31 — all bets negative or inconclusive | **Contingency escalation, both technical bets spent, neither paid.** Phase 0 (ladder-bot websocket reconnect) ✅. Phase 1A (obs refinement, speed-ratio dim) ❌ Criterion A failed (Random −3pp) → Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌ Criterion C failed (base 82.5% → fine-tuned 80.0%, −2.5pp vs a ≥+3pp bar) → Phase 3 skipped, and ❌ **failed again on replication 2026-07-30** at exactly 160/200 with targets re-collected against DamageFirst, eliminating distribution mismatch as the explanation. **Notable:** the fine-tune fixed the value head in-distribution both times (R² 0.00 → 0.20, then −0.13 → +0.19; the PPO-trained head scored *below* a constant predictor) and none of it transferred to play strength. Phase 4 (ladder validation on the unchanged M7 checkpoint) 🟨 **inconclusive 2026-07-31** — 27/100 raw, Elo 1084.0 / GXE 32.9%, third consecutive reading inside the 25–34% band. **Key finding is methodological:** the same checkpoint swung 42% → 27% raw between runs, so the prior "monotonic GXE trend" was an over-read and GXE (account-level, cumulative over 506 games) was never a valid per-run gate. | M9 |

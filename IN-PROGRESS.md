@@ -1,48 +1,60 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-30
+Last updated: 2026-07-31
 
 ---
 
 ## Current Work
 
-**M8 Phase 2 (AlphaZero-style value targeting) — ❌ COMPLETE, CRITERION C
-FAILED TWICE (negative result, replicated 2026-07-30). Phase 3 skipped; next is
-Phase 4 (ladder run on the unchanged M7 checkpoint).** Logs:
-`models/mcts/results/m8_phase2_valft_criterionC.log` (run 1) and
-`models/mcts/results/m8_phase2_df_valft_{criterionC,train}.log` (run 2);
-write-up in `MILESTONES.md` → M8 → Phase 2.
+**M9 SCOPED (2026-07-31): Evaluation Methodology + Data Distribution Hypothesis.** M8 spent both its technical bets (obs richness Phase 1A, value-head targeting Phase 2) on the M7 checkpoint and both failed. Three methodological defects also came to light: (1) GXE is account-level cumulative (506 games M6-M8), not per-run; (2) same M7 checkpoint shows 42%→27% win-rate variance across runs (~1.8 SD); (3) +3pp gate at n=200 is underpowered (SE ~3.9pp; a true +3pp effect caught only ~1/3 of the time). The surviving hypothesis — opponent-pool/data distribution (constraint c) — was deprioritized on reasoning alone, never tested. **M9 addresses both:** Phase 1 fixes evaluation methodology (per-run GXE isolation, pre-registered sample sizes), Phase 2 tests the data/distribution hypothesis (randbats-only BC, richer replay corpus, opp-pool saturation), Phase 3 ladders with proper instrumentation, Phase 4 makes a stopping decision. See MILESTONES.md → M9 for full scope.
 
-| | vs DamageFirst, tuned MCTS, 200 battles |
-|---|---|
-| Base (`v3/ppo_step_5000002_final.pt`) | **82.5% (165/200)** |
-| Run 1 — targets from self-play (`v3_valft/ppo_v3_valft_outcome.pt`) | **80.0% (160/200)** |
-| Run 2 — targets from DamageFirst (`v3_valft/ppo_v3_df_valft_outcome.pt`) | **80.0% (160/200)** |
-| Delta, both runs | **−2.5pp** (gate: ≥+3pp) ❌ |
+### M9 Phases (Pre-Registered Gates)
 
-**Run 2 (2026-07-30) killed the distribution-mismatch hypothesis.** Cause (2)
-below said the targets were collected against a frozen policy while the A/B is
-scored against DamageFirst. So the collection was repeated with
-`--opponent damagefirst` (2000 games, 57,747 decisions, 90 shards, 10 workers,
-~21 min on the home box) and the fine-tune rerun. It **landed on exactly the
-same 160/200.** Same in-distribution story as run 1: val MSE 0.6917 → 0.4915
-against a constant-predictor baseline of 0.610 (**R² −0.13 → +0.19**), sign
-agreement 0.758 → 0.840. Matching the collection distribution to the eval
-distribution changes nothing about play strength.
+**Phase 1: Evaluation Methodology v2** (4–6 hours + 1–2 ladder)
+- Write `docs/EVALUATION-METHODOLOGY.md`: per-run GXE isolation, replication protocol, required-sample-size table
+- Noise floor is already partly measured *for free*: same M7 checkpoint scored 42% (n=50) and 27% (n=100) — a 15pp swing at zero true effect. Design against that, not an assumed ±4–5pp. Do **not** benchmark a fresh account against the old account's 28.2%/32.9% — that repeats the defect this phase exists to fix.
+- Establish sample sizes per effect size (see Phase 3 power table)
+- **Gate:** Methodology specifies what we measure and with what precision
 
-**That leaves cause (1) as the live explanation, and run 2 adds evidence for
-it:** these labels are much more skewed (target mean **+0.624**; the searcher
-beats DamageFirst ~84% vs 75.5% in self-play), and the post-FT sign agreement
-of 0.840 is essentially the base rate. A value head that has mostly learned
-"this seat usually wins" is better calibrated in MSE while adding a near-constant
-offset — and MCTS compares leaf values *relatively*, so a constant offset is
-invisible to it. Val MSE also flattened between epoch 1 (0.4908) and epoch 2
-(0.4915), so this is not an undertraining artifact.
+**Phase 2: Data/Distribution Hypothesis Test** (12–20 hours, subset as time permits)
+- 2a: Randbats-only BC checkpoint; test vs mixed-format BC on bot evals
+- 2b: Backfill gen1randombattle replays (scraper → adapter, ≥50k games total)
+- 2c: Fine-tune best BC via M5.5 anchored PPO recipe (5M steps on home box)
+- 2d (optional): Opp-pool saturation check — train with human-sampler opponents (`--opponent-mix "human_randbats=0.7,..."`)
+- **Gate:** Phase 2 candidate beats M5.5 baseline by ≥+2pp on both bot opponents (n=500), OR use M5.5 for Phase 3
 
-**Read the pair, not either run.** Each delta is −2.5pp against SE ~3.9pp, i.e.
-inside noise, so neither run establishes the fine-tune as *harmful*. Two
-independent nulls from two differently-collected datasets is a much stronger
-negative than either alone, and it is enough to stop spending on this thesis.
+**Phase 3: Ladder Validation (Methodology v2)** (~2 days ladder, both arms)
+- **Paired concurrent A/B**: M7 control and Phase 2 candidate on **two fresh
+  accounts, alternating within the same sessions**, so ladder drift — the
+  confound that produced 42%→27% on an unchanged checkpoint — cancels in the
+  paired difference. Primary endpoint is the **difference in raw win rate**, not
+  either arm's absolute GXE.
+- Elo/GXE reported as secondary only, valid because accounts are fresh and
+  matched on n; report each arm's mean opponent Elo too.
+- 3c (optional, run first): head-to-head bot A/B at n=1000 — far cheaper than
+  ladder, decides whether the candidate earns ladder time at all.
+- **Power (pre-registered):** at p≈0.30 and 80% power, +5pp needs ~1,400
+  games/arm, +10pp ~350/arm, +15pp ~160/arm. At ~4 min/battle, 350/arm ≈ 23h per
+  arm. **M9 powers for +10pp.** Smaller effects are declared not measurable on
+  the ladder by this project and must be judged on bot evals.
+- **Gate (on the paired difference):** ≥+10pp with CI excluding 0 = win; CI
+  includes 0 = inconclusive, which at 350/arm now *means the effect is <10pp*
+  rather than "we couldn't tell"; ≤−10pp with CI excluding 0 = regression.
+
+**Phase 4: Stopping Decision** (2–4 hours analysis)
+- Win: declare, recommend M10 direction (team-specific, multi-format, online learning)
+- Inconclusive at adequate power: the effect is <10pp — record that as a
+  *finding* and stop spending on this direction, don't re-run bigger
+- Regression: postmortem (data quality vs checkpoint weakness); pivot or stop
+
+---
+
+### Next Steps
+
+1. **Approve M9 scope** — user sign-off on the four phases and pre-registered gates
+2. **Stage Phase 1** — write EVALUATION-METHODOLOGY.md (runbook for methodology v2), schedule replication baseline run on m9 ladder account
+3. **Identify Phase 2 subset** — prioritize which of 2a/2b/2c/2d to pursue (2c is mandatory; 2b is optional; 2a/2d valuable but time-dependent)
+4. **Home-box readiness** — verify preflight for 5M PPO run (already validated end-to-end 2026-07-29)
 
 Collection ran on the MacBook in ~35 min (2000 games, 66,459 decisions, 84
 shards, 6 workers) — data clean, obs finite at 1032 dims, seats balanced.
@@ -308,8 +320,8 @@ loss healthy to the end, late rollout win rates 0.40–0.45 vs the mixed pool.
 
 ## Recently Completed
 
-**M8: Value-Head Targeting + Ladder Infrastructure — 🟡 IN PROGRESS (both
-technical bets spent; Phase 4 ladder is what's left)**
+**M8: Value-Head Targeting + Ladder Infrastructure — ✅ COMPLETE 2026-07-31,
+all bets negative or inconclusive**
 Contingency-based escalation. Phase 0 (websocket reconnect) ✅ 2026-07-22.
 Phase 1A (obs refinement, speed-ratio A/B) ❌ 2026-07-28 — Criterion A failed
 (Random −3pp), Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌
@@ -318,9 +330,22 @@ Criterion C failed (82.5% → 80.0%, −2.5pp vs a ≥+3pp bar) and failed *agai
 exactly 160/200 when the targets were re-collected against DamageFirst to rule
 out distribution mismatch, so Phase 3 is skipped. The two structural ideas
 M8 was built to test have both come back negative, and the shipping agent is
-still the unchanged M7 checkpoint. **Next: Phase 4 ladder run on M7** — GXE
-≥35% for a win, <25% for clear regression, same band as M7's inconclusive
-28.2%/32.9% readings. See Current Work above and `MILESTONES.md` → M8.
+still the unchanged M7 checkpoint. **Phase 4 (ladder validation on M7) 🟨
+INCONCLUSIVE 2026-07-31** — 100 rated games, raw **27/100 (27.0%)**, account
+`novapool` after: **Elo 1084.0, GXE 32.9%**, inside the 25–34% band for the
+third consecutive reading.
+
+**The finding that matters is about the instrument.** Phase 4 ran the *same
+checkpoint* as the 7/23 follow-up, yet raw win rate went **42% → 27%** and Elo
+fell 17 points. The model did not change. That retires the "monotonic
+23.9 → 28.2 → 32.9" reading recorded on 7/23 — it was ladder drift, not
+progress. Two defects, both now understood: GXE is an **account-level
+cumulative** statistic over 506 games spanning M6–M8 (it did not move at all
+this run: 32.9 → 32.9), so it was never a valid per-run gate; and raw win rate
+is not comparable across runs at different Elo, since climbing means facing
+stronger opponents. **Every M6/M7/M8 ladder conclusion rests on these two
+statistics** — which is why M9 gates evaluation methodology ahead of any further
+training spend. See `MILESTONES.md` → M8 → Phase 4.
 
 **M7 (Observation Schema v3) — ✅ COMPLETE 2026-07-20**
 Criterion A ✅, Criterion B ✅ (new best agent: 93.0% R / 84.2% DF), Criterion C 🟡 inconclusive (Elo 1034.6 / GXE 28.2% vs M6's 1017/23.9%, landed in 25–34% noise band). v3 adds type effectiveness, move-effect flags, Sleep Clause tracking — the highest-leverage obs features humans use every game. Bug fix: battle-sim.ts now supports v3 (obs-shape-agnostic MCTS now truly holds). Full results in `MILESTONES.md` → M7.
