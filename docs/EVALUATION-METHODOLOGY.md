@@ -155,8 +155,35 @@ It cannot pass reliably even if the candidate is genuinely +2pp better.
   and ~+6pp vs DamageFirst. Go to 2,000 (~2.5 h/arm) when the decision is
   expensive — e.g. deciding whether to spend two days of ladder.
 - **Report the difference with a CI**, not two point estimates compared by eye.
+  Use `scripts/bot_eval_ab.py` — the bot-eval counterpart to
+  `ladder_analysis.py`, sharing its Wilson/Newcombe implementations:
+  ```bash
+  python3 scripts/bot_eval_ab.py --arm base=1697/5000 --arm cand=1977/5000 --gate 3
+  ```
 - A ±2pp gate on DamageFirst is not reachable at any sample size we would
   actually run (4,948/arm ≈ 6 h MCTS). Do not pre-register one.
+
+#### The required n depends on the baseline win rate — n=2,000 is not universal
+
+The n=2,000 above is derived at **p₁=0.93**, the M7 operating point, where
+binomial variance is small. Variance is maximised at p=0.5, so a *mid-range*
+agent needs far more games to resolve the same effect:
+
+| Baseline p₁ | n/arm for +3pp | n/arm for +5pp |
+|---|---:|---:|
+| 0.93 (M7 vs Random) | 906 | 269 |
+| 0.84 (M7 vs DamageFirst) | 2,137 | 723 |
+| 0.55 | 4,286 | 1,534 |
+| **0.42** (a BC checkpoint) | **4,286** | **1,550** |
+
+At p₁≈0.42, n=2,000 resolves only about ±4.5pp — so an A/B on BC checkpoints
+run at the "standing" n=2,000 would be underpowered in exactly the way this
+document exists to prevent. **M9 Phase 2a ran at n=5,000/arm** (~3 min/arm at
+27 battles/s) for this reason.
+
+**Rule:** look up n against the arm's *actual* win rate before running, with
+`python3 scripts/bot_eval_ab.py --power --baseline-p <p>`. n=2,000 for strong
+agents near the ceiling; **n=5,000 for anything in the 0.3–0.7 band.**
 
 ---
 

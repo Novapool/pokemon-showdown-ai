@@ -1768,10 +1768,31 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
 
 - **Scope:** 4 sub-components (pursue all if time permits; 2c is mandatory):
 
-  1. **2a: Randbats-only BC checkpoint** — Does format alignment matter?
-     - Train BC on gen1randombattle replays only (not mixed gen1ou), compare bot evals vs the existing M5.5 BC.
-     - If randbats-only BC is weaker in-distribution but transfers better to ladder, format gap is real.
-     - Effort: ~3 hours (reshard, train, eval).
+  1. **2a: Randbats-only BC checkpoint** — ✅ **COMPLETE 2026-07-31, POSITIVE
+     RESULT. Format alignment is real, and it is the first positive evidence
+     for constraint (c) in the M8 thesis.**
+
+     `bc_mlp_gen1_v3_rb5.pt` trains on gen1randombattle shards only; every
+     other knob matches the recipe behind `bc_mlp_gen1_v3.pt` (v3 schema,
+     5 epochs, `--min-rating 1300`, `--opp-bc-coef 0.1`, `--value-bc-coef 0.5`).
+     Raw policy, no search, n=5,000 per arm:
+
+     | | randbats-only | mixed | difference (95% CI) |
+     |---|---:|---:|---|
+     | vs Random | **39.5%** (1977/5000) | 33.9% (1697/5000) | **+5.6pp [+3.7, +7.5]** |
+     | vs DamageFirst | **33.2%** (1660/5000) | 28.6% (1429/5000) | **+4.6pp [+2.8, +6.4]** |
+     | randbats val acc | **54.3%** | 52.7% | +1.6pp (n=60,766) |
+     | opp-head acc (vs R) | **24.1%** | 21.2% | +2.9pp |
+
+     Both CIs exclude 0. **The gen1ou half of the corpus was diluting
+     gen1randombattle play rather than enriching it** — the reverse of the
+     2026-07-16 multi-format decision, which was never A/B'd. Note the effect
+     survives *despite* randbats-only seeing 1.10M records per epoch against
+     the mixed run's 5.02M: the smaller, aligned corpus wins on less data.
+
+     Counts in `models/checkpoints/m9p2a_ab_results.txt`; runner
+     `models/checkpoints/run_m9p2a_ab.sh`; analysis `scripts/bot_eval_ab.py`.
+     - Actual effort: ~25 min (BC train 201 s, four n=5,000 evals ~13 min).
 
   2. **2b: Richer replay corpus** — ❌ **COMPLETE 2026-07-31, NEGATIVE RESULT.
      There is no more gen 1 human data to scrape.** Both formats were mined to
@@ -1804,8 +1825,26 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
      - Adapter converts new logs to trajectory shards.
      - Effort: ~3 hours (scrape/filter) + 1 hour (adapt); cost is disk only, no training.
 
-  3. **2c: BC fine-tune on richer data** — Mandatory. Does richer data lift the ceiling?
-     - Train a new BC checkpoint on the expanded corpus (all shards from 2b).
+  3. **2c: BC fine-tune** — Mandatory. 🟡 **RUNNING since 2026-07-31 18:02
+     local** (home box, `device=cuda`, ~21k steps/min ⇒ ~4 h).
+
+     **2c's premise changed twice and the surviving version is the strong one.**
+     As originally written it fine-tuned on "the expanded corpus from 2b" — but
+     2b is closed, so no expanded corpus exists and that version of 2c has no
+     content. What it tests instead is 2a's finding carried one stage further:
+     warm-start the **randbats-only** BC into the anchored-PPO recipe and see
+     whether the +5.6pp BC-stage advantage survives 5M steps of RL.
+
+     The recipe is M7's v3 run verbatim — 5M steps, `--rollout-steps 512`,
+     `--num-envs 8`, `--opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2"`,
+     `--bc-anchor-coef 0.05`, `--value-warmup-steps 200000`, `--opp-coef 0.1`,
+     pool seeded with the same M2 and M3.3-best checkpoints. **The BC corpus is
+     the only variable**, so 2c is a clean single-variable A/B against M7 rather
+     than a confounded comparison. Checkpoints → `models/ppo/checkpoints/m9p2c/`.
+
+     (Had 2a gone the other way, 2c would have warm-started from the same mixed
+     BC as M7 and been a seed replication of it — worth knowing for pipeline
+     variance, worthless as a test of the hypothesis.)
      - Follow M5.5 anchored PPO recipe: BC warm-start, 5M-step fine-tune with mixed opponents (selfplay/damagefirst/random), pool seeded with M2 + M5.5.
      - Bot evals (**sizes revised by Phase 1**): 20-checkpoint sweep vs Random at 500 battles each (~19 s/checkpoint — the old 150 was ±7pp and could not rank the sweep), then confirmations at **2,000 vs Random and 2,000 vs DamageFirst** on the top candidates (~75 s each, raw policy).
      - Pre-register (**revised by Phase 1**): if this checkpoint beats the M5.5 baseline by **≥+3pp vs Random at n=2,000/arm with the 95% CI on the difference excluding 0**, it's the Phase 3 ladder candidate; else use M5.5. Report DamageFirst alongside but do not gate on a ±2pp DamageFirst bar — that needs 4,948 games/arm. Raw-policy evals cost ~75 s per 2,000 battles, so run the full n.
@@ -1898,7 +1937,7 @@ inconclusive = CI includes 0; regresses = difference ≤−10pp with CI excludin
 | Phase | Criterion | Pass | Fail | Status |
 |---|---|---|---|---|
 | 1 | Methodology v2 written + instrument capable of the Phase 3 design | Runbook + analysis tool + arm-labelled per-battle log | Doc incomplete | ✅ 2026-07-31 |
-| 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | Optional |
+| 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | ✅ 2026-07-31 — **+5.6pp R / +4.6pp DF at n=5,000, both CIs excluding 0** |
 | 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | ❌ closed — archive exhausted | Closed |
 | 2c | Fine-tune on expanded corpus beats M5.5 | ≥+3pp vs Random at n=2,000/arm, CI on the difference excluding 0 | <+3pp or regression | Gate |
 | 3a | Paired ladder A/B run on two fresh accounts | ≥350 games/arm, arms alternated within sessions | Under-powered or unpaired | Protocol |

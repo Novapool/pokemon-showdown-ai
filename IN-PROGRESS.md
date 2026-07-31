@@ -18,8 +18,23 @@ Last updated: 2026-07-31
 | More gen 1 human data can be scraped | ❌ M9 Phase 2b — archive exhausted, we hold ~all of it |
 | Unrated tour games are an untapped pool | ❌ already in training, and 74% of it |
 
-**(c) opponent-pool / data distribution is the last untested hypothesis from the
-M8 thesis** — deprioritized on reasoning, never on evidence.
+**(c) opponent-pool / data distribution was the last untested hypothesis from
+the M8 thesis — and as of 2026-07-31 it is the first one to come back
+POSITIVE.** M9 Phase 2a trained a BC checkpoint on gen1randombattle replays
+only, against the mixed gen1ou+randbats BC that every checkpoint from M5.5
+through M7 was built on. Identical recipe, identical schema, only the corpus
+differs. At n=5,000 per arm:
+
+| | randbats-only BC | mixed BC | difference (95% CI) |
+|---|---|---|---|
+| vs Random | **39.5%** | 33.9% | **+5.6pp [+3.7, +7.5]** |
+| vs DamageFirst | **33.2%** | 28.6% | **+4.6pp [+2.8, +6.4]** |
+| randbats val acc | **54.3%** | 52.7% | +1.6pp (n=60,766) |
+
+Both CIs exclude 0. **The gen1ou half of the BC corpus was diluting
+gen1randombattle play, not enriching it** — the opposite of the 2026-07-16
+project decision that put it there. Note this reverses no measurement; the
+mixed-corpus choice was never A/B'd, it was assumed.
 
 **The blocking problem was measurement, not modeling — and M9 Phase 1 has now
 fixed it (✅ 2026-07-31).** Three consecutive inconclusive ladder readings, and
@@ -76,15 +91,33 @@ Delivered:
    s/battle for tuned MCTS — so **n=2,000/arm raw-policy costs 75 seconds** and
    the new gate is **≥+3pp vs Random at n=2,000/arm, CI excluding 0**.
 
-**Phase 2: Data/Distribution Hypothesis Test** (12–20 hours, subset as time permits)
-- 2a: Randbats-only BC checkpoint; test vs mixed-format BC on bot evals
-- 2b: Backfill gen1randombattle replays (scraper → adapter, ≥50k games total)
-- 2c: Fine-tune best BC via M5.5 anchored PPO recipe (5M steps on home box)
-- 2d (optional): Opp-pool saturation check — train with human-sampler opponents (`--opponent-mix "human_randbats=0.7,..."`)
+**Phase 2: Data/Distribution Hypothesis Test**
+- **2a: ✅ COMPLETE 2026-07-31 — POSITIVE.** Randbats-only BC beats the mixed
+  BC by +5.6pp vs Random and +4.6pp vs DamageFirst at n=5,000/arm, both CIs
+  excluding 0 (table under "Where We Stand"). Format alignment is real.
+  Checkpoint: `models/checkpoints/bc_mlp_gen1_v3_rb5.pt` (v3 schema, 5 epochs,
+  1.10M records/epoch, 201 s on the Mac). Raw counts:
+  `models/checkpoints/m9p2a_ab_results.txt`; runner `run_m9p2a_ab.sh`.
+- **2b: ❌ CLOSED 2026-07-31** — gen 1 replay archive exhausted, see Next Steps.
+- **2c: 🟡 RUNNING (launched 2026-07-31 18:02 local, home box, ~4 h).**
+  Warm-starts 2a's randbats-only BC into the *exact* M5.5/M7 anchored-PPO
+  recipe — same 5M steps, same `selfplay=0.5,damagefirst=0.3,random=0.2` mix,
+  same `--bc-anchor-coef 0.05`, same 200k value warmup, same M2 + M3.3-best
+  pool seeds. **The only variable versus M7's own v3 run is which corpus the BC
+  saw**, which makes 2c a clean single-variable test of the distribution
+  hypothesis rather than the M7 replication it would have been had 2a gone the
+  other way. Checkpoints → `models/ppo/checkpoints/m9p2c/`.
+- 2d (optional, now lower priority): opp-pool saturation via human-sampler
+  opponents. 2a already produced positive evidence for constraint (c) on the
+  *data* leg; 2d tests the *opponent* leg.
 - **Gate (revised by Phase 1):** Phase 2 candidate beats the M5.5 baseline by
   **≥+3pp vs Random at n=2,000/arm with the 95% CI on the difference excluding
   0**, OR use M5.5 for Phase 3. Report DamageFirst alongside; do not gate on a
-  ±2pp DamageFirst bar (needs ~4,948/arm).
+  ±2pp DamageFirst bar (needs ~4,948/arm). **Both baselines (M5.5 and M7) are
+  re-measured at n=2,000 rather than quoted from their historical n=150/200/500
+  readings** — comparing a fresh n=2,000 number against an old n=200 one is the
+  defect Phase 1 exists to remove. Runner:
+  `models/ppo/checkpoints/m9p2c/run_confirm.sh`.
 
 **Phase 3: Ladder Validation (Methodology v2)** (~2 days ladder, both arms)
 - **Paired concurrent A/B**: M7 control and Phase 2 candidate on **two fresh
@@ -226,13 +259,43 @@ Delivered:
    For contrast, `novapool` now reads 143W/363L over **506 games** (lifetime raw
    28.3%, GXE 32.9) spanning M6–M8 — the contamination that makes it unusable as
    a Phase 3 arm. The M7-era subset (30.5%, n=387) is the control prior.
-3. **Identify the Phase 2 subset** — 2c is mandatory, **2b is closed** (archive
-   exhausted), 2a/2d valuable but time-dependent. Recommendation: **2a then 2c**
-   — 2a is ~3 h and directly tests the format-alignment leg of the distribution
-   hypothesis, and its output (a randbats-only BC checkpoint) is the natural
-   warm-start for 2c.
-4. **Home-box readiness** — verify preflight for the 5M PPO run (already
-   validated end-to-end 2026-07-29)
+3. **✅ DONE 2026-07-31 — the 2a-then-2c path was run, and 2a came back
+   positive.** 2a cost ~25 min end to end, not the estimated 3 h (BC training
+   201 s; four n=5,000 evals ~13 min).
+
+   **Why 2a mattered more than its size suggests.** Had randbats-only BC lost,
+   2c would have warm-started from the same mixed BC as M7 and been a
+   seed-replication of the M7 run — informative about pipeline variance,
+   useless as a test of the distribution hypothesis. 2a is what gives 2c a
+   variable to test.
+
+   **New tool: `scripts/bot_eval_ab.py`** — the bot-eval counterpart to
+   `ladder_analysis.py`, importing its Wilson/Newcombe implementations. Reports
+   arms as a *difference with a CI*, which is what the methodology doc requires
+   and what no bot-eval A/B in this project had ever done.
+
+   **Methodology refinement found while running 2a, worth carrying forward:
+   the required n depends on the baseline win rate, and the doc's standing
+   n=2,000 was derived at p=0.93.** BC checkpoints sit near p=0.35–0.45, where
+   binomial variance is at its maximum and n=2,000 resolves only ~±4.5pp. At
+   p=0.42 detecting +3pp needs **4,286** games/arm, versus 906 at p=0.93. 2a
+   therefore ran at n=5,000 (~3 min/arm). Rule of thumb: **n=2,000 is right for
+   strong agents near the ceiling; mid-range agents need 5,000.**
+4. **✅ DONE 2026-07-31 — home box preflight green and 2c launched.**
+   `device=cuda` (RTX 3080), node v22.20.0, `dist/` current, warm-start and
+   KL-anchor both confirmed in the log header. Throughput ~21k steps/min ⇒ 5M
+   steps ≈ 4 h.
+
+   **Preflight initially FAILED and the cause is worth recording:** the home
+   box's working tree was dirty with six untracked files from earlier sessions
+   (five backfill/collection logs plus
+   `ppo_v3_df_valft_outcome_valft.json`), so it refused to pull and would have
+   run stale code against stale weights. The logs were **moved, not deleted**,
+   to `logs/session-archive-2026-07/` (gitignored). The JSON was the M8 Phase 2
+   run-2 metadata whose sibling on the Mac *is* tracked — it has now been
+   committed, so the convention is consistent again. **Leaving stray files in
+   the home-box tree silently blocks every future remote job**; clean up at the
+   end of a remote session.
 
 Collection ran on the MacBook in ~35 min (2000 games, 66,459 decisions, 84
 shards, 6 workers) — data clean, obs finite at 1032 dims, seats balanced.

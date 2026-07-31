@@ -141,6 +141,60 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 
 ---
 
+## M9 Phase 2 — data/distribution runbook
+
+**Train a format-aligned BC checkpoint** (2a). The only change from the M5.5/M7
+BC recipe is `--formats`; everything else is left at its default on purpose so
+the comparison has exactly one variable. ~3.5 min on the Mac:
+
+```bash
+python3 models/bc_pretrain_mlp.py --epochs 5 --obs-v3 \
+  --formats gen1randombattle --out bc_mlp_gen1_v3_rb5.pt
+```
+
+**A/B two checkpoints on bot evals.** Always report the *difference* with a CI:
+
+```bash
+bash models/checkpoints/run_m9p2a_ab.sh          # 4 evals at n=5000, ~13 min
+python3 scripts/bot_eval_ab.py \
+  --arm bc-mixed=1697/5000 --arm bc-rb5=1977/5000 --gate 3
+```
+
+Pick n from the arms' actual win rate, not habit — `--power --baseline-p 0.42`
+shows a mid-range agent needs ~4,300/arm to resolve +3pp, against 906 near
+p=0.93. See `docs/EVALUATION-METHODOLOGY.md`.
+
+**Fine-tune it** (2c, home box, ~4 h on the RTX 3080). Push first, then
+preflight; the run is M7's recipe with only the warm-start swapped:
+
+```bash
+git push && ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-preflight.sh"'
+rsync -a models/checkpoints/bc_mlp_gen1_v3_rb5.pt homebox:Projects/pokemon-showdown-ai/models/checkpoints/
+rsync -a models/ppo/checkpoints/v3/ppo_step_0_seed_*.pt \
+  homebox:Projects/pokemon-showdown-ai/models/ppo/checkpoints/m9p2c/
+
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && tmux new -d -s m9p2c \
+  \".venv/bin/python models/ppo/train.py --obs-v3 --steps 5000000 \
+     --rollout-steps 512 --num-envs 8 --checkpoint-every 250000 \
+     --opponent-mix \\\"selfplay=0.5,damagefirst=0.3,random=0.2\\\" \
+     --checkpoint-dir models/ppo/checkpoints/m9p2c \
+     --pretrain-checkpoint models/checkpoints/bc_mlp_gen1_v3_rb5.pt \
+     --bc-anchor models/checkpoints/bc_mlp_gen1_v3_rb5.pt --bc-anchor-coef 0.05 \
+     --value-warmup-steps 200000 --opp-coef 0.1 2>&1 \
+   | tee models/ppo/checkpoints/m9p2c/train.log\""'
+```
+
+The BC checkpoint and the pool seeds are **tier 2** (not `*_final.pt`), so they
+do not travel with `git push` — rsync them or the run silently trains from
+scratch with an empty pool. Then sweep and confirm on the home box:
+
+```bash
+bash models/ppo/checkpoints/m9p2c/run_sweep.sh
+bash models/ppo/checkpoints/m9p2c/run_confirm.sh ppo_step_5000002_final.pt
+```
+
+---
+
 ## M8 Phase 2 — value-head targeting runbook
 
 Three steps, all on the M7 checkpoint
