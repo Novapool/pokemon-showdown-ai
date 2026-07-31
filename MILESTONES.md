@@ -1749,7 +1749,25 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
      - If randbats-only BC is weaker in-distribution but transfers better to ladder, format gap is real.
      - Effort: ~3 hours (reshard, train, eval).
 
-  2. **2b: Richer replay corpus** — Can we amplify the human-data signal?
+  2. **2b: Richer replay corpus** — ❌ **COMPLETE 2026-07-31, NEGATIVE RESULT.
+     There is no more gen 1 human data to scrape.** Both formats were mined to
+     the end: gen1ou ran to `history exhausted` at page 2029 (scanned 103,436,
+     downloaded **634**, skipped_existing 98,263) and randbats managed +1,387 at
+     10.4% yield before the remaining archive was shown to be far too thin to
+     fill a 30k cap. A full-archive census of gen1ou found **only 10,674
+     replays ≥1300 in existence (10.3%)**, against 34,462 rated <1300 and
+     **58,300 unrated (56.4%)** — and the corpus already held ~all of the ≥1300
+     tier. **Ceiling on gen 1 human data at ≥1300: ~32k replays total** (~10.7k
+     gen1ou + ~21.6k randbats). The sub-item below is retained for its
+     estimates, all of which proved optimistic; treat it as superseded.
+     **Successor task:** harvest the 58,300 unrated gen1ou replays, which are
+     the largest remaining pool and include high-level Smogon tour games. The
+     scraper always skips unrated entries, so this needs a new selection rule,
+     not a lower `--min-rating`. **Also relevant to any format decision:** a
+     replay-volume census put gen9randombattle at 1,873/day and gen9ou at
+     2,407/day versus gen1's 31–44/day (~45×) — gen 9 is where both the data and
+     the ladder traffic are, at the cost of rewriting the gen1-hardcoded
+     observation layer and discarding the M2→M8 lineage.
      - Run `scripts/scrape_replays.py --backfill --max-replays 50000` to top up gen1randombattle (current corpus: ~20k; backfill should add ~30k more high-Elo games).
      - Optionally: filter Metamon gen1ou replays to ≥1400 Elo only (current corpus is 10k rated ≥1300 + 55k mixed; higher Elo = higher data quality).
      - Adapter converts new logs to trajectory shards.

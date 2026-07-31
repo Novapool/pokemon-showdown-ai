@@ -51,19 +51,52 @@ Last updated: 2026-07-31
 
 ### Next Steps
 
-0. **🔄 RUNNING (started 2026-07-31): M9 Phase 2b replay backfill, now aimed at
-   `gen1ou`.** `scripts/scrape_replays.py --formats gen1ou=1300 --backfill
-   --max-replays 30000`, detached (`setsid nohup`), log
-   `~/Projects/pokemon-showdown-ai/gen1ou_backfill.log`. Python buffers stdout
-   to file — track by `find data/replays/gen1ou -name "*.log.gz" | wc -l` and
-   the `scrape_state.json` cursor, not the log. Early rate ~72 downloads/min at
-   **14.9% yield**; if it holds, ~5–6h to reach the 30k cap, which would roughly
-   **triple the ≥1300 gen1ou corpus (10,101 → ~34,000)**. Expect the rate to
-   *fall* as it pages into 2024–2020, where Metamon coverage is dense and most
-   hits will be `skipped_existing`; the current high yield reflects 2026, where
-   coverage is thin.
-   **The home box is now authoritative for BOTH `data/replays/gen1randombattle`
-   (21,583 logs) and `data/replays/gen1ou` (98,349+ logs, 396 MB)** — rsync back
+0. **✅ DONE 2026-07-31 — M9 Phase 2b (replay backfill) is COMPLETE, and the
+   answer is that there is no more gen 1 human data to get.** Both formats were
+   mined to the end and the scraping lever is now closed.
+
+   **`gen1ou`: archive fully exhausted.** `--formats gen1ou=1300 --backfill`
+   ran to `no more results (page 2029); history exhausted`:
+   `scanned=103,436 downloaded=634 skipped_existing=98,263 skipped_lowrated=4,539`
+   → corpus 98,349 → **98,983**. Only **634 new** replays; the Metamon bootstrap
+   already held 98,263 of the 103,436 replays that exist.
+
+   **Full-archive census of gen1ou (every replay Showdown has ever kept):**
+
+   | Rating band | Count | Share |
+   |---|---|---|
+   | ≥1300 | **10,674** | 10.3% |
+   | <1300 | 34,462 | 33.3% |
+   | unrated | **58,300** | 56.4% |
+   | **total** | **103,436** | |
+
+   **We now hold ~100% of the gen1ou ≥1300 archive.** Not "hard to get" — it
+   does not exist. Any future plan that assumes more gen1ou high-rated human
+   data can be scraped is wrong.
+
+   **`gen1randombattle`: stopped early, same conclusion.** +1,387 at 10.4% yield
+   (20,196 → 21,583), cursor 2018-04-05 → 2017-05-18. Filling a 30k cap would
+   have needed ~5,900 pages of archive that does not exist.
+
+   **Ceiling on gen 1 human data at the ≥1300 bar: ~32k replays total**
+   (~10.7k gen1ou + ~21.6k randbats). That is the whole pool.
+
+   **The one large untapped asset: the 58,300 unrated gen1ou replays** (56% of
+   the archive). Many are Smogon tour games — unrated but high-level, per
+   `models/bc_pretrain_mlp.py`'s docstring. The scraper *always* skips unrated
+   entries, so lowering `--min-rating` cannot reach them; they need a different
+   selection rule (tour-name heuristics, player-identity filtering, or accepting
+   unrated for gen1ou wholesale). **This is now the largest remaining source of
+   gen 1 human data and the natural successor to Phase 2b.**
+
+   **A projection made during this run was wrong and is corrected here:** early
+   yield of 14.9% was extrapolated to "~24,000 new replays, tripling the corpus."
+   Realized: 634. The failure mode was assuming partial overlap with the Metamon
+   corpus when overlap was near-total. Early-page yield on a backfill is not
+   predictive when an unfiltered bootstrap corpus is already present.
+
+   **The home box is authoritative for BOTH `data/replays/gen1randombattle`
+   (21,583 logs) and `data/replays/gen1ou` (98,983 logs, ~400 MB)** — rsync back
    before editing either on the Mac.
 
    **Why it was repointed (2026-07-31).** The randbats backfill ran ~1h and was
