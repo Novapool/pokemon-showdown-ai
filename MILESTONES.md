@@ -1939,10 +1939,19 @@ inconclusive = CI includes 0; regresses = difference ≤−10pp with CI excludin
 | 1 | Methodology v2 written + instrument capable of the Phase 3 design | Runbook + analysis tool + arm-labelled per-battle log | Doc incomplete | ✅ 2026-07-31 |
 | 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | ✅ 2026-07-31 — **+5.6pp R / +4.6pp DF at n=5,000, both CIs excluding 0** |
 | 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | ❌ closed — archive exhausted | Closed |
-| 2c | Fine-tune on expanded corpus beats M5.5 | ≥+3pp vs Random at n=2,000/arm, CI on the difference excluding 0 | <+3pp or regression | Gate |
+| 2c | Fine-tune beats M5.5 **and is not worse than M7** | ≥+3pp vs Random at n=2,000/arm, CI on the difference excluding 0, and not measurably below M7 | <+3pp, or below M7 with CI excluding 0 | Gate |
 | 3a | Paired ladder A/B run on two fresh accounts | ≥350 games/arm, arms alternated within sessions | Under-powered or unpaired | Protocol |
 | 3b | Phase 2 candidate ladders | Paired difference ≥+10pp, CI excluding 0 | ≤−10pp, CI excluding 0 (regression) | Gate |
 | 4 | Stopping decision made | Postmortem + recommendation written | Analysis incomplete | Deliverable |
+
+**Gate 2c was amended again on 2026-07-31, before any 2c result existed.** The
+Phase-1 rewrite fixed its sample size but left it scoring against **M5.5**,
+while Phase 3's control arm is **M7** — the stronger agent, and the shipping
+one. A candidate could therefore clear the gate against M5.5 while still losing
+to M7, and Phase 3 would spend ~2 days of ladder on an arm already known to be
+weaker than its own control. Both baselines are now measured at n=2,000 and the
+full decision table lives in `IN-PROGRESS.md` → Phase 2. Nothing was loosened:
+every arm is still judged on a difference with a CI.
 
 **Gates 2c/3a/3b were rewritten by Phase 1 (2026-07-31).** The originals were
 underpowered or measured the wrong quantity:

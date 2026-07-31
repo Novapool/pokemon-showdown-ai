@@ -118,6 +118,25 @@ Delivered:
   readings** — comparing a fresh n=2,000 number against an old n=200 one is the
   defect Phase 1 exists to remove. Runner:
   `models/ppo/checkpoints/m9p2c/run_confirm.sh`.
+- **⚠️ Defect in the pre-registered gate, recorded 2026-07-31 BEFORE the 2c
+  results existed: the gate scores against M5.5, but Phase 3's control arm is
+  M7.** Those are different agents, and M7 is the stronger one — it is the
+  shipping agent precisely because it beat M5.5 (93.0%/84.2% vs 90.6%/79.2%
+  under tuned MCTS). As written, the gate would pass a candidate that clears
+  M5.5 by +3pp while still losing to M7, and Phase 3 would then spend ~2 days
+  of ladder on an arm known in advance to be weaker than its own control.
+  **Both baselines are therefore measured, and the decision rule is fixed now
+  rather than after seeing the numbers:**
+
+  | 2c vs M5.5 | 2c vs M7 | Phase 3 candidate |
+  |---|---|---|
+  | ≥+3pp, CI excl. 0 | ≥0 (CI may include 0) | **2c** — gate met and not worse than control |
+  | ≥+3pp, CI excl. 0 | **<0, CI excl. 0** | **M7** — gate is met but the candidate is measurably worse than the control; laddering it would be spending two days to confirm a known regression |
+  | <+3pp or CI includes 0 | any | **M7** (not M5.5 — the milestone text says "use M5.5 for Phase 3", but M7 has been the shipping agent since M7 closed and is the correct control) |
+
+  This changes no measurement and is not a loosening — every arm is still
+  judged at n=2,000 with a CI. It closes a hole where the literal gate and the
+  Phase 3 design disagree about which agent is the incumbent.
 
 **Phase 3: Ladder Validation (Methodology v2)** (~2 days ladder, both arms)
 - **Paired concurrent A/B**: M7 control and Phase 2 candidate on **two fresh
