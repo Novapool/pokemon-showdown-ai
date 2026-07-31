@@ -20,7 +20,8 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 | File | Read when |
 |---|---|
 | `docs/DATA-INVENTORY.md` | **Read first before proposing any data-acquisition work.** What human data exists (the gen 1 archive is exhausted), what we hold, and what BC training actually consumes — vs what the manifest suggests |
-| `docs/LADDER-MEASUREMENT.md` | **Read first before quoting, comparing or gating on any ladder number.** Why GXE/Elo readings from M6–M8 don't support per-run conclusions, measured instrument noise, and required sample sizes |
+| `docs/EVALUATION-METHODOLOGY.md` | **Read first before running or gating on any evaluation, ladder or bot.** The protocol: required sample sizes, account/arm setup, `scripts/ladder_analysis.py`, reporting template |
+| `docs/LADDER-MEASUREMENT.md` | Why GXE/Elo readings from M6–M8 don't support per-run conclusions — the diagnosis behind the protocol above |
 | `docs/SETUP.md` | Setting up the repo, rebuilding after pulls |
 | `docs/MULTI-MACHINE.md` | **Read first when a file/checkpoint seems missing, or when a job needs the home machine.** Mac ↔ home-machine inventory, what syncs via git vs never, SSH/tmux recipes |
 

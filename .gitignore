@@ -95,5 +95,8 @@ data/replay_trajs/
 data/value_targets/
 models/transformer/checkpoints/m32/train.log
 
-# Showdown ladder-bot credentials (M6) — never commit
+# Showdown ladder-bot credentials (M6) — never commit.
+# M9 uses one account (and so one file) per A/B arm: showdown_login_m9p3ctl.txt
+# etc. See docs/EVALUATION-METHODOLOGY.md.
 showdown_login.txt
+showdown_login_*.txt

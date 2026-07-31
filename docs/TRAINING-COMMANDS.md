@@ -84,11 +84,19 @@ python models/evaluate.py --model MODEL --checkpoint PATH
 |---|---|---|
 | `--model` | Yes | Which model type: `q_learning`, `dqn`, `ppo`, or `transformer` |
 | `--checkpoint` | Yes | Path to the saved file (`.pkl` for Q-learning, `.pt` for the rest) |
-| `--battles N` | No (default 200) | How many test battles to run. More = more accurate win rate. |
+| `--battles N` | No (default 200) | How many test battles to run. **The default is far too small to compare two checkpoints** — see the note below. |
 | `--structured` | No | Evaluate a PPO checkpoint trained with `train.py --structured` (M2 verification). |
 | `--num-envs N` | No (default 8) | Parallel battle simulations. `1` = old serial behavior. |
 | `--device D` | No (default auto) | Force `cpu`/`mps`/`cuda` for ppo/transformer inference. |
 | `--opponent O` | No (default random) | `random` or `damagefirst` (max-base-power heuristic). |
+
+> **How many battles?** Raw-policy evals run at **~27 battles/s** (200 battles in
+> 7.4 s, 8 envs), so an A/B has no excuse for a small n: **use `--battles 2000`
+> per arm (~75 s)**, which resolves a +3pp difference vs Random. Tuned MCTS runs
+> at ~4.5 s/battle — **1,000/arm (~75 min)** resolves ~+4pp. At the old default of
+> 200, the 95% CI is ±3.6pp vs Random and ±5.1pp vs DamageFirst, so a +3pp gate
+> at n=200 fails ~2/3 of the time even when the candidate is genuinely better.
+> Full tables and derivations: `docs/EVALUATION-METHODOLOGY.md` Part 2.
 
 **Examples:**
 ```bash
@@ -207,18 +215,32 @@ the M7 checkpoint carries into the Phase 4 ladder run.
 
 ## Running the ladder bot (live official server)
 
-> ⚠️ **Read `docs/LADDER-MEASUREMENT.md` before interpreting anything this
-> produces.** GXE from a shared account is not a per-run measurement, the same
-> checkpoint has swung 42% → 27% raw between runs, and resolving a +10pp effect
-> needs ~350 games per arm. Three milestones drew conclusions these numbers
-> could not support.
+> ⚠️ **Follow `docs/EVALUATION-METHODOLOGY.md`.** GXE from a shared account is
+> not a per-run measurement, n=100 gives a ±8.8pp CI, and resolving a +10pp
+> effect needs ~350 games per arm. Three milestones drew conclusions their
+> numbers could not support (`docs/LADDER-MEASUREMENT.md` for why).
 
 `tools/ladder-bot/ladder-bot.js` connects to the real Showdown ladder
 (`wss://sim3.psim.us/showdown/websocket`) and plays rated games:
 
 ```bash
-node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
-  --checkpoint <path/to/checkpoint.pt> --battles <N> --mcts
+node tools/ladder-bot/ladder-bot.js \
+  --login-file config/showdown_login_<arm>.txt \
+  --checkpoint <path/to/checkpoint.pt> \
+  --run-id <arm> --battles <N> --mcts
+```
+
+**`--run-id` is mandatory** — it labels the arm in
+`data/replays/self_ladder/ladder_results.csv` and also makes the run resumable
+(`--battles` is the absolute target; re-run the identical command to continue).
+One fresh account per arm; never reuse `novapool`.
+
+Analyse with the script, never the account JSON:
+
+```bash
+python3 scripts/ladder_analysis.py --run <arm>              # one arm
+python3 scripts/ladder_analysis.py --arm <ctl> --arm <cand> # paired difference
+python3 scripts/ladder_analysis.py --power                  # sample sizes
 ```
 
 **Have the user run this one themselves, not Claude.** (It *does* have websocket

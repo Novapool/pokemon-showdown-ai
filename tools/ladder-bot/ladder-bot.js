@@ -170,6 +170,18 @@ class InferServer {
 // One battle room
 // ---------------------------------------------------------------------------
 
+// Per-battle result schema. `run_id` labels the arm of an A/B (M9 Phase 3
+// convention: always pass --run-id), `opp_rating`/`own_rating` are the
+// pre-battle ladder Elos. Analysed by scripts/ladder_analysis.py — never read a
+// per-run win rate off the account JSON (see docs/LADDER-MEASUREMENT.md).
+const CSV_HEADER = 'timestamp,run_id,account,checkpoint,room,opponent,' +
+	'opp_rating,own_rating,rated,result,decisions,max_latency_ms';
+
+/** Keep a value inside one unquoted CSV cell (usernames are user-controlled). */
+function csvField(value) {
+	return String(value).replace(/[,\r\n"]/g, '');
+}
+
 class BattleRoom {
 	constructor(roomid, bot) {
 		this.roomid = roomid;
@@ -180,6 +192,12 @@ class BattleRoom {
 		this.lines = [];           // full log for saving
 		this.rated = false;
 		this.opponent = '';
+		// Pre-battle ladder ratings from the |player| lines. Only rated battles
+		// carry them, and they are the ONLY per-battle record of who we faced —
+		// M9 Phase 3 needs per-arm mean opponent Elo to show both arms met the
+		// same pool. See docs/EVALUATION-METHODOLOGY.md.
+		this.oppRating = null;
+		this.ownRating = null;
 		this.done = false;
 		this.result = null;        // 'win' | 'loss' | 'tie'
 		this.decisions = 0;
@@ -195,8 +213,15 @@ class BattleRoom {
 		const type = parts[1] ?? '';
 
 		if (type === 'player' && parts[2] && parts[3]) {
-			if (toID(parts[3]) === toID(this.bot.username)) this.seat = parts[2];
-			else this.opponent = parts[3];
+			// |player|pN|username|avatar|rating — rating present on rated games only.
+			const rating = parseInt(parts[5] ?? '');
+			if (toID(parts[3]) === toID(this.bot.username)) {
+				this.seat = parts[2];
+				if (Number.isFinite(rating)) this.ownRating = rating;
+			} else {
+				this.opponent = parts[3];
+				if (Number.isFinite(rating)) this.oppRating = rating;
+			}
 		} else if (type === 'rated') {
 			this.rated = true;
 		} else if (type === 'turn') {
@@ -308,11 +333,29 @@ class BattleRoom {
 		fs.writeFileSync(file, zlib.gzipSync(this.lines.join('\n') + '\n'));
 		const csv = path.join(saveDir, 'ladder_results.csv');
 		if (!fs.existsSync(csv)) {
-			fs.writeFileSync(csv, 'timestamp,room,opponent,rated,result,decisions,max_latency_ms\n');
+			fs.writeFileSync(csv, CSV_HEADER + '\n');
+		} else {
+			// M9 added run_id/account/checkpoint/opp_rating/own_rating. Appending
+			// the wider row to a pre-M9 file would silently corrupt it, so retire
+			// the old log under a dated name and start a clean one. The old file
+			// stays readable by scripts/ladder_analysis.py.
+			const existing = fs.readFileSync(csv, 'utf8').split('\n', 1)[0];
+			if (existing !== CSV_HEADER) {
+				const retired = path.join(saveDir, 'ladder_results.pre-m9.csv');
+				if (!fs.existsSync(retired)) fs.renameSync(csv, retired);
+				else fs.appendFileSync(retired, fs.readFileSync(csv, 'utf8').split('\n').slice(1).join('\n'));
+				fs.writeFileSync(csv, CSV_HEADER + '\n');
+				console.log(`ladder_results.csv used the pre-M9 schema; retired it to ${retired}`);
+			}
 		}
 		fs.appendFileSync(csv, [
-			new Date().toISOString(), this.roomid, this.opponent, this.rated ? 1 : 0,
-			this.result, this.decisions, this.maxLatencyMs,
+			new Date().toISOString(),
+			csvField(this.bot.args.runId ?? ''),
+			csvField(this.bot.username),
+			csvField(this.bot.args.checkpoint ? path.basename(this.bot.args.checkpoint) : ''),
+			this.roomid, csvField(this.opponent),
+			this.oppRating ?? '', this.ownRating ?? '',
+			this.rated ? 1 : 0, this.result, this.decisions, this.maxLatencyMs,
 		].join(',') + '\n');
 	}
 }
@@ -636,7 +679,15 @@ async function main() {
 	await bot.start();
 }
 
-main().catch(err => {
-	console.error(err);
-	process.exit(1);
-});
+// Guarded so test/tools/ladder-results.test.js can require the result-logging
+// pieces without connecting to a server.
+if (require.main === module) {
+	main().catch(err => {
+		console.error(err);
+		process.exit(1);
+	});
+}
+
+exports.BattleRoom = BattleRoom;
+exports.CSV_HEADER = CSV_HEADER;
+exports.csvField = csvField;

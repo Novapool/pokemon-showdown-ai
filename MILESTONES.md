@@ -1724,7 +1724,31 @@ Depends on result:
 
 ### M9 Phases
 
-**Phase 1 (Evaluation Methodology v2):** Fix ladder measurement
+**Phase 1 (Evaluation Methodology v2):** Fix ladder measurement — ✅ **COMPLETE
+2026-07-31.** Delivered `docs/EVALUATION-METHODOLOGY.md` (protocol, power tables,
+runbook, reporting template), `scripts/ladder_analysis.py` (Wilson/Newcombe
+intervals, session segmentation, heterogeneity test, power tables), and the
+instrumentation the Phase 3 paired design requires — `ladder_results.csv` now
+carries `run_id`/`account`/`checkpoint`/`opp_rating`/`own_rating`, covered by
+`test/tools/ladder-results.test.js` (5 tests).
+
+**Three findings changed the plan:**
+
+1. **There is no measurable ladder drift.** Session heterogeneity across the five
+   M7-era sessions is `chi2=4.85, df=4, p=0.303, phi=1.21` — consistent with pure
+   binomial sampling. The 42%→27% swing was sample size (±13pp CI at n=50), not
+   drift. The paired design's stated justification does not hold; keep it (free,
+   equalises the opponent pool) but expect no reduction in required n.
+2. **The 7/23 record was incomplete.** Two back-to-back 50-game sessions ran that
+   day on the same checkpoint — **24.0%** and **42.0%**. Only the 42% was
+   recorded, where it read as progress. A selection effect, not just noise.
+3. **A well-powered M7 ladder baseline already existed in the logs:** pooling all
+   387 M7-era rated games gives **30.5%, 95% CI [26.1, 35.3]** — already at the
+   n≈350 target. Phase 1's planned replication ladder run is therefore
+   unnecessary as a *discovery* task; the fresh-account control arm in Phase 3
+   covers the design-validation purpose.
+
+**No replication ladder run was needed. Phase 3's cost is unchanged.**
 
 - **Goal:** Establish reliable ladder-strength evaluation so future milestones can trust their results.
 - **Scope:**
@@ -1783,8 +1807,8 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
   3. **2c: BC fine-tune on richer data** — Mandatory. Does richer data lift the ceiling?
      - Train a new BC checkpoint on the expanded corpus (all shards from 2b).
      - Follow M5.5 anchored PPO recipe: BC warm-start, 5M-step fine-tune with mixed opponents (selfplay/damagefirst/random), pool seeded with M2 + M5.5.
-     - Bot evals: 20-checkpoint sweep vs Random (150 battles each), confirmations at 500 vs Random / 200 vs DamageFirst on top candidates.
-     - Pre-register: if this checkpoint beats M5.5 baseline by ≥+2pp on both opponents at n=500, it's the Phase 3 ladder candidate; else use M5.5.
+     - Bot evals (**sizes revised by Phase 1**): 20-checkpoint sweep vs Random at 500 battles each (~19 s/checkpoint — the old 150 was ±7pp and could not rank the sweep), then confirmations at **2,000 vs Random and 2,000 vs DamageFirst** on the top candidates (~75 s each, raw policy).
+     - Pre-register (**revised by Phase 1**): if this checkpoint beats the M5.5 baseline by **≥+3pp vs Random at n=2,000/arm with the 95% CI on the difference excluding 0**, it's the Phase 3 ladder candidate; else use M5.5. Report DamageFirst alongside but do not gate on a ±2pp DamageFirst bar — that needs 4,948 games/arm. Raw-policy evals cost ~75 s per 2,000 battles, so run the full n.
      - Effort: ~8 hours training (home box, 8 envs, ~3 hours wall) + 2 hours eval.
 
   4. **2d: Opponent-pool saturation check** — Is diversity in training opponents the missing lever?
@@ -1844,6 +1868,11 @@ ladder drift. GXE only becomes meaningful again on fresh accounts compared at
 
 Context: M2 → M7 achieved 51% → 93% bot-eval improvement (+42pp) but only 23.9% → 28.2% GXE (+4.3pp). The 65pp gap between bot eval and ladder suggests format intrinsic variance or opponent-pool saturation may be the ceiling, not policy quality.
 
+**Phase 1 note (2026-07-31):** the GXE thresholds below are the pre-Phase-1
+framing and are retained only for their reasoning. Read them as the paired-
+difference gate from Phase 3: succeeds = difference ≥+10pp with CI excluding 0;
+inconclusive = CI includes 0; regresses = difference ≤−10pp with CI excluding 0.
+
 - **Scope:**
 
   1. **If Phase 3 succeeds (GXE ≥35%):**
@@ -1868,13 +1897,27 @@ Context: M2 → M7 achieved 51% → 93% bot-eval improvement (+42pp) but only 23
 
 | Phase | Criterion | Pass | Fail | Status |
 |---|---|---|---|---|
-| 1 | Methodology v2 written + replication protocol | Runbook + 1 replication test done | Doc incomplete | ⏳ |
+| 1 | Methodology v2 written + instrument capable of the Phase 3 design | Runbook + analysis tool + arm-labelled per-battle log | Doc incomplete | ✅ 2026-07-31 |
 | 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | Optional |
-| 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | <50k or adapter fails | Optional |
-| 2c | Fine-tune on expanded corpus beats M5.5 | ≥+2pp both opponents at n=500 | <+2pp or regression | Gate |
-| 3a | Replication baseline M7 on m9 account | Variance <±5pp GXE | Variance >±5pp | Test |
-| 3b | Phase 2 candidate ladders | GXE ≥32% (win), or 25–32% (inconclusive) | <25% (regression) | Gate |
+| 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | ❌ closed — archive exhausted | Closed |
+| 2c | Fine-tune on expanded corpus beats M5.5 | ≥+3pp vs Random at n=2,000/arm, CI on the difference excluding 0 | <+3pp or regression | Gate |
+| 3a | Paired ladder A/B run on two fresh accounts | ≥350 games/arm, arms alternated within sessions | Under-powered or unpaired | Protocol |
+| 3b | Phase 2 candidate ladders | Paired difference ≥+10pp, CI excluding 0 | ≤−10pp, CI excluding 0 (regression) | Gate |
 | 4 | Stopping decision made | Postmortem + recommendation written | Analysis incomplete | Deliverable |
+
+**Gates 2c/3a/3b were rewritten by Phase 1 (2026-07-31).** The originals were
+underpowered or measured the wrong quantity:
+- 2c's "≥+2pp at n=500" needs **2,213 games/arm** vs Random and **4,948** vs
+  DamageFirst to detect reliably — the same defect as M8's "+3pp at n=200".
+  Raw-policy evals run at ~27 battles/s (200 battles in 7.4 s), so n=2,000/arm
+  costs ~75 seconds; there was never a reason to run 500.
+- 3a's "variance <±5pp GXE" is not measurable: GXE is account-cumulative and
+  moved 32.9% → 32.9% over an entire 100-game run.
+- 3b's "GXE ≥32%" compares a fresh account at n≈350 against a 506-game account —
+  exactly the defect Phase 1 exists to fix. The endpoint is the paired
+  difference in raw win rate.
+
+See `docs/EVALUATION-METHODOLOGY.md` for the derivations and the runbook.
 
 ---
 

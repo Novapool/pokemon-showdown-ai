@@ -21,17 +21,20 @@ Last updated: 2026-07-31
 **(c) opponent-pool / data distribution is the last untested hypothesis from the
 M8 thesis** — deprioritized on reasoning, never on evidence.
 
-**The blocking problem is measurement, not modeling.** Three consecutive
-inconclusive ladder readings, and the same checkpoint swung 42% → 27% between
-runs. Every conclusion M6–M8 drew from ladder numbers rests on statistics that
-could not support them. **M9 Phase 1 (evaluation methodology) gates everything
-else** — running another training experiment before it just buys a fourth
-inconclusive reading.
+**The blocking problem was measurement, not modeling — and M9 Phase 1 has now
+fixed it (✅ 2026-07-31).** Three consecutive inconclusive ladder readings, and
+the same checkpoint "swung" 42% → 27% between runs. The re-analysis shows that
+swing was **sample size, not drift** (±13pp CI at n=50; session heterogeneity
+`phi=1.21, p=0.303`), and that the 42% was **the better of two unreported 50-game
+sessions that day** (the other scored 24.0%). Pooling all 387 M7-era rated games
+gives the number no single run could see: **M7 = 30.5% on ladder, 95% CI
+[26.1, 35.3]**.
 
-**Ground-truth docs written this session — read these before re-proposing
-anything in the table above:**
+**Ground-truth docs — read these before re-proposing anything in the table above:**
+- `docs/EVALUATION-METHODOLOGY.md` — **the protocol.** Required sample sizes, the
+  runbook, the reporting template. Any result not produced this way doesn't count
 - `docs/DATA-INVENTORY.md` — what data exists, what we hold, what BC consumes
-- `docs/LADDER-MEASUREMENT.md` — why the ladder numbers don't mean what they looked like
+- `docs/LADDER-MEASUREMENT.md` — the diagnosis of what went wrong in M6–M8
 
 ---
 
@@ -41,18 +44,47 @@ anything in the table above:**
 
 ### M9 Phases (Pre-Registered Gates)
 
-**Phase 1: Evaluation Methodology v2** (4–6 hours + 1–2 ladder)
-- Write `docs/EVALUATION-METHODOLOGY.md`: per-run GXE isolation, replication protocol, required-sample-size table
-- Noise floor is already partly measured *for free*: same M7 checkpoint scored 42% (n=50) and 27% (n=100) — a 15pp swing at zero true effect. Design against that, not an assumed ±4–5pp. Do **not** benchmark a fresh account against the old account's 28.2%/32.9% — that repeats the defect this phase exists to fix.
-- Establish sample sizes per effect size (see Phase 3 power table)
-- **Gate:** Methodology specifies what we measure and with what precision
+**Phase 1: Evaluation Methodology v2 — ✅ COMPLETE 2026-07-31**
+
+Delivered:
+- `docs/EVALUATION-METHODOLOGY.md` — the protocol: three standing rules, required
+  sample sizes for ladder *and* bot evals, account/arm setup, run and analysis
+  commands, the reporting template, interpretation rules, checklist.
+- `scripts/ladder_analysis.py` — Wilson intervals, Newcombe CI on the paired
+  difference, session segmentation, chi-square heterogeneity, power tables.
+  Stdlib only. `--power` needs no data.
+- `tools/ladder-bot/ladder-bot.js` — `ladder_results.csv` now records
+  `run_id` (arm label), `account`, `checkpoint`, and pre-battle
+  `opp_rating`/`own_rating` from the `|player|` lines. Pre-M9 rows retire
+  automatically to `ladder_results.pre-m9.csv`. Covered by
+  `test/tools/ladder-results.test.js` (5 tests; tools suite 111 passing).
+
+**Findings that changed the plan:**
+1. **No measurable ladder drift.** `chi2=4.85, df=4, p=0.303, phi=1.21` across
+   the five M7-era sessions — pure binomial. The paired design's stated
+   justification ("cancels drift") is unsupported; keep it (free, equalises the
+   opponent pool) but it buys **no** reduction in required n.
+2. **The 7/23 record was incomplete.** Two back-to-back 50-game sessions, same
+   checkpoint: **24.0%** then **42.0%**. Only the 42% was written down.
+3. **A well-powered M7 baseline already existed in the logs: 30.5% (118/387),
+   95% CI [26.1, 35.3].** Already at the n≈350 target, so **the planned
+   replication ladder run was not needed** — Phase 3's fresh-account control arm
+   covers the design-validation purpose. Phase 1 cost ~0 ladder hours.
+4. **The Phase 2 bot-eval gate was underpowered too** and has been rewritten:
+   "+2pp at n=500" needs 2,213 games/arm vs Random and 4,948 vs DamageFirst.
+   Measured throughput is ~27 battles/s raw-policy (200 in 7.4 s) and ~4.5
+   s/battle for tuned MCTS — so **n=2,000/arm raw-policy costs 75 seconds** and
+   the new gate is **≥+3pp vs Random at n=2,000/arm, CI excluding 0**.
 
 **Phase 2: Data/Distribution Hypothesis Test** (12–20 hours, subset as time permits)
 - 2a: Randbats-only BC checkpoint; test vs mixed-format BC on bot evals
 - 2b: Backfill gen1randombattle replays (scraper → adapter, ≥50k games total)
 - 2c: Fine-tune best BC via M5.5 anchored PPO recipe (5M steps on home box)
 - 2d (optional): Opp-pool saturation check — train with human-sampler opponents (`--opponent-mix "human_randbats=0.7,..."`)
-- **Gate:** Phase 2 candidate beats M5.5 baseline by ≥+2pp on both bot opponents (n=500), OR use M5.5 for Phase 3
+- **Gate (revised by Phase 1):** Phase 2 candidate beats the M5.5 baseline by
+  **≥+3pp vs Random at n=2,000/arm with the 95% CI on the difference excluding
+  0**, OR use M5.5 for Phase 3. Report DamageFirst alongside; do not gate on a
+  ±2pp DamageFirst bar (needs ~4,948/arm).
 
 **Phase 3: Ladder Validation (Methodology v2)** (~2 days ladder, both arms)
 - **Paired concurrent A/B**: M7 control and Phase 2 candidate on **two fresh
@@ -183,10 +215,24 @@ anything in the table above:**
    tour games — unrated but high-level (noted in `models/bc_pretrain_mlp.py`'s
    docstring). The scraper *always* skips unrated entries, so they can only be
    harvested by a different selection rule, not by lowering `--min-rating`.
-1. **Approve M9 scope** — user sign-off on the four phases and pre-registered gates
-2. **Stage Phase 1** — write EVALUATION-METHODOLOGY.md (runbook for methodology v2), schedule replication baseline run on m9 ladder account
-3. **Identify Phase 2 subset** — prioritize which of 2a/2b/2c/2d to pursue (2c is mandatory; 2b is optional; 2a/2d valuable but time-dependent)
-4. **Home-box readiness** — verify preflight for 5M PPO run (already validated end-to-end 2026-07-29)
+1. **✅ DONE 2026-07-31 — M9 Phase 1 (evaluation methodology) is COMPLETE.**
+   See the Phase 1 block above. Doc + analysis script + instrumented result log,
+   with three gates rewritten. No ladder time was spent.
+2. **✅ DONE 2026-07-31 — Phase 3 ladder accounts registered.** `m9p3ctl` and
+   `m9p3cand` both verified against `pokemonshowdown.com/users/<name>.json`:
+   `"ratings":{}` on both, i.e. clean slates, which is the precondition the
+   paired design needs. Credentials in `config/showdown_login_m9p3ctl.txt` /
+   `..._m9p3cand.txt` (gitignored via `showdown_login_*.txt`).
+   For contrast, `novapool` now reads 143W/363L over **506 games** (lifetime raw
+   28.3%, GXE 32.9) spanning M6–M8 — the contamination that makes it unusable as
+   a Phase 3 arm. The M7-era subset (30.5%, n=387) is the control prior.
+3. **Identify the Phase 2 subset** — 2c is mandatory, **2b is closed** (archive
+   exhausted), 2a/2d valuable but time-dependent. Recommendation: **2a then 2c**
+   — 2a is ~3 h and directly tests the format-alignment leg of the distribution
+   hypothesis, and its output (a randbats-only BC checkpoint) is the natural
+   warm-start for 2c.
+4. **Home-box readiness** — verify preflight for the 5M PPO run (already
+   validated end-to-end 2026-07-29)
 
 Collection ran on the MacBook in ~35 min (2000 games, 66,459 decisions, 84
 shards, 6 workers) — data clean, obs finite at 1032 dims, seats balanced.

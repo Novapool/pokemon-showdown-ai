@@ -4,10 +4,12 @@
 
 Three milestones (M6, M7, M8) were graded on ladder statistics that could not
 support the conclusions drawn from them. This documents what went wrong so it
-isn't repeated. The *fix* — the protocol future runs should follow — is M9
-Phase 1's deliverable; this file is the diagnosis and the standing warnings.
+isn't repeated. **The fix — the protocol every run must now follow — is
+`docs/EVALUATION-METHODOLOGY.md` (M9 Phase 1, delivered 2026-07-31).** This file
+is the diagnosis; that one is what you actually do.
 
-Last verified: **2026-07-31**.
+Last verified: **2026-07-31** (Defect 3 revised after the M9 Phase 1
+re-analysis — see below).
 
 ---
 
@@ -46,7 +48,7 @@ opponents. A falling win rate at higher Elo can mean the ladder is working, not
 that the agent regressed. Any win-rate comparison across runs at different Elo
 needs the opponent-strength distribution reported alongside it.
 
-## Defect 3 — the instrument is far noisier than assumed
+## Defect 3 — the samples were far too small (revised 2026-07-31)
 
 **M8 Phase 4 ran the same M7 checkpoint as the 7/23 follow-up.** The model did
 not change. Results:
@@ -56,12 +58,31 @@ not change. Results:
 7/31 Phase 4   : 27% raw (n=100), Elo 1084.0   ← same checkpoint
 ```
 
-A **15pp swing and a 17-point Elo drop at zero true effect** (~1.8 SD). This
-retires the "monotonic 23.9 → 28.2 → 32.9 GXE trend" that was recorded on
-2026-07-23 as evidence of progress. It was ladder drift.
+A 15pp swing at zero true effect. This retires the "monotonic 23.9 → 28.2 → 32.9
+GXE trend" recorded on 2026-07-23 as evidence of progress.
 
-**Any design assuming ±4–5pp ladder noise is already falsified.** Use the
-measured swing.
+**Revision (M9 Phase 1):** this was originally written up as *ladder drift*. The
+re-analysis of the per-battle CSV says otherwise, and the correction matters
+because it changes what the fix has to be.
+
+- Session-level heterogeneity across the five M7-era sessions is
+  `chi2=4.85, df=4, p=0.303, phi=1.21` — **fully consistent with plain binomial
+  sampling.** There is no measurable extra drift term.
+- At n=50 the 95% CI is **±13pp wide by itself**. The swing needed no
+  explanation beyond sample size.
+- Pooling all 387 M7-era rated games gives **30.5%, 95% CI [26.1, 35.3]** — the
+  checkpoint's actual ladder strength, and a number no individual run could see.
+
+**Worse, the run history was misreported.** There were *two* 50-game sessions on
+7/23, back to back, same checkpoint: **24.0%** then **42.0%**. Only the 42% was
+recorded in the milestone, where it read as progress. The primary failure was a
+selection effect on top of an underpowered sample, not a noisy instrument.
+
+**Consequences:** any design assuming ±4–5pp noise at n≈100 is falsified (the
+real figure is ±8.8pp), but so is the assumption that a paired-concurrent design
+buys back sample size — there is no drift for it to cancel. Keep pairing (it is
+free and equalises the opponent pool); size the run for the effect regardless.
+See `docs/EVALUATION-METHODOLOGY.md` Part 1.
 
 ## Defect 4 — the gates were underpowered
 
@@ -85,7 +106,9 @@ evals instead.
 
 ## What a valid comparison looks like
 
-The design M9 Phase 3 adopts, and the shape any future ladder A/B should take:
+Summarised here; the operational version, with commands, is
+`docs/EVALUATION-METHODOLOGY.md`. The design M9 Phase 3 adopts, and the shape any
+future ladder A/B should take:
 
 1. **Two fresh accounts**, one per arm — never a shared or reused account.
 2. **Alternate arms within the same sessions**, so both face the same ladder pool
@@ -112,8 +135,10 @@ re-run bigger.
 - Account rating is read from `pokemonshowdown.com/users/<name>.json`
   (`elo`, `gxe`, `rpr`, `rprd`, `w`, `l`) — `ladder-bot.js` does not parse or
   record it, so capture it manually at run boundaries.
-- Per-battle results land in `data/replays/self_ladder/ladder_results.csv`
-  (`timestamp,room,opponent,rated,result,decisions,max_latency_ms`). This is the
-  only per-run record that isn't contaminated by account history — **prefer it
-  over the account JSON for per-run win rates**, filtering by timestamp and
-  `rated=1`.
+- Per-battle results land in `data/replays/self_ladder/ladder_results.csv`. This
+  is the only per-run record that isn't contaminated by account history —
+  **prefer it over the account JSON for per-run win rates.** Since M9 it also
+  carries `run_id` (the arm label), `account`, `checkpoint`, and the pre-battle
+  `opp_rating`/`own_rating`; the M6–M8 rows are retired to
+  `ladder_results.pre-m9.csv`. Analyse it with `scripts/ladder_analysis.py`
+  rather than by hand.
