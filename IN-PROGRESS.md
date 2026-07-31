@@ -51,23 +51,49 @@ Last updated: 2026-07-31
 
 ### Next Steps
 
-0. **🔄 RUNNING (started 2026-07-31): M9 Phase 2b randbats replay backfill on
-   the home box.** `scripts/scrape_replays.py --formats gen1randombattle=1300
-   --backfill --max-replays 30000`, detached (`setsid nohup`), log
-   `~/Projects/pokemon-showdown-ai/randbats_backfill.log` (Python buffers to
-   file — track progress by `find data/replays/gen1randombattle -type f | wc -l`
-   and the `scrape_state.json` cursor instead). Measured ~68 logs/min ≈
-   4,100/h → **~7h to the 30k cap.** Corpus + cursor + manifest were rsynced
-   Mac → home box first (20,196 logs, 81 MB) so the backfill resumes from the
-   existing 2018 cursor instead of re-paging the archive; **the home box is now
-   the authoritative copy of `data/replays/gen1randombattle` — rsync back before
-   editing it on the Mac.**
-   **Yield warning:** the cursor had already paged back 8 years. A 5-page census
-   found only **33 of 255 scanned replays clear the ≥1300 filter (~13%)**, with
-   51% unrated — old replays frequently have no rating recorded. So the earlier
-   scope note ("backfill should add ~30k more high-Elo games") is optimistic;
-   expect the run to scan ~230k entries to fill the cap, and possibly to exhaust
-   the archive first. Check the realized count before assuming the corpus grew.
+0. **🔄 RUNNING (started 2026-07-31): M9 Phase 2b replay backfill, now aimed at
+   `gen1ou`.** `scripts/scrape_replays.py --formats gen1ou=1300 --backfill
+   --max-replays 30000`, detached (`setsid nohup`), log
+   `~/Projects/pokemon-showdown-ai/gen1ou_backfill.log`. Python buffers stdout
+   to file — track by `find data/replays/gen1ou -name "*.log.gz" | wc -l` and
+   the `scrape_state.json` cursor, not the log. Early rate ~72 downloads/min at
+   **14.9% yield**; if it holds, ~5–6h to reach the 30k cap, which would roughly
+   **triple the ≥1300 gen1ou corpus (10,101 → ~34,000)**. Expect the rate to
+   *fall* as it pages into 2024–2020, where Metamon coverage is dense and most
+   hits will be `skipped_existing`; the current high yield reflects 2026, where
+   coverage is thin.
+   **The home box is now authoritative for BOTH `data/replays/gen1randombattle`
+   (21,583 logs) and `data/replays/gen1ou` (98,349+ logs, 396 MB)** — rsync back
+   before editing either on the Mac.
+
+   **Why it was repointed (2026-07-31).** The randbats backfill ran ~1h and was
+   stopped: **20,196 → 21,583 (+1,387) at 10.4% yield**, cursor 2018-04-05 →
+   2017-05-18. Extrapolating, filling a 30k cap would have needed ~5,900 pages ≈
+   two decades of archive that does not exist. **Scraping is retired as a way to
+   grow the randbats corpus** — that question is now answered empirically.
+
+   **Format-volume census (replay API, 2026-07-31, 50-replay page → rate):**
+   gen1randombattle 44/day, gen1ou 31/day, gen3rb 36/day, gen7rb 63/day,
+   gen8rb 37/day, gen2rb 8/day — versus **gen9randombattle 1,873/day and
+   gen9ou 2,407/day (~45×)**. Gen 9 is where the data and the ladder traffic
+   are, and its ladder activity is the only thing that would make M9 Phase 3's
+   ~350-games/arm power target cheap. **But it is not a pivot, it is a restart:**
+   `sim/tools/feature-extractor.ts` hard-codes `Dex.mod('gen1')` in 5 places plus
+   a 15-type table, a gen1 base-speed table and gen1 boost semantics, and gen 9
+   would add abilities, items, tera, weather/terrain and ~1000 species — while
+   every checkpoint M2→M8 and both replay corpora become worthless. Not
+   recommended now; recorded so the option is costed rather than re-litigated.
+
+   **Correction to a claim made earlier in this session:** gen1ou was described
+   as "5× more human data than randbats." That compared an unfiltered count to a
+   filtered one and is wrong. Of gen1ou's 98,349 replays only **10,101 are
+   ≥1300** (55,861 unrated, 32,387 rated <1300), whereas all 21,583 randbats logs
+   were scraped with the ≥1300 filter applied. At equal quality bar gen1ou had
+   *less* usable data, which is exactly why the backfill above matters.
+   **Untapped asset:** many of those 55,861 unrated gen1ou replays are Smogon
+   tour games — unrated but high-level (noted in `models/bc_pretrain_mlp.py`'s
+   docstring). The scraper *always* skips unrated entries, so they can only be
+   harvested by a different selection rule, not by lowering `--min-rating`.
 1. **Approve M9 scope** — user sign-off on the four phases and pre-registered gates
 2. **Stage Phase 1** — write EVALUATION-METHODOLOGY.md (runbook for methodology v2), schedule replication baseline run on m9 ladder account
 3. **Identify Phase 2 subset** — prioritize which of 2a/2b/2c/2d to pursue (2c is mandatory; 2b is optional; 2a/2d valuable but time-dependent)
