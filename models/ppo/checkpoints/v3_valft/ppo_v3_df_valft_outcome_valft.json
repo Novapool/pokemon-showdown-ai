@@ -1,0 +1,12 @@
+{
+  "base_checkpoint": "models/ppo/checkpoints/v3/ppo_step_5000002_final.pt",
+  "data_dir": "data/value_targets/m8_v3_df",
+  "target": "outcome",
+  "gamma": 0.99,
+  "epochs": 2,
+  "lr": 0.001,
+  "batch_size": 256,
+  "unfreeze_trunk": false,
+  "n_train": 51992,
+  "n_val": 5755
+}

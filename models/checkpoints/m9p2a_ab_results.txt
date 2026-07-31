@@ -1,0 +1,18 @@
+M9 Phase 2a BC A/B — 2026-07-31T21:58:17Z
+=== bc-mixed vs random (n=5000) ===
+Battles: 5000
+Win rate vs RandomPlayerAI: 0.34 (1697/5000)
+Opp-prediction top-1 accuracy: 0.212 (41208/194625 unmasked steps)
+=== bc-rb5 vs random (n=5000) ===
+Battles: 5000
+Win rate vs RandomPlayerAI: 0.40 (1977/5000)
+Opp-prediction top-1 accuracy: 0.241 (48045/199636 unmasked steps)
+=== bc-mixed vs damagefirst (n=5000) ===
+Battles: 5000
+Win rate vs DamageFirstAI: 0.29 (1429/5000)
+Opp-prediction top-1 accuracy: 0.217 (32065/147839 unmasked steps)
+=== bc-rb5 vs damagefirst (n=5000) ===
+Battles: 5000
+Win rate vs DamageFirstAI: 0.33 (1660/5000)
+Opp-prediction top-1 accuracy: 0.283 (41313/146008 unmasked steps)
+done — analyse with scripts/bot_eval_ab.py
