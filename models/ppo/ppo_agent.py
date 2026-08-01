@@ -1,11 +1,19 @@
 """
 ppo_agent.py — PPO Actor-Critic agent for Pokemon Showdown.
 
-Architecture:
-  Shared trunk: Linear(100, 128) → ReLU → Linear(128, 128) → ReLU
-  Policy head:  Linear(128, 9)  — outputs action logits
-  Value head:   Linear(128, 1)  — outputs state value scalar
-  Opp head:     Linear(128, 9)  — outputs opponent-action logits (M5 aux head)
+Architecture (H = hidden_size, default 128):
+  Shared trunk: Linear(obs_size, H) → ReLU → Linear(H, H) → ReLU
+  Policy head:  Linear(H, 9)  — outputs action logits
+  Value head:   Linear(H, 1)  — outputs state value scalar
+  Opp head:     Linear(H, 9)  — outputs opponent-action logits (M5 aux head)
+
+Parameter count is h**2 + (obs_size + 21)*h + 19; at the v3 obs_size=1032 that
+is 151,187 at H=128 and 801,299 at H=512. Note the input layer dominates (87%
+of params at H=128), so H mostly buys capacity right at the obs bottleneck.
+
+hidden_size is stored in _hparams, so load() reconstructs the right width from
+the checkpoint itself and checkpoints written before this knob existed (which
+carry no hidden_size key) fall back to the 128 default unchanged.
 """
 
 import warnings
@@ -31,6 +39,7 @@ class PPOAgent(nn.Module):
         self,
         obs_size: int = 100,
         n_actions: int = 9,
+        hidden_size: int = 128,
         lr: float = 3e-4,
         clip_eps: float = 0.2,
         value_coef: float = 0.5,
@@ -56,22 +65,22 @@ class PPOAgent(nn.Module):
 
         # Shared trunk
         self.trunk = nn.Sequential(
-            nn.Linear(obs_size, 128),
+            nn.Linear(obs_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(128, 128),
+            nn.Linear(hidden_size, hidden_size),
             nn.ReLU(),
         )
 
         # Policy head
-        self.policy_head = nn.Linear(128, n_actions)
+        self.policy_head = nn.Linear(hidden_size, n_actions)
 
         # Value head
-        self.value_head = nn.Linear(128, 1)
+        self.value_head = nn.Linear(hidden_size, 1)
 
         # Opponent-prediction head (M5): predicts the opponent's simultaneous
         # action in the opponent's own 9-way action frame. Off the same shared
         # trunk as policy/value.
-        self.opp_head = nn.Linear(128, n_actions)
+        self.opp_head = nn.Linear(hidden_size, n_actions)
         # Overwritten by load() to False when the loaded checkpoint predates
         # the opp head (M5) and the head above is a fresh init, not trained.
         self.has_opp_head = True
@@ -98,6 +107,7 @@ class PPOAgent(nn.Module):
         self._hparams = dict(
             obs_size=obs_size,
             n_actions=n_actions,
+            hidden_size=hidden_size,
             lr=lr,
             clip_eps=clip_eps,
             value_coef=value_coef,

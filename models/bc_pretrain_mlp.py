@@ -213,6 +213,9 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--hidden-size", type=int, default=128,
+                        help="trunk width. A PPO run warm-started from this "
+                             "checkpoint inherits it, so the two must match.")
     parser.add_argument("--opp-bc-coef", type=float, default=0.1,
                         help="weight of the opp-head CE term (M5 convention)")
     parser.add_argument("--value-bc-coef", type=float, default=0.5,
@@ -242,7 +245,8 @@ def main() -> None:
         print(f"dataset[{fmt}]: {len(ds.files)} train shards, "
               f"{len(ds.val_files)} val shards, weight {weights[i]:g}")
 
-    agent = PPOAgent(obs_size=obs_size, device=args.device)
+    agent = PPOAgent(obs_size=obs_size, hidden_size=args.hidden_size,
+                     device=args.device)
     device = agent.device
     print(f"obs schema: {'v3' if args.obs_v3 else 'v2'} (obs_size={obs_size}) | traj-dir: {traj_dir}")
     # BC's own optimizer (policy/opp/trunk only) — agent.optimizer stays the
