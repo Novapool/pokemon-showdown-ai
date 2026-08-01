@@ -162,6 +162,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help=(
+            "Adam learning rate. Default None keeps whatever the agent was "
+            "built or loaded with (3e-4 for every run M2-M9), so omitting this "
+            "reproduces the historical recipe exactly. Set it to sweep LR — "
+            "needed when changing --hidden-size, since an LR tuned at one "
+            "width need not hold at another, and a null result at a fixed LR "
+            "cannot distinguish capacity from step-size."
+        ),
+    )
+    parser.add_argument(
         "--opp-coef",
         type=float,
         default=0.1,
@@ -421,6 +434,19 @@ def main() -> None:
             f"with bc_pretrain_mlp.py --hidden-size {args.hidden_size}."
         )
 
+    # Must come AFTER any PPOAgent.load() above: load_state_dict on the
+    # optimizer restores the checkpoint's param_groups, lr included, so an lr
+    # passed to the constructor would be silently reverted on every warm-start
+    # and --resume. Overriding the live param_groups here is the only point
+    # that survives both paths.
+    effective_lr = agent.optimizer.param_groups[0]["lr"]
+    if args.lr is not None and args.lr != effective_lr:
+        for group in agent.optimizer.param_groups:
+            group["lr"] = args.lr
+        agent._hparams["lr"] = args.lr  # so the next load() reports it honestly
+        print(f"Learning rate overridden: {effective_lr:g} -> {args.lr:g}", flush=True)
+        effective_lr = args.lr
+
     # M3.2 fixes (M5.5 port): KL anchor to the BC policy + value-head warmup.
     if args.bc_anchor:
         agent.set_bc_anchor(args.bc_anchor, args.bc_anchor_coef)
@@ -436,6 +462,9 @@ def main() -> None:
         f"obs_mode={'v3-extended' if args.obs_v3_extended else 'v3' if args.obs_v3 else 'v2' if args.obs_v2 else 'structured' if args.structured else 'flat'} "
         f"(obs_size={obs_size}) | "
         f"rollout={rollout_steps} steps | "
+        f"hidden={agent.trunk[0].out_features} "
+        f"(params={sum(p.numel() for p in agent.parameters()):,}) | "
+        f"lr={effective_lr:g} | "
         f"num_envs={num_envs} | device={agent.device} | "
         f"opponent={args.opponent_mix or args.opponent}"
         + (f" (pool: {pool_dir})" if uses_selfplay else "")
