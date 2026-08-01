@@ -76,7 +76,11 @@ actually support the claim. That was not true of this project before M9.
 Our best human-imitator is the copy-a-human checkpoint. Instead of practising
 against a ball machine and itself, the agent now practises against *that*,
 including its switching behaviour. Cheap, needed almost no new code. This is
-the direct answer to the core problem above.
+the direct answer to the core problem above. **Known limitation, written down
+before the result:** the sparring partners are frozen, so the agent will
+eventually outgrow them — a win is unambiguous, a loss doesn't distinguish
+"human style doesn't help" from "frozen partners stop teaching." Follow-up for
+that case is recorded in `IN-PROGRESS.md`.
 
 **2. Widen the reading list (~2 h).** Our own result says variety in the
 imitation stage helps learning. Every checkpoint ever built used a 50/50 split
@@ -86,12 +90,21 @@ points, not a transformation.
 **3. Fixed-team Gen 1 OU instead of random teams (~1 day).** Today every battle
 deals random teams, so the agent must know ~150 Pokémon shallowly and a lot of
 wins and losses come down to the draw. With a fixed team it would learn 6
-Pokémon deeply and results would reflect skill instead of luck. **Much cheaper
-than it sounds** — it stays in Gen 1, so the observation layer needs no rewrite
-(unlike a Gen 9 move), and the simulator already takes a format parameter; the
-missing piece is passing a team through. **Real catch:** the Gen 1 OU ladder is
-*less* busy than random battles (31 vs 44 games/day), so final human validation
-gets slower, not faster.
+Pokémon deeply, and results would reflect skill instead of the deal.
+
+**Cheaper than it sounds, and the code was checked rather than guessed:**
+`PokemonGymEnv` already takes a `format` option (`sim/tools/pokemon-gym.ts`
+line ~535, defaulting to `gen1randombattle`), and it stays in Gen 1 so **the
+observation layer needs no rewrite** — unlike a Gen 9 move, which is why that
+one is a restart and this one isn't. The genuinely missing piece is teams: the
+battle spec it builds is `{formatid, seed}` with no team attached, which is
+fine for a random format and not fine for OU. So the work is plumbing a packed
+team through gym → bridge → clients, plus picking a team.
+
+**Two real catches.** The Gen 1 OU ladder is *less* busy than random battles
+(31 vs 44 replays/day), so final human validation gets **slower**, not faster.
+And every result M2→M9 is on random battles, so baselines would need
+re-measuring in the new format before anything could be compared.
 
 **4. A bigger brain (medium).** The network is **151,187 parameters** — tiny.
 We keep asking "what should it study?" and never "can it hold what it studies?"

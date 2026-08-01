@@ -359,6 +359,38 @@ breadth hypothesis is worth pursuing. It is the cheapest question with the
 largest reach, and the M9 Phase 1 lesson (ladder readings were sample size, not
 signal) is the same mistake one level up.
 
+**🟡 RUNNING (launched 2026-08-01, home box, ~70 min): M9 Phase 2d — the
+human-sparring run.** `models/ppo/checkpoints/m9p2d/`. Everything matches
+M7/m9seed except one flag: `--selfplay-pool models/ppo/checkpoints/human_pool`,
+a dedicated directory holding the two BC human-imitators
+(`ppo_step_0_bc_randbats.pt`, `ppo_step_0_bc_mixed.pt`). Because the run's own
+checkpoints land in a *different* directory, **the self-play half of every
+rollout faces a human-style opponent for the whole run** instead of a frozen
+copy of the agent's own lineage. Warm-start and anchor are the mixed BC, per the
+2c finding. No new code was needed.
+
+**Pre-registered interpretation, written before any result exists** (the 2c gate
+amendment is why this is now standard practice here):
+
+- The manipulation swaps opponent *style* (human-like, and crucially they
+  **switch Pokémon**) but also opponent *dynamics*: m9seed's pool escalates as
+  the agent improves, while this pool is **frozen** at BC strength (~39.5% and
+  ~33.9% vs Random). Late in training the agent will likely outgrow it.
+- **A win is unambiguous** and directly actionable.
+- **A loss is ambiguous** between "human-style sparring doesn't help" and
+  "frozen sparring partners stop teaching once you pass them." The
+  disambiguating follow-up is already identified: re-run with the BC
+  checkpoints as *pool seeds inside the normal checkpoint dir* (replacing the
+  `m2`/`m33best` seeds), which keeps the escalating self-play ladder but makes
+  the manipulation much weaker. **That weakness is exactly why it isn't the
+  first run** — a treatment that is ~4% of rollouts by end of training risks a
+  null result that means nothing, which is this project's recurring failure
+  mode.
+- Early rollout win rate is **0.397** over the first 150k steps, against 0.527
+  (m9seed) and 0.493 (2c) in the same window — so the human imitators are
+  *harder* early opponents than a frozen copy of self, not weaker. The initial
+  concern that the sparring partners were too soft is not supported.
+
 **Phase 3 is ready to run whenever wanted** — accounts registered and verified
 clean, protocol in `docs/EVALUATION-METHODOLOGY.md`, ~350 games/arm for +10pp
 power. **The user runs live ladder sessions, not Claude.** But note: **Phase 3
