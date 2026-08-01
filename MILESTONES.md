@@ -2141,3 +2141,122 @@ Best action
 | M6: Server Integration | ✅ | Live ladder bot shipped (raw + MCTS via `BattleSim.fromTracked`); 100/100 clean rated battles, ≤579ms/move. **External read: Elo 1017 / GXE 23.9% — bottom of the human ladder** (MCTS 21/100 vs raw ~13%) | M7 |
 | M7: Observation Schema v3 | ✅ | **New best agent (bot evals)** — tuned MCTS 93.0% R / 84.2% DF, +2.4/+5.0pp vs prior best. **Ladder: inconclusive** — Elo 1034.6 / GXE 28.2% (M6: 1017/23.9%), lands in the pre-registered 25–34% noise band; directionally up (+9pp raw win rate) but not a confirmed win. **50-game follow-up (2026-07-23): still inconclusive** — 21/50 raw (42%), Elo 1101.4 / GXE 32.9%, 2.1pp under the ≥35% win bar; trend over 150 games monotonic (23.9→28.2→32.9) | M8 |
 | **M8: Value-Head Targeting + Ladder Infra** | ✅ COMPLETE 2026-07-31 — all bets negative or inconclusive | **Contingency escalation, both technical bets spent, neither paid.** Phase 0 (ladder-bot websocket reconnect) ✅. Phase 1A (obs refinement, speed-ratio dim) ❌ Criterion A failed (Random −3pp) → Phase 1B skipped. Phase 2 (AlphaZero value targeting) ❌ Criterion C failed (base 82.5% → fine-tuned 80.0%, −2.5pp vs a ≥+3pp bar) → Phase 3 skipped, and ❌ **failed again on replication 2026-07-30** at exactly 160/200 with targets re-collected against DamageFirst, eliminating distribution mismatch as the explanation. **Notable:** the fine-tune fixed the value head in-distribution both times (R² 0.00 → 0.20, then −0.13 → +0.19; the PPO-trained head scored *below* a constant predictor) and none of it transferred to play strength. Phase 4 (ladder validation on the unchanged M7 checkpoint) 🟨 **inconclusive 2026-07-31** — 27/100 raw, Elo 1084.0 / GXE 32.9%, third consecutive reading inside the 25–34% band. **Key finding is methodological:** the same checkpoint swung 42% → 27% raw between runs, so the prior "monotonic GXE trend" was an over-read and GXE (account-level, cumulative over 506 games) was never a valid per-run gate. | M9 |
+| **M9: Evaluation Methodology + Data Distribution Hypothesis** | ✅ COMPLETE 2026-08-01 | Three phases executed; two hypotheses closed, one strongly suggestive. **Phase 1:** Fixed measurement (GXE is account-level not per-run; 42→27 swing was sample size not drift; delivered protocol + tools). **Phase 2a:** Format alignment (randbats-only BC +5.6pp vs mixed, CI excludes 0). **Phase 2c:** Sparring partners zero effect (−1.0pp vs Random / ±0pp vs DamageFirst despite doubled opponent quality in practice). **Phase 2d:** Confirms Phase 2c on the ground: better BC checkpoint through exact M7 recipe regresses 8.3pp, points to capacity not curriculum. Delivered: `docs/EVALUATION-METHODOLOGY.md`, `scripts/ladder_analysis.py`, ladder-bot logging. | M10 |
+| **M10: Battle Log Analysis — Tactical Error Diagnosis** | ⏳ PLANNED | Automated, aggregate analysis of 516 agent ladder games to identify specific tactical errors (sleep clause violations, attacking into resistances, missing KO opportunities, etc.) that drive losses. Pre-registered metrics with confidence intervals on agent-loss vs agent-win vs human comparisons. **Hypothesis:** Agent makes categorical blunders at higher rates in losses or vs human baselines. **Deliverables:** `models/battle_log_parser.py` (parse gzipped logs), `models/battle_log_analysis.py` (Tier 1 metrics: sleep/freeze clause, KO opportunity, type matching, switch analysis), human baseline comparison, `results/battle_log_analysis_results_*.md` (report). **Data:** 516 ladder logs on disk + ~120k human replays (home box authoritative). **Effort:** ~8 days if human corpus synced. **Risk:** 40% no actionable errors found (points to observation/value/luck); 20% success. Diagnostic to clarify next investment (bigger brain, team luck investigation, or accept stalemate). See `docs/BATTLE-LOG-ANALYSIS.md` for full plan. | M11+ |
+
+---
+
+## M10: Battle Log Analysis — Tactical Error Diagnosis ⏳ PLANNED
+
+**Status:** ⏳ Planned (2026-08-01)
+
+**Motivation & Context:** After nine milestones and six directly-tested hypotheses (richer obs, value targeting, more data, unrated tournaments, format alignment, sparring partners), all null or weak, we have high confidence in what does NOT work but zero insight into *what the agent actually does wrong* on the human ladder. The agent wins 93% vs bots but 30.5% vs humans — a 60+ point gap. Nobody has looked at the tactical decisions themselves, only aggregate win rates.
+
+**Core Hypothesis:** The agent makes specific, categorical tactical errors (legal but strategically bad moves) at rates significantly higher in its losses than in its wins, or at rates higher than humans. These errors are detectable through automated analysis of the full battle logs and can guide targeted fixes or investment decisions.
+
+**Key Insight:** This is the first deep behavioral diagnostic. All prior work was aggregate-level (win rate), architecture-level (adding modules), or data-level (more games). This analysis looks at the game tree itself to ask: "What moves did the agent choose, and how often did it choose bad ones?"
+
+---
+
+### Scope & Plan
+
+See `docs/BATTLE-LOG-ANALYSIS.md` for the comprehensive plan. Summary:
+
+**Phase 1: Data & Parser** (2 days)
+- Verify ladder battle logs on disk (516 games, gzipped, full protocol)
+- Build `models/battle_log_parser.py` to extract game-state trees
+- Acceptance: 10 logs parse correctly
+
+**Phase 2: Metrics** (3 days)
+- Implement Tier 1 error checkers:
+  - Sleep clause violations (illegal move, wasted turn)
+  - Freeze clause violations
+  - High-damage when priority move secures KO
+  - Attack into immunity/resistance
+  - Switch into weakness
+  - Fail to switch out of bad matchup
+- Build `models/battle_log_analysis.py` to run all metrics
+- Output: CSV with rates in agent-wins vs agent-losses, with 95% CIs (Wilson/Newcombe)
+
+**Phase 3: Human Baseline** (2 days)
+- Sync human replay corpus from home box (if not already synced)
+- Run same metrics on ~5k human games
+- Compare agent vs human error rates with CIs
+
+**Phase 4: Reporting & Interpretation** (1 day)
+- Write `results/battle_log_analysis_results_*.md`
+- Pre-registered interpretation: what each finding means and what action it triggers
+- Update `docs/WHERE-WE-ARE.md` with any findings
+- Update `IN-PROGRESS.md` with next steps
+
+---
+
+### Pre-Registered Interpretation (before any result is computed)
+
+**Positive Finding:** A metric E shows error rate in losses >> wins (95% CI excludes 0) AND/OR agent >> human. 
+- Meaning: E is a measurable driver of losses.
+- Action: Document in `docs/TACTICAL-ERRORS.md`, assess fix difficulty, recommend intervention.
+- Expected value: Single-digit pp points per error; 2–3 concurrent errors could explain 1–5pp of the gap.
+
+**Null Finding:** Error rate same in losses vs wins (CI includes 0) or indistinguishable from human.
+- Meaning: E is not a driver of losses; narrows down what matters.
+- Action: Record that E was checked and found baseline. Do not pursue.
+- Expected value: This is valuable — it closes directions. The project's prior failure mode was chasing weak manipulations; null findings are findings.
+
+**Confounded Finding:** Sample too small, error doesn't occur, or metric untestable.
+- Meaning: Evidence inconclusive for this data.
+- Action: Flag for Phase 2 (larger sample or focused variant) or accept as out of scope.
+
+---
+
+### Confidence & Risk Assessment
+
+**Success probability by outcome:**
+- ~40% no actionable errors found at Tier 1 → points to observation state / value function / team luck / format difference as the constraint (obs and value already tested in M8; luck and format are new hypotheses)
+- ~25% errors found but individually small (<1pp each) → multiple small errors might sum; documentation valuable
+- ~20% success: find 2–3 measurable errors explaining 1–5pp of the gap → enables targeted fix or informs bigger-picture decision
+- ~15% confounds or data issues → mitigated by stratification by opponent Elo
+
+**Why this matters:** If this analysis yields actionable errors, the project has a concrete next target (e.g., "fix observation of status state," "add reward shaping for rule violations"). If it yields nulls across the board, it's strong evidence the gap is not driven by tactical blunders, which narrows the focus to higher-level constraints (model capacity, team luck, observation richness, or the format itself).
+
+---
+
+### Execution Plan
+
+**Parallelization:** Phase 1 & 2 can overlap (start writing checkers while parser finalizes).
+
+**Effort breakdown:**
+- Phase 1: 2 days
+- Phase 2: 3 days  
+- Phase 3: 2 days (conditional on home-box sync)
+- Phase 4: 1 day
+- **Total: ~8 days if home-box sync exists; ~5 days if agent-only metrics suffice**
+
+**Go/no-go decisions:**
+- After Phase 1: If logs are too corrupted or incomplete, abort and document the data limitation.
+- After Phase 2: If no Tier 1 metrics fire (all null), decide whether to pursue Tier 2 (exploratory) before Phase 3.
+
+**Recommendation:** Execute after M9 closes, in parallel with other probes (e.g., bigger-brain investigation). This is a diagnostic, not a solution. It will clarify whether the gap is tactical-skill-based (fixable) or structural (requires different approach).
+
+---
+
+### Deliverables Checklist
+
+- [ ] `docs/BATTLE-LOG-ANALYSIS.md` — plan document (complete)
+- [ ] `models/battle_log_parser.py` — parse gzipped logs → game trees
+- [ ] `models/battle_log_analysis.py` — apply Tier 1 rule checkers
+- [ ] `models/analyze_ladder_logs.py` — CLI driver for agent analysis
+- [ ] `models/analyze_human_replays.py` — CLI driver for human baseline (if Phase 3 runs)
+- [ ] `results/battle_log_metrics.csv` — per-metric summary (n, rate, CI)
+- [ ] `results/battle_log_analysis_results_*.md` — full report with interpretation
+- [ ] `docs/WHERE-WE-ARE.md` — updated with any findings + next-step recommendations
+- [ ] `IN-PROGRESS.md` — updated with results and blockers for M11+
+
+---
+
+### Unblocks
+
+**If positive:** Concrete intervention targets; evidence that tactical fixes are high-ROI.
+
+**If null/inconclusive:** Strong evidence to deprioritize tactical optimization; redirects to capacity (M11 → bigger-brain investigation) or team luck (format re-evaluation).
+

@@ -1,6 +1,6 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-07-31
+Last updated: 2026-08-01
 
 ---
 
@@ -1871,19 +1871,26 @@ None. All components verified and working.
 
 ## Next Steps
 
-### M8: Value-Head Targeting + Ladder Infrastructure (scoped 2026-07-22)
+### M10: Battle Log Analysis — Tactical Error Diagnosis (Planned 2026-08-01)
 
-**Immediate first action (after user approval to build):** parallelize Phase 0 + Phase 1A.
-- **Phase 0 (30 min, can start immediately):** Websocket reconnect logic for ladder-bot (`tools/ladder-bot/ladder-bot.js`). De-risks all future ladder runs.
-- **Phase 1A (4–6 hours, parallel machine):** Speed-ratio A/B run — quick 1–2M PPO steps to test whether base-stats/speed dims help. Decision gate at 2M: if >+2pp signal on both Random + DamageFirst, escalate to Phase 1B full run; else escalate to Phase 2 (value targeting).
+**Objective:** Automated, aggregate analysis of 516 agent ladder games to identify specific tactical errors (sleep clause violations, attacking into resistances, missing KO opportunities, etc.) that drive the performance gap from 93% vs bots to 30.5% vs humans.
 
-**Full M8 contingency structure in MILESTONES.md → M8:** 6 phases with gates between them. **Most likely path:** Phase 1A → 1B or 2 → 4 = ~12–16 hours total. Worst case (full AlphaZero): ~48 hours over 3–4 days.
+**Immediate first action (after user approval to build):** 
+1. **Phase 1 (2 days):** Verify ladder battle logs on disk; build `models/battle_log_parser.py` to extract game trees.
+2. **Phase 2 (3 days, in parallel with Phase 1):** Implement Tier 1 error checkers (sleep/freeze clause, KO opportunity, type matching, switch analysis); run all 516 games through analysis pipeline.
+3. **Phase 3 (2 days):** Sync human replay corpus from home box; run same metrics on ~5k human games for baseline.
+4. **Phase 4 (1 day):** Write final report with pre-registered interpretation; update `docs/WHERE-WE-ARE.md` with findings and next-step recommendations.
 
-**Pre-registered criteria:** Bot evals repeat M7 baseline (93%/84%), ladder GXE ≥35% for win or <25% for clear regression (same ±35 noise band as M7).
+**Why this matters:** No prior analysis has looked at *what the agent actually does* in its losses. All eight prior milestones used aggregate win-rate comparisons. This is the first deep behavioral diagnostic, and it will either find concrete tactical errors to fix or narrow down to higher-level constraints (observation, value, team luck, or format).
 
-**M7 follow-up decision (orthogonal to M8):** Criterion C landed inconclusive (GXE 28.2%, 25–34% noise band). An optional 50-game follow-up is pre-authorized to narrow the band, but does not block M8 scoping or build. User runs it independently if desired.
+**Pre-registered interpretation (before any result):**
+- **Positive:** Error E at rate > in losses than wins (95% CI excludes 0) AND/OR > human rate → actionable signal for intervention.
+- **Null:** Error rate same in losses/wins or indistinguishable from human → narrows what matters; document and move on.
+- **Risk:** ~40% null (points to observation/value/luck constraints); ~20% success (find 2–3 errors); ~15% confounds; ~25% small errors.
 
-**Known gap carried forward:** M8 Phase 0 fixes the websocket reconnect issue, de-risking Phase 4 (ladder validation).
+**Full plan:** See `docs/BATTLE-LOG-ANALYSIS.md` (comprehensive data inventory, metric catalog, comparison design, implementation plan, pre-registered interpretation).
+
+**Effort:** ~8 days if home-box human corpus is synced; ~5 days if agent-only. Parallelizable phases.
 
 ### M7 — Observation Schema v3
 ✅ **Complete 2026-07-20.** Criterion A pass, Criterion B pass (93.0% R /
