@@ -153,6 +153,16 @@ Delivered:
   anchor constrains the policy toward a smaller region. That is a hypothesis,
   not a measurement.
 
+  **⚠️ SECOND CONFOUND, found 2026-07-31 after the verdict was committed:
+  M7 trained on `device=mps` (the Mac); 2c trained on `device=cuda` (the home
+  box).** Both headers are in their `train.log`s. So the −6.3pp is not
+  "BC corpus" — it is **BC corpus + training seed + backend**, three variables
+  moving at once. Different kernels and accumulation orders compound chaotically
+  over 5M PPO steps; there is no reason to think this favours either arm, but it
+  is one more independent-draw term and it should have been listed. **The
+  cross-device comparison was avoidable and should not be repeated: run both
+  arms of any future A/B on the same machine.**
+
   **⚠️ CONFOUND, and it is not small: training-run-to-run variance has never
   been measured in this project, and both lineages are n=1.** The CIs above
   quantify **eval sampling noise only**. Comparing two checkpoints from two
@@ -244,9 +254,29 @@ worth more than the checkpoint would have been: format alignment is now a
 n=2,000 readings for the first time, and the gate defect was caught before it
 could spend two days of ladder.
 
-**The single highest-value experiment now is NOT Phase 3.** It is a ~70-minute
-seed replication: re-run M7's exact recipe from the mixed BC with a fresh seed
-and measure the spread. Every A/B this project has ever run compared two
+**🟡 RUNNING (launched 2026-07-31 ~19:45 local, home box, ~70 min): the PPO
+seed replication.** `models/ppo/checkpoints/m9seed/` — M7's exact recipe,
+warm-started and anchored from the **mixed** BC (`bc_mlp_gen1_v3.pt`, md5
+verified identical across machines), pool seeded with the same two files.
+`train.py` performs **no seeding of any kind** (`manual_seed`/`np.random.seed`
+appear nowhere in the trainer, agent, or gym clients), so re-running the
+identical command is already an independent draw — no code change was needed.
+
+**It answers two questions, and the second one is better than the experiment
+was designed for:**
+
+| comparison | holds constant | varies | what it measures |
+|---|---|---|---|
+| m9seed vs **M7** | recipe, BC corpus | seed **+ backend** (cuda vs mps) | run-to-run spread |
+| m9seed vs **2c** | recipe, backend (**both cuda**), machine | **BC corpus** + seed | the format-alignment effect, *properly controlled* |
+
+The second row is the A/B that 2c-vs-M7 was supposed to be and wasn't. If
+m9seed lands near M7's 69.7%, the spread is small and 2c's regression is real.
+If it lands near 2c's 63.3%, then **2c is inside noise and so is a share of the
+project's existing record.**
+
+**The original framing of this step, for the record:** a ~70-minute seed
+replication re-running M7's exact recipe from the mixed BC to measure spread. Every A/B this project has ever run compared two
 single training runs and attributed the whole difference to the recipe. That
 includes M7-vs-M5.5, the comparison the entire current lineage rests on. If
 PPO run-to-run spread turns out to be ±6pp, then 2c is inside noise, "format
