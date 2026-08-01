@@ -75,7 +75,98 @@ the timeline. Surface it to the user after a context clear.
 
 ## Current Work
 
-**M9 SCOPED (2026-07-31): Evaluation Methodology + Data Distribution Hypothesis.** M8 spent both its technical bets (obs richness Phase 1A, value-head targeting Phase 2) on the M7 checkpoint and both failed. Three methodological defects also came to light: (1) GXE is account-level cumulative (506 games M6-M8), not per-run; (2) same M7 checkpoint shows 42%→27% win-rate variance across runs (~1.8 SD); (3) +3pp gate at n=200 is underpowered (SE ~3.9pp; a true +3pp effect caught only ~1/3 of the time). The surviving hypothesis — opponent-pool/data distribution (constraint c) — was deprioritized on reasoning alone, never tested. **M9 addresses both:** Phase 1 fixes evaluation methodology (per-run GXE isolation, pre-registered sample sizes), Phase 2 tests the data/distribution hypothesis (randbats-only BC, richer replay corpus, opp-pool saturation), Phase 3 ladders with proper instrumentation, Phase 4 makes a stopping decision. See MILESTONES.md → M9 for full scope.
+**M11 SCOPED (2026-08-01): Observation Enrichment + Reward Asymmetry.**
+A code review on 2026-08-01 identified the root cause of the 93%-vs-bots / 30%-vs-humans gap: the observation is information-poor in ways invisible against scripted bots and expensive against humans. The agent encodes moves without identity (Recover and Swords Dance are byte-identical), carries no species/stats/trapping, and cannot reason about damage. This is the first hypothesis that predicts the *shape* of the gap rather than proposing another knob.
+
+**Scope:** Phase 0 (reward asymmetry fix, ~1 hour), Phase 1 (observation enrichment, ~4 days), Phase 2 (ladder validation if gates pass). New schema v4 invalidates all checkpoints; retraining from BC scratch. See MILESTONES.md → M11 for full plan.
+
+**Blocker:** User approval to commit the retraining cost (BC + PPO + full eval
+cycle). Note Phase 0 is already done — the blocker is Phase 1 (schema v4) only.
+
+**✅ M11 Phase 0 (reward asymmetry) IS DONE AND SHIPPED** — `applyStallPenalty`
+now clips before charging the duration cost, so it applies equally to wins and
+losses. `stallPenalty` is settable (`--stall-penalty`), default 0.001 =
+historical. `gamma` already discounts terminal reward symmetrically, so
+`--stall-penalty 0` is a live experiment, not a fallback. Regression test added
+that asserts win/loss duration costs are equal, with the old formula inlined —
+the previous test asserted rewards stayed in `[-1,1]`, which **encoded the bug**.
+
+**🔬 IN FLIGHT (launched 2026-08-01 ~11:50 local, home box, both `cuda`):**
+two PPO arms, `models/ppo/checkpoints/m11_h128/` and `m11_h512/`.
+
+| arm | params | warm-start + anchor |
+|---|---:|---|
+| `m11_h128` | 151,187 | `bc_mlp_gen1_v3.pt` |
+| `m11_h512` | **801,299** | `bc_mlp_gen1_v3_h512.pt` |
+
+Everything else identical: 5M steps, `selfplay=0.5,damagefirst=0.3,random=0.2`,
+`--bc-anchor-coef 0.05`, 200k value warmup, same two pool seeds
+(`ppo_step_0_seed_m2.pt`, `ppo_step_0_seed_m33best.pt`), same machine, same
+commit, **same fixed reward**.
+
+**Why two arms and not one.** The reward fix landed *before* the launch, so
+`m9seed` stopped being a valid control — it trained under the buggy reward.
+Running only the width arm would have moved width *and* reward together, the
+exact confound the "same machine, same code" standing rule exists to prevent.
+Two arms give two clean single-variable comparisons for one wall-clock cost:
+
+- `m11_h128` vs **m9seed** → the **reward fix** (width held at 128)
+- `m11_h512` vs **m11_h128** → **width** (reward held fixed)
+
+**ETA ~5 h, not the ~70 min quoted elsewhere in this file.** Measured 16.5k
+steps/min with two concurrent runs sharing 24 cores. Concurrency does not
+threaten validity — 5M steps is 5M steps — it only costs wall-clock.
+
+**Do not read the early rollout win rates as a result.** At step ~248k the
+policy has only just unfrozen (value warmup ends at 200k) and the arms showed
+0.33 (h128) vs 0.50 (h512). That is 5% of training, during a transient, on a
+metric that does not record which opponent family it was against. **Gate on the
+n=2,000 bot evals, all arms in one session on one machine, per
+`docs/EVALUATION-METHODOLOGY.md`.**
+
+**Pre-registered, written before any result exists:** width gate is **≥+3pp vs
+Random at n=2,000/arm with the CI on the difference excluding 0**; DamageFirst
+reported alongside but not gated (needs ~4,948/arm to resolve ±2pp). Expect an
+**informative null on width** — the observation was measured to carry ~25
+distinct values, and 5.3× params bought only +2.8pp BC val accuracy. A null now
+closes the capacity question with a mechanism attached rather than a shrug.
+
+---
+
+## Recently Completed
+
+- **Code Review (2026-08-01):** Three independent read-only reviews of the training path, observation pipeline, and evaluation machinery. Identified root cause of the bot/human gap: **observation poverty**. The agent encodes moves without identity, carries no species/stats/trapping, cannot reason about damage. Also found: (1) MCTS confound (argmax vs sampling, ~+7.8pp vs Random), (2) M8 Phase 1A doubly confounded (trunk width fixed, no replay-adapter v3-extended path), (3) M8 Phase 2 new candidate cause (reward scale asymmetry in battle-sim), (4) M2 decision-rule confound (epsilon=0 for some arms, sampling for PPO), (5) "~3pp seat bias" unsupported by CI including 0.
+- **M9 Phases 2a–2d and seed replication (complete 2026-08-01):** Format-aligned BC is a better imitator (+5.6pp) but worse RL substrate (−8.3pp RL). Run-to-run spread is <1pp. Sparring-partner hypothesis null (−1.0pp vs Random, 0.0 vs DamageFirst). All findings pre-registered; both positive/null results are real.
+- **Observation poverty hypothesis scoped:** First hypothesis that predicts the gap's shape, not just another knob. Measured to carry ~25 distinct values; width-512 probe bought only +2.8pp BC val acc. New leading direction identified.
+
+---
+
+## Blockers
+
+- **M11 approval:** Observation schema v4 invalidates all checkpoints (BC + PPO). Retraining cost: ~2–3h BC + ~2h PPO + ~2h full eval + ladder if gates pass. User approval required before committing to M11.
+- **Width-512 probe: LAUNCHED, not pending** — both arms in flight, ETA ~5 h from
+  ~11:50 local 2026-08-01. See Current Work. Will inform whether the
+  bigger-network direction is worth pursuing, or observation-fixing is higher
+  leverage. Expectation is an informative null.
+- **Greedy decoding is untested and is the cheapest open lever.** MCTS plays
+  argmax, the raw policy samples, and `infer_server.py` (the ladder bot) calls
+  `agent.act()` — so **the 30.5% ladder result was scored while sampling, never
+  playing its best move**. Argmax alone measured +7.8pp vs Random [+2.7, +12.5]
+  on M7 with no search. Inference-only, no GPU, no training. Needs a `--greedy`
+  flag in `evaluate.py`/`infer_server.py`, a bot eval, then a ladder session.
+  **The user runs live ladder sessions, not Claude.**
+
+---
+
+## Next Steps
+
+1. **If width-512 PPO A/B is run first (in parallel with M11 approval):** Run both arms on same machine at n=2,000. If ≥+2pp and observations are expected to add more, proceed to M11 Phase 0 (reward fix). If <+2pp or regression, that answers "is bigger capacity the answer?" — likely no.
+
+2. **M11 Phase 0 (reward asymmetry fix, ~1 hour):** ~3 lines in `battle-sim.ts`, 1 replication of M8 Phase 2's value fine-tune. If moves needle (≥+1pp), include before Phase 1. If not, proceed to Phase 1 directly.
+
+3. **M11 Phase 1 (observation enrichment, ~4 days):** Scope v4 schema carefully; estimate BC/PPO/eval costs; pre-register gates. A/B at n=2,000/opponent, gate ≥+3pp CI excluding 0.
+
+4. **Phase 2 (if Phase 1 gates pass):** Paired ladder A/B, n≥350/arm, power for +10pp.
 
 ### M9 Phases (Pre-Registered Gates)
 
