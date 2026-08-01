@@ -185,6 +185,26 @@ document exists to prevent. **M9 Phase 2a ran at n=5,000/arm** (~3 min/arm at
 `python3 scripts/bot_eval_ab.py --power --baseline-p <p>`. n=2,000 for strong
 agents near the ceiling; **n=5,000 for anything in the 0.3–0.7 band.**
 
+#### Don't ship the sweep maximum — it is biased upward
+
+Picking the best of 20 noisy checkpoint readings is a multiple-comparisons
+trap: the winner is partly *lucky*, so its next measurement regresses. Measured
+on M9 2d, 2026-08-01:
+
+| checkpoint | sweep (n=500) | confirmation (n=2,000) |
+|---|---:|---:|
+| 4.50M — the sweep's best | **69.0%** | **64.8%** (−4.2pp) |
+| 5.00M final | 63.0% | **67.9%** |
+
+The sweep's top pick lost 4.2pp on re-measurement and ended up **3.2pp below
+the final checkpoint** [+0.2, +6.1] — i.e. the sweep ranked them backwards.
+
+**Rule:** treat the sweep as a *coarse filter and a training-curve sanity
+check*, never as a selection mechanism. Confirm the **final** checkpoint (the
+shipping convention) plus any candidate with an independent reason to be
+better, and compare them at n=2,000. If a sweep pick must be used, its sweep
+number is not a valid estimate of its strength — re-measure it.
+
 #### Eval CIs do not cover training-run variance — but that variance is small
 
 A CI from `bot_eval_ab.py` covers **eval sampling noise only**. When the two

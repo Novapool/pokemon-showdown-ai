@@ -36,7 +36,10 @@ run() {  # run <label> <checkpoint> <obs-flag>
 echo "M9 2c confirmations (n=$N/arm) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT"
 run m5.5 models/ppo/checkpoints/bcft/ppo_step_5000000_final.pt --obs-v2
 run m7   models/ppo/checkpoints/v3/ppo_step_5000002_final.pt   --obs-v3
+# Label candidates with the run directory, not a hardcoded "2c:" — this script
+# is reused across runs via DIR=, and a results file that calls m9p2d's
+# checkpoints "2c:" is a misreading waiting to happen.
 for ckpt in "$@"; do
-  run "2c:$ckpt" "$DIR/$ckpt" --obs-v3
+  run "$(basename "$DIR"):$ckpt" "$DIR/$ckpt" --obs-v3
 done
 echo "CONFIRM DONE — analyse with scripts/bot_eval_ab.py" >> "$OUT"

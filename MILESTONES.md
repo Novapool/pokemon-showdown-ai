@@ -1896,7 +1896,47 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
      - Pre-register (**revised by Phase 1**): if this checkpoint beats the M5.5 baseline by **≥+3pp vs Random at n=2,000/arm with the 95% CI on the difference excluding 0**, it's the Phase 3 ladder candidate; else use M5.5. Report DamageFirst alongside but do not gate on a ±2pp DamageFirst bar — that needs 4,948 games/arm. Raw-policy evals cost ~75 s per 2,000 battles, so run the full n.
      - Effort: ~8 hours training (home box, 8 envs, ~3 hours wall) + 2 hours eval.
 
-  4. **2d: Opponent-pool saturation check** — Is diversity in training opponents the missing lever?
+  4. **2d: Opponent-pool saturation check** — ✅ **COMPLETE 2026-08-01, NULL
+     RESULT. Replacing the entire self-play pool with human imitators changed
+     nothing.**
+
+     Implemented with one flag and no new code: `--selfplay-pool` pointed at a
+     dedicated directory holding the two BC human-imitators, so the self-play
+     half of every rollout faced a human-style opponent (one that actually
+     *switches Pokémon*, unlike `Random` and `DamageFirst`, which by
+     construction never do) for the entire run. Warm-start and anchor were the
+     mixed BC per the 2c finding; everything else matched M7/m9seed.
+
+     All arms n=2,000, one session, one machine:
+
+     | arm | vs Random | vs DamageFirst |
+     |---|---:|---:|
+     | M7 | 70.5% | 58.0% |
+     | **m9seed** (matched control) | **68.9%** | **57.0%** |
+     | **m9p2d** (human sparring) | **67.9%** | **57.0%** |
+     | 2c (randbats BC) | 62.8% | 50.7% |
+     | M5.5 | 53.4% | 41.5% |
+
+     **m9p2d − m9seed = −1.0pp [−3.9, +1.9] vs Random and +0.0pp [−3.1, +3.1]
+     vs DamageFirst** — both CIs include 0, and the DamageFirst arms tie to the
+     battle (1140/2000 each).
+
+     **The carry-forward observation:** m9seed's pool escalates with the agent,
+     m9p2d's is frozen and weak (~39%/34% vs Random), **and they tie**. Within
+     this recipe the self-play pool's identity and strength appear to do very
+     little work. That is evidence against opponent quality as the binding
+     constraint and shifts weight toward **model capacity (151,187 parameters)
+     and the format's intrinsic team luck**.
+
+     **Limits, pre-registered before the result:** a win would have been
+     unambiguous, a non-win is not — the agent likely outgrew the frozen
+     partners. But the manipulation was strong (50% of every rollout, whole
+     run) and returned exactly zero. And bot evals cannot speak to *human*
+     play, which is the real target. The weaker follow-up (BC checkpoints as
+     seeds inside the escalating pool) is therefore **low priority**.
+
+  4b. **2d as originally scoped** — the design below was superseded by the
+     cheaper implementation above, which needed no new sampler code.
      - Create a "ladder-like pool" by sampling highest-rated players from the scraped human replays.
      - Train a checkpoint with `--opponent-mix "human_randbats=0.7,damagefirst=0.2,random=0.1"` (human pool replaces selfplay).
      - Bot evals: compare vs M7 (which trained on bot descendants + heuristics).
@@ -1984,6 +2024,7 @@ inconclusive = CI includes 0; regresses = difference ≤−10pp with CI excludin
 |---|---|---|---|---|
 | 1 | Methodology v2 written + instrument capable of the Phase 3 design | Runbook + analysis tool + arm-labelled per-battle log | Doc incomplete | ✅ 2026-07-31 |
 | 2a | Randbats-only BC hypothesis test | Randbats BC evals compared vs mixed | Not pursued | ✅ 2026-07-31 — **+5.6pp R / +4.6pp DF at n=5,000, both CIs excluding 0** |
+| 2d | Opponent-pool saturation | Human-sampler pool beats bot-lineage pool | No measurable difference | 🟨 2026-08-01 — **NULL: −1.0pp R / +0.0pp DF vs matched control, both CIs including 0** |
 | 2b | Richer replay corpus assembled | ≥50k games total, adapter shards created | ❌ closed — archive exhausted | Closed |
 | 2c | Fine-tune beats M5.5 **and is not worse than M7** | ≥+3pp vs Random at n=2,000/arm, CI on the difference excluding 0, and not measurably below M7 | <+3pp, or below M7 with CI excluding 0 | ❌ 2026-07-31 — **+10.5pp vs M5.5 but −6.3pp vs M7, CI excluding 0. Phase 3 ladders M7.** |
 | 3a | Paired ladder A/B run on two fresh accounts | ≥350 games/arm, arms alternated within sessions | Under-powered or unpaired | Protocol |

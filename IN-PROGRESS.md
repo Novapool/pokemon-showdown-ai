@@ -359,8 +359,55 @@ breadth hypothesis is worth pursuing. It is the cheapest question with the
 largest reach, and the M9 Phase 1 lesson (ladder readings were sample size, not
 signal) is the same mistake one level up.
 
-**🟡 RUNNING (launched 2026-08-01, home box, ~70 min): M9 Phase 2d — the
-human-sparring run.** `models/ppo/checkpoints/m9p2d/`. Everything matches
+**✅ COMPLETE 2026-08-01 — M9 Phase 2d (human sparring): NULL RESULT. Swapping
+the entire self-play opponent pool for human imitators changed nothing.**
+
+All arms n=2,000, **one session, one machine**:
+
+| arm | vs Random | vs DamageFirst |
+|---|---:|---:|
+| M7 | 70.5% | 58.0% |
+| **m9seed** (matched control) | **68.9%** | **57.0%** |
+| **m9p2d** (human sparring) | **67.9%** | **57.0%** |
+| 2c (randbats BC) | 62.8% | 50.7% |
+| M5.5 | 53.4% | 41.5% |
+
+**Against its matched control (m9seed — identical warm-start, recipe and
+machine; the self-play pool is the only difference):**
+
+| | vs Random | vs DamageFirst |
+|---|---|---|
+| m9p2d − m9seed | **−1.0pp [−3.9, +1.9]** | **+0.0pp [−3.1, +3.1]** |
+
+Both CIs include 0, and the DamageFirst arms are **identical to the battle**
+(1140/2000 each). M7, m9seed and m9p2d all sit in one band; 2c is the only run
+that separates from it.
+
+**What this buys, stated carefully.** Per the pre-registration above, a win
+would have been unambiguous and a non-win is not. The frozen-partner confound
+stands: the agent almost certainly outgrew opponents stuck at ~39%/34% vs
+Random. **But the manipulation was strong** — 50% of every rollout, for the
+whole run — and it moved the result by *nothing*, which is more informative
+than a weak manipulation returning a null.
+
+**The observation worth carrying forward:** m9seed's pool *escalates* with the
+agent, m9p2d's is frozen and weak, and **they tie**. So within this recipe the
+identity and strength of the self-play pool appears not to be doing much work
+at all. That is evidence against opponent quality being the binding constraint,
+and it shifts weight toward **model capacity (151k parameters) and the format's
+own luck** — options 4 and 3 in `docs/WHERE-WE-ARE.md`.
+
+**Honest limit:** bot evals cannot speak to *human* play, which is the actual
+target. A null here does not prove human sparring would not help on ladder; it
+proves it did not help against Random and DamageFirst. The named follow-up (BC
+checkpoints as seeds inside the escalating pool) is now **low priority** —
+it is a strictly weaker manipulation than the one that just returned zero.
+
+Artifacts: `models/ppo/checkpoints/m9p2d/{train.log,sweep_results.txt,
+confirm_results.txt,ppo_step_5000002_final.pt}`.
+
+**Setup (superseded status note): launched 2026-08-01, home box, ~70 min.**
+`models/ppo/checkpoints/m9p2d/`. Everything matches
 M7/m9seed except one flag: `--selfplay-pool models/ppo/checkpoints/human_pool`,
 a dedicated directory holding the two BC human-imitators
 (`ppo_step_0_bc_randbats.pt`, `ppo_step_0_bc_mixed.pt`). Because the run's own

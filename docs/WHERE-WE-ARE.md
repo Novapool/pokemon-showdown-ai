@@ -16,10 +16,12 @@ Last updated: **2026-08-01**
 We have a Pokémon-battling agent that is **very good against simple bots and
 mediocre against humans**. It wins ~93% against our scripted opponents but only
 **~30% on the real ladder**. Closing that gap has been the whole project since
-M7, and five separate theories about why it exists have now been tested and
-ruled out. The most likely remaining explanation is the one we are testing now:
-**the agent has never really practised against anything that plays like a
-person.**
+M7, and **six** separate theories about why it exists have now been tested and
+ruled out — including, as of 2026-08-01, the sparring-partner theory below.
+Giving the agent human-like opponents to practise against changed its strength
+by **nothing at all**. The two explanations still standing are that the model
+is **too small** (151,187 parameters) and that **random-team battles are simply
+luck-heavy**, and those are what the remaining options attack.
 
 ## The core problem, as an analogy
 
@@ -34,6 +36,19 @@ opponents never voluntarily switch Pokémon** — it's in the header comment of
 So for half its training the agent faced opponents that structurally cannot do
 the main thing real opponents do, and the other half it faced itself, which
 shares all of its own blind spots.
+
+**We tested this directly on 2026-08-01, and it isn't the answer.** We gave the
+agent human-imitator sparring partners for half of every practice game, all the
+way through training. Result: **−1.0 points vs Random, 0.0 vs DamageFirst** —
+statistically indistinguishable from the control, and the DamageFirst arms
+tied to the individual battle.
+
+The deeper surprise is *why* that's interesting. One run practised against
+opponents that get stronger as it does; the other against opponents frozen at a
+weak level. **They came out identical.** Within this setup, who the agent
+practises against barely seems to matter — which points the finger away from
+the sparring partner and toward the student: it may simply not have the
+capacity to get more out of any opponent.
 
 ## What we know for sure
 
@@ -67,20 +82,19 @@ actually support the claim. That was not true of this project before M9.
 | Richer observations (speed-ratio feature) | Tested, made it *worse* |
 | Fix the value head (AlphaZero-style) | Tested twice, both negative |
 | Train on the target format only | Tested — better mimic, worse learner |
+| Practise against human-like opponents | Tested — **no measurable effect at all** |
+| Pick the best checkpoint off a sweep | Sweep max is luck-inflated; it regressed 4.2pp and ranked *below* the final |
 
 ---
 
 ## Options from here
 
-**1. Spar with a human impersonator — 🟡 RUNNING NOW (~70 min/run).**
-Our best human-imitator is the copy-a-human checkpoint. Instead of practising
-against a ball machine and itself, the agent now practises against *that*,
-including its switching behaviour. Cheap, needed almost no new code. This is
-the direct answer to the core problem above. **Known limitation, written down
-before the result:** the sparring partners are frozen, so the agent will
-eventually outgrow them — a win is unambiguous, a loss doesn't distinguish
-"human style doesn't help" from "frozen partners stop teaching." Follow-up for
-that case is recorded in `IN-PROGRESS.md`.
+**1. Spar with a human impersonator — ❌ DONE 2026-08-01, no effect.**
+Moved to the dead-ends table. The one caveat we wrote down in advance still
+holds: the sparring partners were frozen, so the agent outgrew them, and bot
+evals can't speak to *human* play. But the manipulation was large — half of
+every practice game, for the whole run — and it changed nothing, so we are not
+spending more on this direction.
 
 **2. Widen the reading list (~2 h).** Our own result says variety in the
 imitation stage helps learning. Every checkpoint ever built used a 50/50 split
@@ -123,18 +137,32 @@ these levers are worth single digits against a ~40-point gap.
 
 ## Recommendation
 
-**Option 1 is running.** If sparring against a human-like opponent doesn't move
-the number, that is genuinely informative — it would mean opponent realism
-isn't the binding constraint either, and the honest conversation becomes
-options 3, 4 and 6.
+Option 1 came back empty, and that genuinely narrowed things: opponent realism
+is not the binding constraint, so the live candidates are **capacity** and
+**team luck**.
 
-**Then option 3** if we want to keep going seriously. Removing team luck
-attacks a source of noise that no amount of skill overcomes, and it makes every
-future experiment easier to measure. Option 2 is worth its two hours as a cheap
-side quest.
+**Do option 4 next (a bigger brain), but as a cheap probe first.** The network
+is 151,187 parameters, and we have never once asked whether it can hold what we
+keep feeding it. Before committing to a redesign, run the smallest honest
+version: widen the existing network, retrain with the standard recipe, measure
+at n=2,000. That's ~70 minutes and reuses everything. **Weigh the caveat
+properly** — M3 tried a larger transformer and retired it — but that was a
+different architecture, not a wider version of what currently works, and
+"bigger failed once" is not the same as "capacity isn't the constraint."
 
-**Expectation to hold onto:** the effects we measure are 5–8 points on bot
-evals, and the gap to human-level play is much larger. Treat this as *learning
-why the gap exists* rather than expecting to erase it. Gen 1 random battles
-also carry real team luck, so there is a ceiling below 100% that no skill
-reaches.
+**Then option 3 (fixed teams)** if the answer is to keep going seriously. It's
+about a day, and it attacks luck — a source of noise that *no amount of skill
+overcomes*, and which makes every future experiment harder to measure. It also
+stays in Gen 1, so nothing has to be rewritten.
+
+**Option 2 is now low value.** It was cheap and worth a side quest when the
+data-distribution story looked live; after 2c and 2d, expect very little.
+
+**Expectation to hold onto — and it has hardened.** Everything we have tried
+moves bot-eval scores by single digits, and the gap to human-level play is
+around 40 points. Six theories are now closed. The realistic outcome is
+*understanding why the gap exists*, not erasing it, and Gen 1 random battles
+carry real team luck that puts a ceiling below 100% no matter how good the
+player is. **Option 6 (stop) is a legitimate answer, not a failure** — the
+project has produced a genuinely strong bot-eval agent and an unusually
+rigorous measurement setup.
