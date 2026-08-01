@@ -60,6 +60,11 @@ sessions that day** (the other scored 24.0%). Pooling all 387 M7-era rated games
 gives the number no single run could see: **M7 = 30.5% on ladder, 95% CI
 [26.1, 35.3]**.
 
+**👉 For a plain-language, one-screen orientation — what the agent can and
+can't do, what's settled, and the live menu of options with a recommendation —
+read `docs/WHERE-WE-ARE.md`.** It is deliberately not a timeline; this file is
+the timeline. Surface it to the user after a context clear.
+
 **Ground-truth docs — read these before re-proposing anything in the table above:**
 - `docs/EVALUATION-METHODOLOGY.md` — **the protocol.** Required sample sizes, the
   runbook, the reporting template. Any result not produced this way doesn't count
