@@ -185,6 +185,31 @@ document exists to prevent. **M9 Phase 2a ran at n=5,000/arm** (~3 min/arm at
 `python3 scripts/bot_eval_ab.py --power --baseline-p <p>`. n=2,000 for strong
 agents near the ceiling; **n=5,000 for anything in the 0.3–0.7 band.**
 
+#### Eval CIs do not cover training-run variance — but that variance is small
+
+A CI from `bot_eval_ab.py` covers **eval sampling noise only**. When the two
+arms are checkpoints from two *different training runs*, the comparison also
+contains a training-seed term that no number of eval battles can shrink.
+
+**Measured 2026-08-01.** `train.py` does no seeding at all (no `manual_seed`,
+no `np.random.seed`, anywhere in the trainer, agent or gym clients), so
+re-running an identical command is an independent draw. Re-running M7's 5M-step
+recipe reproduced it to **−0.6pp vs Random [−3.4, +2.2]** and **−0.3pp vs
+DamageFirst** — *and across a backend change* (`mps` → `cuda`). Run-to-run
+spread is therefore **under a point**, and single-run A/Bs in this project are
+sound for effects of roughly 3pp and up.
+
+Caveats worth keeping: this is **one replication pair**, which bounds the
+spread as small without putting a tight interval on it — do not quote "PPO
+variance is 0.6pp". A ~70-minute replication is cheap insurance before
+declaring any *surprising* result, and it is what turned M9 Phase 2c from
+"confounded three ways" into a finding.
+
+**Standing rule: run both arms of an A/B on the same machine.** M9 Phase 2c
+compared an `mps`-trained checkpoint against a `cuda`-trained one for no
+reason. It turned out not to matter — which is now a measurement rather than
+an assumption, but the comparison was avoidable.
+
 ---
 
 ## Part 3 — Runbook

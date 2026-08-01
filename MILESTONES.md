@@ -1853,14 +1853,26 @@ M5.5 proved that human BC + anchored RL can beat bot-trained policies. M7 traine
      buys behavioural breadth that is useless for imitation but valuable as an
      exploration prior and KL anchor over 5M steps. That is a hypothesis.
 
-     **⚠️ Confounded with training-seed variance, which this project has never
-     measured.** Both lineages are single runs, and the CIs above cover eval
-     sampling noise only — more eval battles cannot shrink a training-seed
-     component. **"Format-aligned BC hurts RL" is therefore NOT established;
-     only that this 2c run is 6–7pp below M7.** A second PPO run (~70 min now)
-     from the mixed BC with a fresh seed would measure the spread directly.
-     Until it exists, no PPO A/B here — M7-vs-M5.5 included — separates recipe
-     effects from seed effects.
+     **⚠️→✅ Was confounded with training-seed variance and with backend
+     (M7 ran on `mps`, 2c on `cuda`). RESOLVED 2026-08-01 by a seed
+     replication** (`models/ppo/checkpoints/m9seed/`): re-running M7's recipe
+     from the mixed BC with a fresh seed reproduced M7 to **−0.6pp vs Random
+     [−3.4, +2.2]** and **−0.3pp vs DamageFirst**, *across the backend change
+     too*. Run-to-run spread is under a point, so neither seed nor device
+     explains 2c.
+
+     **In the properly controlled A/B — both runs `cuda`, same machine, same
+     recipe, BC corpus the only systematic variable — 2c is −8.3pp vs Random
+     [−11.1, −5.3] and −6.7pp vs DamageFirst [−9.7, −3.6].** The regression is
+     real. **"A format-aligned BC is a better imitator and a worse RL
+     substrate" is now established**, and the breadth explanation (gen1ou
+     widens the exploration prior and KL anchor) is the surviving hypothesis.
+
+     Side benefit: low run-to-run variance means the project's earlier
+     single-run A/Bs hold up. M7-vs-M5.5 stands, and so do the M8 negatives —
+     Phase 1A's −3pp and Phase 2's −2.5pp were unlikely to be seed noise.
+     Limit: one replication pair bounds the spread as small; it does not put a
+     tight interval on it, and must not be quoted as "PPO variance is 0.6pp".
 
      **2c's premise changed twice and the surviving version is the strong one.**
      As originally written it fine-tuned on "the expanded corpus from 2b" — but

@@ -28,10 +28,14 @@ quoted.
 | Unrated tour games are an untapped pool | ❌ already in training, and 74% of it |
 
 **(c) opponent-pool / data distribution: POSITIVE at the BC stage, NEGATIVE
-after RL.** Phase 2a is a clean, well-powered win for format alignment; Phase
-2c then carried that checkpoint through M7's exact 5M-step recipe and came out
-**6–7pp below M7**. The advantage did not compound — it inverted. **Read both
-2a and 2c below before citing either.** M9 Phase 2a trained a BC checkpoint on gen1randombattle replays
+after RL — and as of 2026-08-01 both halves are confirmed, not confounded.**
+Phase 2a is a clean, well-powered win for format alignment; Phase 2c carried
+that checkpoint through M7's exact 5M-step recipe and came out **8.3pp below**
+a same-machine control. A seed replication (below) reproduced M7's recipe to
+within **0.6pp**, ruling out training-seed and backend noise as the
+explanation. **The finding is that a better imitator made a worse RL starting
+point.** **Read 2a, 2c and the seed replication below before citing any of
+them.** M9 Phase 2a trained a BC checkpoint on gen1randombattle replays
 only, against the mixed gen1ou+randbats BC that every checkpoint from M5.5
 through M7 was built on. Identical recipe, identical schema, only the corpus
 differs. At n=5,000 per arm:
@@ -153,6 +157,15 @@ Delivered:
   anchor constrains the policy toward a smaller region. That is a hypothesis,
   not a measurement.
 
+  **✅ BOTH CAVEATS BELOW WERE RESOLVED 2026-08-01 by the seed replication —
+  read that entry (Next Steps) before acting on them.** A fresh run of M7's
+  recipe reproduced M7 to within 0.6pp across a backend change, so neither
+  training seed nor `mps`/`cuda` explains 2c's gap. In the properly controlled
+  same-machine A/B the deficit is **−8.3pp vs Random [−11.1, −5.3]**. **2c's
+  regression is real and the format-alignment effect reverses after RL.** The
+  caveats are kept below as written because they were the correct things to
+  doubt at the time.
+
   **⚠️ SECOND CONFOUND, found 2026-07-31 after the verdict was committed:
   M7 trained on `device=mps` (the Mac); 2c trained on `device=cuda` (the home
   box).** Both headers are in their `train.log`s. So the −6.3pp is not
@@ -254,8 +267,63 @@ worth more than the checkpoint would have been: format alignment is now a
 n=2,000 readings for the first time, and the gate defect was caught before it
 could spend two days of ladder.
 
-**🟡 RUNNING (launched 2026-07-31 ~19:45 local, home box, ~70 min): the PPO
-seed replication.** `models/ppo/checkpoints/m9seed/` — M7's exact recipe,
+**✅ COMPLETE 2026-08-01 — the PPO seed replication settled both questions, and
+the answer is good news twice over.**
+
+All four arms re-measured at n=2,000 in **one session on one machine**:
+
+| arm | vs Random | vs DamageFirst | difference vs M7 (R) |
+|---|---:|---:|---|
+| **M7** | 71.7% | 57.6% | — |
+| **m9seed** (M7 recipe, fresh seed) | **71.0%** | **57.4%** | **−0.6pp [−3.4, +2.2]** ✅ |
+| 2c (randbats BC) | 62.8% | 50.7% | −8.9pp [−11.7, −5.9] |
+| M5.5 | 51.2% | 42.0% | −20.5pp [−23.4, −17.5] |
+
+**1. PPO run-to-run spread is small — under a point.** Re-running M7's recipe
+from the same mixed BC reproduced it to **−0.6pp vs Random and −0.3pp vs
+DamageFirst, both CIs comfortably including 0** — and that is *across a backend
+change too* (M7 on `mps`, m9seed on `cuda`), so neither seed nor device moved
+the outcome detectably. **The alarm raised in the 2c write-up was warranted to
+raise and is now answered: it does not fire.**
+
+**2. Therefore 2c's regression is real.** The properly controlled A/B — both
+runs `cuda`, same machine, same recipe, **BC corpus the only systematic
+variable**:
+
+| | m9seed (mixed BC) | 2c (randbats BC) | difference |
+|---|---:|---:|---|
+| vs Random | 71.0% | 62.8% | **−8.3pp [−11.1, −5.3]** |
+| vs DamageFirst | 57.4% | 50.7% | **−6.7pp [−9.7, −3.6]** |
+
+**So both Phase 2 findings stand, and they point in opposite directions:**
+the format-aligned BC is a **better imitator** (2a: +5.6pp raw, +1.6pp
+imitation accuracy) and a **worse RL substrate** (−8.3pp after 5M steps).
+**Better imitation did not mean a better starting point for RL.** The standing
+explanation — that the gen1ou half buys behavioural breadth which is useless
+for imitating randbats but valuable as an exploration prior and KL anchor over
+5M steps — is now the surviving hypothesis rather than one of several.
+
+**What this rescues:** low run-to-run variance means the project's existing
+single-run A/Bs are more trustworthy than the 2c write-up feared. M7-vs-M5.5
+stands. So do the M8 negatives — Phase 1A's −3pp and Phase 2's −2.5pp are
+unlikely to have been seed noise, which makes those closures firmer, not
+weaker.
+
+**Honest limit: this is ONE replication pair (n=2 runs).** It shows the two
+runs agree to within eval noise, which bounds the spread as *small*; it does
+not put a tight interval on the spread itself. A third run would. It is
+adequate for the decision at hand — an 8.3pp gap against an observed 0.6pp
+reproduction difference — and should not be quoted as "PPO variance is 0.6pp".
+
+**Standing rule adopted: run both arms of any A/B on the same machine.** The
+2c-vs-M7 comparison crossed `mps`/`cuda` unnecessarily. It turned out not to
+matter, which is a fact now rather than an assumption.
+
+Artifacts: `models/ppo/checkpoints/m9seed/{train.log,confirm_results.txt,
+ppo_step_5000004_final.pt}`.
+
+**Setup (superseded status note): launched 2026-07-31 ~19:45 local, home box,
+68 min.** `models/ppo/checkpoints/m9seed/` — M7's exact recipe,
 warm-started and anchored from the **mixed** BC (`bc_mlp_gen1_v3.pt`, md5
 verified identical across machines), pool seeded with the same two files.
 `train.py` performs **no seeding of any kind** (`manual_seed`/`np.random.seed`
@@ -288,11 +356,23 @@ signal) is the same mistake one level up.
 
 **Phase 3 is ready to run whenever wanted** — accounts registered and verified
 clean, protocol in `docs/EVALUATION-METHODOLOGY.md`, ~350 games/arm for +10pp
-power. **The user runs live ladder sessions, not Claude.** Note the paired
-design now has both arms as M7-derived only if a second candidate emerges; with
-2c rejected, Phase 3's "candidate vs control" has no candidate — so Phase 3
-should wait on either the seed replication or 2d rather than run M7 against
-itself.
+power. **The user runs live ladder sessions, not Claude.** But note: **Phase 3
+still has no candidate.** 2c is rejected, and `m9seed` is statistically
+indistinguishable from M7 (by construction — it is the same recipe), so pairing
+them would measure nothing about the agent. Phase 3 needs a genuine candidate
+first.
+
+**Where a candidate could come from, now that 2a/2c/m9seed have narrowed it:**
+1. **2d (opponent-pool saturation)** — the *opponent* leg of constraint (c),
+   still untested. 2a/2c tested the *data* leg and found the effect reverses
+   after RL, which makes the opponent leg more interesting, not less.
+2. **Exploit the 2c finding directly.** The evidence says breadth in the BC
+   corpus helps RL while alignment helps imitation. That suggests trying the
+   opposite of 2a: a *broader* BC (add more gen1ou, or reweight toward it) as
+   the RL warm-start, which no run has tried — every checkpoint to date used
+   the 50/50 default.
+3. Neither is a large commitment: ~70 min of GPU per PPO arm, now that
+   throughput is known and the pipeline is shown to be reproducible.
 
 0. **✅ DONE 2026-07-31 — M9 Phase 2b (replay backfill) is COMPLETE, and the
    answer is that there is no more gen 1 human data to get.** Both formats were
