@@ -153,7 +153,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hidden-size",
         type=int,
-        default=128,
+        default=None,
         help=(
             "Trunk width for a from-scratch run. IGNORED when --resume or "
             "--pretrain-checkpoint is given: those inherit the width stored in "
@@ -419,14 +419,17 @@ def main() -> None:
         agent.opp_coef = args.opp_coef  # this run's flag, not the BC default
         print(f"Warm-started from BC checkpoint: {args.pretrain_checkpoint}", flush=True)
     else:
-        agent = PPOAgent(obs_size=obs_size, hidden_size=args.hidden_size,
+        agent = PPOAgent(obs_size=obs_size, hidden_size=args.hidden_size or 128,
                          device=args.device, opp_coef=args.opp_coef)
 
     # --hidden-size cannot override a loaded checkpoint (load_state_dict needs
     # exact shapes), so a mismatch means the run is silently narrower/wider than
     # asked for. Fail loudly rather than train the wrong-sized agent for 5M steps.
+    # Only a explicitly-passed --hidden-size can conflict; the default (None)
+    # means "whatever the checkpoint has", which is the normal warm-start path.
     ckpt_hidden = agent.trunk[0].out_features
-    if (args.resume or args.pretrain_checkpoint) and ckpt_hidden != args.hidden_size:
+    if (args.resume or args.pretrain_checkpoint) and \
+            args.hidden_size is not None and ckpt_hidden != args.hidden_size:
         raise ValueError(
             f"--hidden-size={args.hidden_size} but the loaded checkpoint has "
             f"hidden_size={ckpt_hidden}. Width comes from the checkpoint; drop "
