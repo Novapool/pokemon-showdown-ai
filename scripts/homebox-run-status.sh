@@ -15,7 +15,11 @@ session=${1:?usage: homebox-run-status.sh <tmux-session> <checkpoint-dir>}
 dir=${2:?usage: homebox-run-status.sh <tmux-session> <checkpoint-dir>}
 log="$dir/train.log"
 
-ckpt=$(ls "$dir"/ppo_step_*.pt 2>/dev/null | grep -v seed | wc -l | tr -d ' ')
+# Exclude pool seeds by their filename convention (ppo_step_0_<name>.pt), NOT by
+# matching "seed" anywhere in the path — the directory itself may be called
+# something like "m9seed", which would filter out every real checkpoint.
+ckpt=$(ls "$dir"/ppo_step_*.pt 2>/dev/null | grep -vc '/ppo_step_0_' || true)
+ckpt=${ckpt:-0}
 line=$(grep -oE '^Step [0-9]+/[0-9]+' "$log" 2>/dev/null | tail -1)
 step=${line#Step }; total=${step#*/}; step=${step%%/*}
 pct=0; [ -n "${total:-}" ] && [ "${total:-0}" -gt 0 ] 2>/dev/null && pct=$((step * 100 / total))

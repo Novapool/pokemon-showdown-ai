@@ -18,7 +18,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../../.."
 
-DIR=models/ppo/checkpoints/m9p2c
+DIR=${DIR:-models/ppo/checkpoints/m9p2c}   # override to reuse for another run
 OUT=$DIR/confirm_results.txt
 PY=${PY:-.venv/bin/python}
 N=${N:-2000}

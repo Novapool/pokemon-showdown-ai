@@ -9,14 +9,21 @@
 set -euo pipefail
 cd "$(dirname "$0")/../../../.."
 
-DIR=models/ppo/checkpoints/m9p2c
+DIR=${DIR:-models/ppo/checkpoints/m9p2c}
 OUT=$DIR/sweep_results.txt
 PY=${PY:-.venv/bin/python}
 N=${N:-500}
 
+# Pool seeds are excluded by their filename convention (ppo_step_0_<name>.pt).
+# Do NOT filter on "seed" appearing anywhere in the path: a checkpoint dir named
+# e.g. "m9seed" would then match every line and the sweep would silently
+# evaluate nothing while still reporting SWEEP DONE.
+ckpts=$(ls $DIR/ppo_step_*.pt | grep -v '/ppo_step_0_' | sort -t_ -k3 -n)
+[ -n "$ckpts" ] || { echo "no checkpoints under $DIR" >&2; exit 1; }
+
 : > "$OUT"
-echo "M9 2c sweep (n=$N vs Random) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT"
-for ckpt in $(ls $DIR/ppo_step_*.pt | grep -v seed | sort -t_ -k3 -n); do
+echo "sweep of $DIR (n=$N vs Random) — $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$OUT"
+for ckpt in $ckpts; do
   echo "=== $ckpt ===" >> "$OUT"
   $PY models/evaluate.py --model ppo --obs-v3 --checkpoint "$ckpt" \
       --battles "$N" 2>&1 | grep -E "^Win rate|^Battles" >> "$OUT"
