@@ -35,6 +35,8 @@
  *
  * Opponent selection (M3.3):
  *   --opponent random|damagefirst   picks the built-in p2 AI (default random)
+ *   --stall-penalty <float>         per-turn terminal cost (default 0.001;
+ *                                   0 disables it — see applyStallPenalty)
  *   --selfplay                      dual-seat mode: p2 is a second externally
  *                                   driven seat. reset/step use the dual
  *                                   protocol:
@@ -89,6 +91,14 @@ if ([flat, obsV2, obsV3, obsV3Ext].filter(Boolean).length > 1) {
 const obsMode = flat ? 'flat' :
 	(obsV3Ext ? 'structured-v3-extended' :
 		(obsV3 ? 'structured-v3' : (obsV2 ? 'structured-v2' : 'structured')));
+const stallIdx = process.argv.indexOf('--stall-penalty');
+// undefined => PokemonGymEnv's historical DEFAULT_STALL_PENALTY (0.001).
+const stallPenalty = stallIdx !== -1 ? Number(process.argv[stallIdx + 1]) : undefined;
+if (stallIdx !== -1 && !Number.isFinite(stallPenalty)) {
+	process.stdout.write(JSON.stringify({ error: `--stall-penalty must be a number` }) + '\n');
+	process.exit(1);
+}
+
 const selfplay = process.argv.includes('--selfplay');
 const opponentArgIdx = process.argv.indexOf('--opponent');
 const defaultOpponent = selfplay
@@ -154,7 +164,7 @@ async function processCommand(command) {
 		if (env) env.destroy();
 		sims.clear(); // stale sims reference the previous battle
 		currentOpponent = requested;
-		env = new PokemonGymEnv({ obsMode, opponent: currentOpponent });
+		env = new PokemonGymEnv({ obsMode, opponent: currentOpponent, stallPenalty });
 		if (currentOpponent === 'self') {
 			const result = await env.resetDual();
 			initialized = true;

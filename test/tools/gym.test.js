@@ -12,7 +12,8 @@ const { extractFeatures, OBS_SIZE, extractFeaturesStructured, TOKEN_DIM, TOKEN_D
 	require('../../dist/sim/tools/feature-extractor');
 const { V3_TYPE_EFF, V3_FLAG_SELFKO, V3_SLEEP_CLAUSE, V3_SPEED_RATIO } =
 	require('../../dist/sim/tools/type-chart-v3');
-const { PokemonGymEnv, ObservationTrackers } = require('../../dist/sim/tools/pokemon-gym');
+const { PokemonGymEnv, ObservationTrackers, applyStallPenalty, DEFAULT_STALL_PENALTY } =
+	require('../../dist/sim/tools/pokemon-gym');
 
 // ---------------------------------------------------------------------------
 // Helpers: minimal mock request objects
@@ -585,7 +586,39 @@ describe('PokemonGymEnv', () => {
 			}
 		});
 
-		it('should keep all step rewards in the range [-1, +1]', async function () {
+		// Non-terminal steps are still clipped to [-1, +1]. Terminal steps are
+		// not bounded below: applyStallPenalty clips *before* subtracting the
+		// duration cost, so a long loss lands slightly past -1. That asymmetry
+		// is deliberate — clipping last made the penalty apply only to wins.
+		it('should charge the duration cost equally to wins and losses', function () {
+			// Regression guard for the pre-2026-08-01 reward bug. The old order
+			// (subtract the penalty, then clip to [-1, 1]) let the clip absorb
+			// the whole penalty on a loss, because a loss is already at -1
+			// before it lands. So the agent was punished for taking a long time
+			// to WIN but not for taking a long time to LOSE — a standing
+			// gradient against the patient, positional play that switching
+			// requires, and switching is the central skill in Gen 1.
+			const p = DEFAULT_STALL_PENALTY;
+			for (const turns of [10, 30, 80, 120]) {
+				const win = applyStallPenalty(1.01, turns, p);
+				const loss = applyStallPenalty(-1.01, turns, p);
+				// Both ends move away from the fast-game outcome by the same amount.
+				const winCost = 1 - win;
+				const lossCost = Math.abs(-1 - loss);
+				assert.equal(winCost.toFixed(6), lossCost.toFixed(6),
+					`duration cost is asymmetric at ${turns} turns: ` +
+					`win pays ${winCost}, loss pays ${lossCost}`);
+			}
+			// The old implementation, kept here so the bug can't quietly return.
+			const buggy = (r, t) => Math.max(-1, Math.min(1, r - p * t));
+			assert.equal(buggy(-1.01, 120), -1, 'sanity: old loss reward was pinned at -1');
+			assert(applyStallPenalty(-1.01, 120, p) < -1.1,
+				'fixed loss reward must fall below -1 as the game drags on');
+			// A zero penalty disables the mechanism entirely.
+			assert.equal(applyStallPenalty(-1.01, 120, 0), -1);
+		});
+
+		it('should keep non-terminal step rewards in [-1, +1] and terminal rewards above -2', async function () {
 			this.timeout(60000);
 			for (let trial = 0; trial < 2; trial++) {
 				const env = new PokemonGymEnv({ seed: [trial, trial + 1, trial + 2, trial + 3] });
@@ -596,7 +629,13 @@ describe('PokemonGymEnv', () => {
 						const mask = env.validActions();
 						const action = mask.findIndex(v => v);
 						const result = await env.step(action >= 0 ? action : 0);
-						assert(result.reward >= -1 && result.reward <= 1, `Reward ${result.reward} is outside [-1, +1]`);
+						if (result.done) {
+							assert(result.reward >= -2 && result.reward <= 1,
+								`Terminal reward ${result.reward} is outside [-2, +1]`);
+						} else {
+							assert(result.reward >= -1 && result.reward <= 1,
+								`Non-terminal reward ${result.reward} is outside [-1, +1]`);
+						}
 						done = result.done;
 					}
 				} finally {

@@ -497,6 +497,45 @@ class GymPlayer extends BattlePlayer {
 // PokemonGymEnv
 // ---------------------------------------------------------------------------
 
+/**
+ * Per-turn cost applied to the terminal reward. Historically 0.001 and
+ * unreachable from any flag; kept as the default so existing recipes reproduce.
+ * Pass `stallPenalty: 0` to disable it — see `applyStallPenalty` for why that
+ * is worth testing.
+ */
+export const DEFAULT_STALL_PENALTY = 0.001;
+
+/**
+ * Apply the duration cost to a terminal reward.
+ *
+ * **This clips first and penalises second, which is a fix.** The original order
+ * (penalise, then clip to [-1,1]) made the penalty one-sided: a loss is already
+ * at or past -1 before the penalty lands, so the clip absorbed it entirely,
+ * while a win felt it in full. Measured over the real range:
+ *
+ * ```
+ *   turns      WIN     LOSS      <- pre-fix
+ *      10    1.000   -1.000
+ *     120    0.890   -1.000      loss column is flat; the penalty never applies
+ * ```
+ *
+ * So the agent was punished for taking a long time to *win* but not for taking
+ * a long time to *lose* — a standing gradient against patient, positional play.
+ * Switching costs tempo and lengthens games, and switching is the central skill
+ * in Gen 1, so this pushed directly against the behaviour we want.
+ *
+ * Clipping first makes duration cost the same in both directions. Note the
+ * result is no longer bounded below by -1 (it reaches about -1.2 in a long
+ * game); that is intended — an unbounded-below cost is what makes it symmetric.
+ *
+ * Worth knowing: PPO's own `gamma` already discounts distant terminal reward,
+ * and does so symmetrically, so this penalty is arguably redundant. That is why
+ * it is now settable — `stallPenalty: 0` is a live experiment, not a fallback.
+ */
+export function applyStallPenalty(reward: number, turns: number, penalty: number): number {
+	return Math.max(-1, Math.min(1, reward)) - penalty * turns;
+}
+
 export class PokemonGymEnv {
 	private readonly _format: string;
 	private readonly _seed: PRNGSeed | undefined;
@@ -509,6 +548,7 @@ export class PokemonGymEnv {
 	/** Second gym seat, only in opponent: 'self' (dual-seat self-play) mode. */
 	private _p2Player: GymPlayer | null = null;
 	private readonly _opponent: OpponentKind;
+	private readonly _stallPenalty: number;
 	/** requestCount high-water marks already acted on, per seat (dual mode). */
 	private _consumedCount = { p1: 0, p2: 0 };
 
@@ -531,11 +571,15 @@ export class PokemonGymEnv {
 	// ObservationTrackers. Snapshot-able for the BattleSim forward model.
 	private _trackers = new ObservationTrackers();
 
-	constructor(options: { seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind } = {}) {
+	constructor(options: {
+		seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind;
+		stallPenalty?: number;
+	} = {}) {
 		this._format = options.format ?? 'gen1randombattle';
 		this._seed = options.seed;
 		this._obsMode = options.obsMode ?? 'structured';
 		this._opponent = options.opponent ?? 'random';
+		this._stallPenalty = options.stallPenalty ?? DEFAULT_STALL_PENALTY;
 	}
 
 	// -------------------------------------------------------------------------
@@ -701,14 +745,14 @@ export class PokemonGymEnv {
 			winner = this._winResult ?? undefined;
 		}
 
-		// Stalling penalty (applied on terminal)
+		// Stalling penalty (applied on terminal). Clips before penalising so the
+		// cost is symmetric across win/loss — see applyStallPenalty.
 		if (done) {
-			reward -= 0.001 * this._turnCount;
 			this._done = true;
+			reward = applyStallPenalty(reward, this._turnCount, this._stallPenalty);
+		} else {
+			reward = Math.max(-1, Math.min(1, reward));
 		}
-
-		// Clip reward to [-1, +1]
-		reward = Math.max(-1, Math.min(1, reward));
 
 		// Update current request if we got a real (non-null) one
 		if (result.type === 'request' && result.request !== null) {
@@ -866,10 +910,11 @@ export class PokemonGymEnv {
 		}
 
 		if (done) {
-			reward -= 0.001 * this._turnCount;
 			this._done = true;
+			reward = applyStallPenalty(reward, this._turnCount, this._stallPenalty);
+		} else {
+			reward = Math.max(-1, Math.min(1, reward));
 		}
-		reward = Math.max(-1, Math.min(1, reward));
 
 		return {
 			p1: this._seatState('p1'),
