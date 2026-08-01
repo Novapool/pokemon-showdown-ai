@@ -442,6 +442,17 @@ def main():
         help="Evaluate a PPO checkpoint trained with train.py --structured (M2 verification).",
     )
     parser.add_argument(
+        "--greedy",
+        action="store_true",
+        help=(
+            "Play the masked argmax action instead of sampling from the policy. "
+            "PPO/transformer only — q_learning/dqn are already greedy at "
+            "epsilon=0, and MCTS already takes an argmax over visit counts. "
+            "The default (sampling) is the production path every pre-2026-08-01 "
+            "number was measured on; see docs/CODE-REVIEW-FINDINGS.md §3."
+        ),
+    )
+    parser.add_argument(
         "--obs-v2",
         action="store_true",
         help=(
@@ -560,6 +571,13 @@ def main():
             "--structured is only meaningful with --model ppo "
             "(transformer always uses structured, unflattened observations; no flag needed)"
         )
+    if args.greedy and args.model in ("q_learning", "dqn"):
+        parser.error("--greedy is redundant for q_learning/dqn — both load at epsilon=0")
+    if args.greedy and args.model == "mcts":
+        parser.error(
+            "--greedy does not apply to --model mcts: the search already returns "
+            "the argmax over root visit counts"
+        )
     if args.vs_checkpoint:
         if args.model not in ("ppo", "mcts"):
             parser.error("--vs-checkpoint only supports --model ppo/mcts")
@@ -611,6 +629,10 @@ def main():
         return
 
     agent = _load_agent(args.model, args.checkpoint, device=args.device)
+    if args.greedy:
+        # Only the --checkpoint agent goes greedy; a --vs-checkpoint opponent
+        # keeps sampling, so an h2h run *is* the greedy-vs-sampled A/B.
+        agent.greedy = True
     if args.model == "transformer":
         structured, flatten = True, False
     else:
@@ -646,6 +668,7 @@ def main():
     if not args.vs_checkpoint:
         opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")
+    print(f"Decision rule: {'greedy (masked argmax)' if args.greedy else 'sampled'}")
     print(f"Battles: {total}")
     print(f"Win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
     if track_opp:

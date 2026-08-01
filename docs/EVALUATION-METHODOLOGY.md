@@ -271,6 +271,13 @@ node tools/ladder-bot/ladder-bot.js \
 360, not 350: the +10pp target needs **356** games per arm, and running exactly
 350 leaves the analysis reporting that it could only resolve 15pp.
 
+⚠️ **Decision rule (2026-08-01):** the bot now plays the policy's **argmax** by
+default; `--sample` restores the pre-2026-08-01 sampling. Every ladder number
+recorded before that date — 30.5%, 28.0%, all per-session reads — was scored
+while sampling. **Do not pool across the change**, and state the decision rule
+in the writeup. The banner prints `policy=greedy|sampled` at startup; if you are
+unsure what an arm ran, that line is the record.
+
 - `--run-id` is **mandatory** — it is the arm label written to every CSV row.
 - `--battles` is the **absolute** target. The run is resumable: re-running the
   identical command after a crash picks up where it left off (progress lives in
@@ -378,6 +385,9 @@ Regression tests for the logging path: `test/tools/ladder-results.test.js`
 ---
 
 ## Checklist
+
+Use the `ml-experiment-reviewer` agent (`.claude/agents/ml-experiment-reviewer.md`)
+to check a pre-registration or result against this document before trusting it.
 
 Before a run:
 - [ ] Fresh account per arm, credentials in `config/showdown_login_<arm>.txt`

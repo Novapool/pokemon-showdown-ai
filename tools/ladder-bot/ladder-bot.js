@@ -25,6 +25,11 @@
  *   PS_USERNAME=... PS_PASSWORD=... node tools/ladder-bot/ladder-bot.js \
  *     --checkpoint models/ppo/checkpoints/opp/ppo_step_5000001_final.pt --battles 10
  *
+ *   # The policy plays its argmax by default (--sample restores sampling, the
+ *   # pre-2026-08-01 behaviour and the control arm of a greedy A/B). Note that
+ *   # under --mcts the search already argmaxes, so the decision rule only
+ *   # reaches the raw-policy fallbacks (force switches / locked states).
+ *
  *   # Resumable run: --run-id persists progress (finished/wins) to
  *   # <save-dir>/run_<id>.json after every battle. If the process dies for any
  *   # reason, re-running the SAME command continues at the next battle —
@@ -66,6 +71,12 @@ function parseArgs(argv) {
 		saveDir: 'data/replays/self_ladder',
 		device: 'cpu',
 		verbose: false,
+		// Play the policy's argmax, not a sample from it. Default ON since
+		// 2026-08-01: greedy beat sampling by +7.8pp vs Random [+6.1, +9.5] and
+		// +5.0pp vs DamageFirst [+3.1, +6.9] at n=5,000/arm. Every ladder result
+		// before that date was scored while sampling. --sample restores the old
+		// behaviour (it is the control arm of any greedy A/B).
+		greedy: true,
 		mcts: false,        // M6 P2: search clean move requests via act_tracked
 		sims: 100,
 		determinizations: 1,
@@ -86,6 +97,8 @@ function parseArgs(argv) {
 		case '--save-dir': args.saveDir = argv[++i]; break;
 		case '--device': args.device = argv[++i]; break;
 		case '--verbose': args.verbose = true; break;
+		case '--greedy': args.greedy = true; break;   // default; kept so old commands still run
+		case '--sample': args.greedy = false; break;
 		case '--mcts': args.mcts = true; break;
 		case '--sims': args.sims = parseInt(argv[++i], 10); break;
 		case '--determinizations': args.determinizations = parseInt(argv[++i], 10); break;
@@ -118,6 +131,7 @@ class InferServer {
 			path.join(__dirname, '../../models/infer_server.py'),
 			'--checkpoint', args.checkpoint, '--device', args.device,
 		];
+		if (args.greedy) argv.push('--greedy');
 		if (args.mcts) {
 			argv.push('--mcts', '--sims', String(args.sims),
 				'--determinizations', String(args.determinizations),
@@ -439,6 +453,7 @@ class LadderBot {
 		const schema = this.obsV3Ext ? 'v3-extended' : this.obsV3 ? 'v3' : this.obsV2 ? 'v2' : 'v1';
 		this.mctsReady = this.args.mcts && !!pong.mcts;
 		console.log(`inference ready: obs_size=${obsSize} (${schema} schema)` +
+			`, policy=${this.args.greedy ? 'greedy' : 'sampled'}` +
 			(this.mctsReady ? `, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
 				`c_puct=${this.args.cPuct})` : ''));
 

@@ -31,6 +31,9 @@ def _pick_device() -> torch.device:
 class TransformerAgent(nn.Module):
     """Actor-Critic agent trained with PPO over a transformer token encoder."""
 
+    # See PPOAgent.greedy — argmax instead of sampling in act()/act_batch().
+    greedy = False
+
     def __init__(
         self,
         token_dim: int = TOKEN_DIM,
@@ -169,7 +172,7 @@ class TransformerAgent(nn.Module):
         logits = logits.masked_fill(~mask_t, -1e9)
 
         dist = Categorical(logits=logits)
-        action = dist.sample()
+        action = logits.argmax(dim=-1) if self.greedy else dist.sample()
         log_prob = dist.log_prob(action)
 
         return (
@@ -199,7 +202,7 @@ class TransformerAgent(nn.Module):
         logits = logits.masked_fill(~mask_t, -1e9)
 
         dist = Categorical(logits=logits)
-        actions = dist.sample()
+        actions = logits.argmax(dim=-1) if self.greedy else dist.sample()
         log_probs = dist.log_prob(actions)
 
         return (

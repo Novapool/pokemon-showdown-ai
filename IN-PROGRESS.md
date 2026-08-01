@@ -135,6 +135,29 @@ closes the capacity question with a mechanism attached rather than a shrug.
 
 ## Recently Completed
 
+- **Greedy decoding shipped and confirmed offline (2026-08-01).** `--greedy` now
+  exists on `models/evaluate.py`, `models/infer_server.py` and
+  `tools/ladder-bot/ladder-bot.js`; `PPOAgent`/`TransformerAgent`
+  `act()`/`act_batch()` take the masked argmax when `agent.greedy` is set,
+  default off so rollouts still sample. `evaluate.py` prints the decision rule
+  and refuses the flag where it would be inert (`--model mcts`, q_learning/dqn);
+  the ladder bot's banner prints `policy=greedy|sampled`. **A/B on the M7 v3
+  checkpoint, n=5,000/arm** (not 2,000 — the baseline is in the 0.3–0.7 band
+  where the methodology requires 5,000), all four arms one session one machine:
+
+  | vs | sampled | greedy | difference (Newcombe 95%) |
+  |---|---|---|---|
+  | Random | 69.9% (3497/5000) | **77.7%** (3887/5000) | **+7.8pp [+6.1, +9.5]** ✅ |
+  | DamageFirst | 60.2% (3010/5000) | **65.2%** (3259/5000) | **+5.0pp [+3.1, +6.9]** ✅ |
+
+  vs Random replicates the review's +7.8pp exactly at 12.5× the n. **The
+  DamageFirst arm reverses the review's −2.0pp** (that reading was n=400 and
+  underpowered), so greedy is *not* opponent-dependent — `docs/CODE-REVIEW-FINDINGS.md`
+  §3 has been corrected. Side benefit: sampled-vs-Random came in at 69.9%
+  against M7's recorded 69.7%, a data point on the §5f harness-reproducibility
+  question. **`ladder-bot.js` now plays greedy by default** (`--sample` opts
+  out). **Untested: the ladder**, where determinism against adapting humans is
+  the one risk bot evals cannot speak to — costed at ~83 h and declined.
 - **Code Review (2026-08-01):** Three independent read-only reviews of the training path, observation pipeline, and evaluation machinery. Identified root cause of the bot/human gap: **observation poverty**. The agent encodes moves without identity, carries no species/stats/trapping, cannot reason about damage. Also found: (1) MCTS confound (argmax vs sampling, ~+7.8pp vs Random), (2) M8 Phase 1A doubly confounded (trunk width fixed, no replay-adapter v3-extended path), (3) M8 Phase 2 new candidate cause (reward scale asymmetry in battle-sim), (4) M2 decision-rule confound (epsilon=0 for some arms, sampling for PPO), (5) "~3pp seat bias" unsupported by CI including 0.
 - **M9 Phases 2a–2d and seed replication (complete 2026-08-01):** Format-aligned BC is a better imitator (+5.6pp) but worse RL substrate (−8.3pp RL). Run-to-run spread is <1pp. Sparring-partner hypothesis null (−1.0pp vs Random, 0.0 vs DamageFirst). All findings pre-registered; both positive/null results are real.
 - **Observation poverty hypothesis scoped:** First hypothesis that predicts the gap's shape, not just another knob. Measured to carry ~25 distinct values; width-512 probe bought only +2.8pp BC val acc. New leading direction identified.
@@ -148,17 +171,30 @@ closes the capacity question with a mechanism attached rather than a shrug.
   ~11:50 local 2026-08-01. See Current Work. Will inform whether the
   bigger-network direction is worth pursuing, or observation-fixing is higher
   leverage. Expectation is an informative null.
-- **Greedy decoding is untested and is the cheapest open lever.** MCTS plays
-  argmax, the raw policy samples, and `infer_server.py` (the ladder bot) calls
-  `agent.act()` — so **the 30.5% ladder result was scored while sampling, never
-  playing its best move**. Argmax alone measured +7.8pp vs Random [+2.7, +12.5]
-  on M7 with no search. Inference-only, no GPU, no training. Needs a `--greedy`
-  flag in `evaluate.py`/`infer_server.py`, a bot eval, then a ladder session.
-  **The user runs live ladder sessions, not Claude.**
+- ~~Greedy decoding~~ — **resolved 2026-08-01.** Confirmed offline and adopted as
+  the ladder default; the ladder A/B was costed and declined. See Next Steps §0.
 
 ---
 
 ## Next Steps
+
+0. **Greedy is now the ladder default (2026-08-01) — decision recorded, not
+   A/B'd on the ladder.** Adopted on 10,000 offline battles (+7.8pp / +5.0pp,
+   both CIs excluding 0). A properly powered ladder read was costed and
+   **declined**: at p₁≈0.30 a +7.5pp gate needs 623 games/arm ≈ 83 h total, and
+   356/arm resolves only +10pp against a +5–8pp effect — i.e. the affordable
+   version returns "inconclusive" by construction, the exact failure mode
+   `docs/EVALUATION-METHODOLOGY.md` exists to prevent.
+
+   **What stays open:** whether determinism is punished by humans who adapt.
+   Bot evals cannot answer it. If a ladder A/B is ever run, both arms must be
+   **without `--mcts`** (the search already argmaxes, so the decision rule only
+   reaches raw-policy fallbacks — `ladder-bot.js:291`), block-alternated 25
+   games at a time, `--sample` as the control arm.
+
+   ⚠️ **All ladder numbers in this file — 30.5%, 28.0%, every per-session read —
+   were scored while sampling.** Post-2026-08-01 sessions are not comparable to
+   them on the decision-rule axis. Do not pool across the change.
 
 1. **If width-512 PPO A/B is run first (in parallel with M11 approval):** Run both arms on same machine at n=2,000. If ≥+2pp and observations are expected to add more, proceed to M11 Phase 0 (reward fix). If <+2pp or regression, that answers "is bigger capacity the answer?" — likely no.
 

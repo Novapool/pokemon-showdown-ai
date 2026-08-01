@@ -23,9 +23,11 @@ Protocol (one JSON object per line):
   in : {"cmd": "close"}        out: {"ok": true}  (then exits)
 
 Usage: python models/infer_server.py --checkpoint <path> [--device cpu]
-           [--mcts] [--sims 100] [--determinizations 1] [--c-puct 0.5]
-Action selection matches evaluate.py: PPOAgent.act() (masked policy sampling)
-for "act"; MCTSAgent with the tuned defaults for "act_tracked" under --mcts.
+           [--mcts] [--sims 100] [--determinizations 1] [--c-puct 0.5] [--greedy]
+Action selection matches evaluate.py: PPOAgent.act() for "act" — masked policy
+sampling by default, masked argmax under --greedy; MCTSAgent with the tuned
+defaults for "act_tracked" under --mcts. Every ladder result before 2026-08-01
+was played sampled (docs/CODE-REVIEW-FINDINGS.md §3a).
 
 Obs schema is inferred from the checkpoint: obs_size comes straight from the
 loaded PPOAgent's hparams (780 v1 / 924 v2 / 1032 v3, M7), and act/act_tracked
@@ -115,9 +117,14 @@ def main() -> None:
     parser.add_argument("--sims", type=int, default=100)
     parser.add_argument("--determinizations", type=int, default=1)
     parser.add_argument("--c-puct", type=float, default=0.5)
+    parser.add_argument("--greedy", action="store_true",
+                        help="play the masked argmax instead of sampling the policy "
+                             "(no effect under --mcts, which already takes an argmax "
+                             "over visit counts, except on its raw-policy fallbacks)")
     args = parser.parse_args()
 
     agent = PPOAgent.load(args.checkpoint, device=args.device)
+    agent.greedy = args.greedy
     obs_size = agent._hparams["obs_size"]
 
     sim_client = None

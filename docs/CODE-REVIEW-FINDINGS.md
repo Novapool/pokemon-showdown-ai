@@ -127,8 +127,22 @@ M7 with **no search in either arm**, only sampling swapped for masked argmax:
 | greedy argmax | **81.2%** | 58.0% |
 | difference | **+7.8pp [+2.7, +12.5]** | −2.0pp [−8.8, +4.8] |
 
-**Argmax alone buys roughly the entire reported search gain.** The effect is
-opponent-dependent, so it is not a constant offset that cancels.
+**Argmax alone buys roughly the entire reported search gain.**
+
+> **Superseded 2026-08-01 (same day), at n=5,000/arm.** The n=400 readings above
+> were underpowered; the DamageFirst one has since **reversed**. Re-measured on
+> the same M7 checkpoint, one session, one machine, with the `--greedy` flag:
+>
+> | vs | sampled | greedy | difference |
+> |---|---|---|---|
+> | Random | 69.9% (3497/5000) | **77.7%** (3887/5000) | **+7.8pp [+6.1, +9.5]** |
+> | DamageFirst | 60.2% (3010/5000) | **65.2%** (3259/5000) | **+5.0pp [+3.1, +6.9]** |
+>
+> vs Random replicates +7.8pp exactly. **Greedy is not opponent-dependent — it
+> is a win against both bots**, so the "not a constant offset that cancels"
+> caveat above no longer has evidence behind it. The confound in every
+> search-vs-no-search comparison stands regardless: the two arms still differed
+> in decision rule as well as in search.
 
 **Affected:** `MILESTONES.md:713`'s claim that the M4 head-to-head is "the
 cleanest causal measure — same network, same battles, only the search differs"
@@ -146,9 +160,19 @@ inherit this.
 than playing its best move.** Greedy decoding on the ladder has never been
 tested. It is free to test — inference only, no training.
 
-Caveat before assuming it is free points: the bot-eval effect was
-opponent-dependent, and determinism against adapting humans is a real
-trade-off. But at 30.5% we are not losing to opponents who are reading us.
+**Fixed 2026-08-01:** `--greedy` now exists on `evaluate.py` and
+`infer_server.py`, and **`ladder-bot.js` plays greedy by default** (`--sample`
+opts out; the startup banner prints `policy=greedy|sampled`, so no future
+session is ambiguous about its decision rule). Confirmed at n=5,000/arm on both
+bots — see the box in §3.
+
+Adopted on the offline evidence rather than ladder-A/B'd: at p₁≈0.30 a +7.5pp
+ladder gate needs 623 games/arm ≈ **83 h of laddering**, and it would buy only
+the one thing bot evals cannot say — whether **adapting humans** punish
+determinism. At 30.5% we are probably not losing to opponents who are reading
+us, but that is an argument, not a measurement, and it remains open. **All
+existing ladder numbers were scored while sampling and are not comparable to
+post-change sessions on this axis.**
 
 ---
 

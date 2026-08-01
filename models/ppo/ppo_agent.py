@@ -35,6 +35,11 @@ def _pick_device() -> torch.device:
 class PPOAgent(nn.Module):
     """Actor-Critic agent trained with Proximal Policy Optimization."""
 
+    # Set True to make act()/act_batch() play the masked argmax instead of
+    # sampling (evaluate.py --greedy, infer_server.py --greedy). Rollouts must
+    # sample, so the trainer never touches this and the default stays False.
+    greedy = False
+
     def __init__(
         self,
         obs_size: int = 100,
@@ -126,7 +131,7 @@ class PPOAgent(nn.Module):
     def act(
         self, obs: np.ndarray, valid_mask: list
     ) -> tuple[int, float, float]:
-        """Sample an action from the policy.
+        """Pick an action from the policy — sampled, or argmax when self.greedy.
 
         Args:
             obs:        Observation array, shape (100,), float32.
@@ -146,7 +151,7 @@ class PPOAgent(nn.Module):
         logits = logits.masked_fill(~mask_t, -1e9)
 
         dist = Categorical(logits=logits)
-        action = dist.sample()
+        action = logits.argmax(dim=-1) if self.greedy else dist.sample()
         log_prob = dist.log_prob(action)
 
         return (
@@ -159,7 +164,8 @@ class PPOAgent(nn.Module):
     def act_batch(
         self, obs_batch: np.ndarray, valid_masks: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Sample actions for a batch of observations (one per parallel env).
+        """Pick actions for a batch of observations (one per parallel env) —
+        sampled, or argmax when self.greedy.
 
         Args:
             obs_batch:   float32 array, shape (N, obs_size).
@@ -179,7 +185,7 @@ class PPOAgent(nn.Module):
         logits = logits.masked_fill(~mask_t, -1e9)
 
         dist = Categorical(logits=logits)
-        actions = dist.sample()
+        actions = logits.argmax(dim=-1) if self.greedy else dist.sample()
         log_probs = dist.log_prob(actions)
 
         return (

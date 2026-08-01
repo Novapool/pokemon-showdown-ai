@@ -15,40 +15,37 @@ Last updated: **2026-08-01**
 
 We have a Pokémon-battling agent that is **very good against simple bots and
 mediocre against humans**. It wins ~93% against our scripted opponents but only
-**~30% on the real ladder**. Closing that gap has been the whole project since
-M7, and **six** separate theories about why it exists have now been tested and
-ruled out — including, as of 2026-08-01, the sparring-partner theory below.
-Giving the agent human-like opponents to practise against changed its strength
-by **nothing at all**. The two explanations still standing are that the model
-is **too small** (151,187 parameters) and that **random-team battles are simply
-luck-heavy**, and those are what the remaining options attack.
+**~30% on the real ladder**. A code review on 2026-08-01 identified the root
+cause: **the agent cannot see what it needs to play Gen 1 well.** Its observation
+encodes moves without identity (Recover and Swords Dance are byte-identical),
+and carries no species or stats at all, making damage estimation impossible.
+This is invisible against `Random` and `DamageFirst`, which never switch and
+mostly attack (base power suffices), and expensive against humans (which switch
+constantly and reason with stats and coverage). **This is the first hypothesis
+that predicts the shape of the gap rather than proposing another knob.** Six
+other theories have been tested and ruled out since M7. The binding constraint
+is now measured and understood.
 
-## The core problem, as an analogy
+## What the observation poverty looks like
 
-Our agent trains against a **tennis ball machine**, then we're surprised it
-loses to actual players.
+The observation encodes a move in six numbers: base power, accuracy, type,
+category, PP, disabled. **There is no move identity.** So to the agent:
+- Recover and Swords Dance are byte-identical (0 base power, 100% accuracy, Normal status)
+- Wrap, Fire Spin, Clamp (15 BP, 85% accuracy, Normal physical) are identical to each other
+- Horn Drill and Fissure (0 BP, 30%, Normal physical) *look like the worst moves in the game* — they are actually OHKO moves that decide games
 
-Its three training opponents are `Random` (fires legal moves at random),
-`DamageFirst` (always attacks with its strongest move), and self-play (frozen
-copies of itself). The detail that makes this literal: **both scripted
-opponents never voluntarily switch Pokémon** — it's in the header comment of
-`sim/tools/damage-first-ai.ts`. Switching is *the* central skill in Gen 1.
-So for half its training the agent faced opponents that structurally cannot do
-the main thing real opponents do, and the other half it faced itself, which
-shares all of its own blind spots.
+**Species and stats are completely absent.** The gym sends HP as a ratio;
+absolute bulk is invisible. No damage estimate is formable.
 
-**We tested this directly on 2026-08-01, and it isn't the answer.** We gave the
-agent human-imitator sparring partners for half of every practice game, all the
-way through training. Result: **−1.0 points vs Random, 0.0 vs DamageFirst** —
-statistically indistinguishable from the control, and the DamageFirst arms
-tied to the individual battle.
+**Trapping and Hyper Beam recharge are invisible.** The agent cannot learn to
+punish DamageFirst spamming Hyper Beam into recharge, even though DamageFirst
+does this structurally every fifth move.
 
-The deeper surprise is *why* that's interesting. One run practised against
-opponents that get stronger as it does; the other against opponents frozen at a
-weak level. **They came out identical.** Within this setup, who the agent
-practises against barely seems to matter — which points the finger away from
-the sparring partner and toward the student: it may simply not have the
-capacity to get more out of any opponent.
+This completely explains why the agent dominates bots that never switch (93%)
+and struggles against humans who switch constantly and play for position
+(30%). The sparring-partner hypothesis was tested in M9 and failed entirely
+(−1.0pp vs Random, 0.0 vs DamageFirst) — **it is the agent's perception that
+is the constraint, not its training opponents.**
 
 ## What we know for sure
 
@@ -56,113 +53,101 @@ Each of these is measured, with confidence intervals, at sample sizes that can
 actually support the claim. That was not true of this project before M9.
 
 - **The agent is strong vs bots, weak vs humans.** 93% vs Random with search;
-  **30.5% on ladder** (n=387, CI [26.1, 35.3]).
-- **Our measuring instrument used to be broken, and now isn't.** Early ladder
-  reads were 50–100 games where the noise (±13pp) was larger than any effect we
-  could produce — like judging a diet from daily weigh-ins. `GXE` was worse: a
-  *lifetime* average that barely moves. Protocol now lives in
-  `docs/EVALUATION-METHODOLOGY.md` and nothing counts unless it follows it.
+  **30.5% on ladder** (n=387, CI [26.1, 35.3]) — scored while *sampling* the
+  policy, which we now know costs ~5–8pp offline.
+- **Playing the argmax beats sampling it.** +7.8pp vs Random, +5.0pp vs
+  DamageFirst, n=5,000/arm. Never tested on the ladder.
+- **Our measuring instrument is now sound.** Early ladder reads were 50–100
+  games where the noise (±13pp) was larger than any effect we could produce.
+  Protocol now lives in `docs/EVALUATION-METHODOLOGY.md`.
 - **Training is reproducible.** Re-running the identical 5M-step recipe lands
-  within **0.6pp**, even across a Mac→GPU change. So differences bigger than
-  ~3pp are real signal, not luck.
-- **A better imitator can be a worse learner.** Training the copy-a-human stage
-  on *only* the target format made a better mimic (+5.6pp) that then finished
-  **8.3pp worse** after self-practice. Reading narrowly gave it fewer ideas to
-  explore with. Practical upshot: use the **mixed** corpus checkpoint
-  (`bc_mlp_gen1_v3.pt`) to start any RL run.
-- **There is no more Gen 1 human data to get.** The replay archive is
-  exhausted; we hold essentially all of it (`docs/DATA-INVENTORY.md`).
+  within **0.6pp**, even across a Mac→GPU change. Differences >~3pp are real.
+- **A better imitator can be a worse learner.** Training BC on only random
+  battles made a better mimic (+5.6pp) but then finished 8.3pp worse after RL.
+  The mixed corpus buys exploration breadth, not just imitation accuracy.
+- **There is no more Gen 1 human data to get.** The replay archive is exhausted.
+- **The observation is information-poor, measured directly.** ~25 distinct
+  values per decision; 128 of 1044 dims non-zero; 667 dims non-zero in <1%.
 
 ## Dead ends — don't re-propose these without new evidence
 
 | Idea | Why it's closed |
 |---|---|
-| Scrape more Gen 1 replays | Archive exhausted, we hold ~all of it |
-| Harvest the "untapped" unrated tournament games | Already 74% of training data |
-| Richer observations (speed-ratio feature) | Tested, made it *worse* |
-| Fix the value head (AlphaZero-style) | Tested twice, both negative |
-| Train on the target format only | Tested — better mimic, worse learner |
-| Practise against human-like opponents | Tested — **no measurable effect at all** |
-| Pick the best checkpoint off a sweep | Sweep max is luck-inflated; it regressed 4.2pp and ranked *below* the final |
-
----
+| Scrape more Gen 1 replays | Archive exhausted |
+| Harvest "untapped" tournament games | Already 74% of training data |
+| Fix the value head (AlphaZero-style) | Tested twice, both null (−2.5pp each) |
+| Train BC on target format only | Tested — better imitation, worse RL substrate |
+| Spar with human-like opponents | M9: no measurable effect at all (−1.0pp) |
+| Pick the best checkpoint off a sweep | Sweep peak is luck-inflated; it regressed 4.2pp |
+| Speed-ratio observation feature | M8 Phase 1A: −3pp, and doubly confounded (see MILESTONES.md) |
 
 ## Options from here
 
-**1. Spar with a human impersonator — ❌ DONE 2026-08-01, no effect.**
-Moved to the dead-ends table. The one caveat we wrote down in advance still
-holds: the sparring partners were frozen, so the agent outgrew them, and bot
-evals can't speak to *human* play. But the manipulation was large — half of
-every practice game, for the whole run — and it changed nothing, so we are not
-spending more on this direction.
+**The new leading hypothesis is observation poverty.** This is the first lever
+that predicts *why* the gap has this exact shape. It is not yet tested end-to-end,
+and closing it requires retraining (new obs schema invalidates every existing
+checkpoint). The honest options:
 
-**2. Widen the reading list (~2 h).** Our own result says variety in the
-imitation stage helps learning. Every checkpoint ever built used a 50/50 split
-and nobody has tried tilting further toward variety. Cheap, but expect a few
-points, not a transformation.
+**1. Fix observations (M11, ~2–3 days training).** Add move identity, species,
+stats, trapping, and Hyper Beam recharge. Requires new `obs_schema_v4`,
+matching `replay-adapter.ts` path, BC retraining. Gates on raw-policy bot evals
+at n=2,000/opponent with CI excluding 0 (currently ~+3pp bar). **This is the
+highest-leverage option, and the first one worth spending time on.**
 
-**3. Fixed-team Gen 1 OU instead of random teams (~1 day).** Today every battle
-deals random teams, so the agent must know ~150 Pokémon shallowly and a lot of
-wins and losses come down to the draw. With a fixed team it would learn 6
-Pokémon deeply, and results would reflect skill instead of the deal.
+**2. Also fix reward asymmetry (~3 lines, free to test).** `gym.ts` clips the
+turn penalty but only when losing; `battle-sim.ts` (MCTS forward model) applies
+neither penalty nor clip. M8 Phase 2's null may have been suppressed by this
+asymmetry. Direct test: apply symmetric reward scaling and retest value
+fine-tuning.
 
-**Cheaper than it sounds, and the code was checked rather than guessed:**
-`PokemonGymEnv` already takes a `format` option (`sim/tools/pokemon-gym.ts`
-line ~535, defaulting to `gen1randombattle`), and it stays in Gen 1 so **the
-observation layer needs no rewrite** — unlike a Gen 9 move, which is why that
-one is a restart and this one isn't. The genuinely missing piece is teams: the
-battle spec it builds is `{formatid, seed}` with no team attached, which is
-fine for a random format and not fine for OU. So the work is plumbing a packed
-team through gym → bridge → clients, plus picking a team.
+**3. Greedy decoding — CLOSED, and now the ladder default.** The ladder bot
+sampled from the policy for its entire history. At n=5,000/arm greedy is
+**+7.8pp vs Random [+6.1, +9.5]** and **+5.0pp vs DamageFirst [+3.1, +6.9]** —
+both gates passed, and the DamageFirst reading *reverses* the underpowered
+n=400 −2.0pp in the code review. `ladder-bot.js` is greedy by default as of
+2026-08-01 (`--sample` opts out). Adopted on the offline evidence rather than
+A/B'd on the ladder: a properly powered ladder read costs ~83 h, which buys
+only the one thing bot evals can't say — whether adapting humans punish
+determinism. **Every ladder number in this doc predates the change.**
 
-**Two real catches.** The Gen 1 OU ladder is *less* busy than random battles
-(31 vs 44 replays/day), so final human validation gets **slower**, not faster.
-And every result M2→M9 is on random battles, so baselines would need
-re-measuring in the new format before anything could be compared.
+**4. A bigger brain (medium effort).** The network is 151,187 parameters — tiny.
+At observation poverty's root, bigger capacity may help *after* the observation
+fix. Before: the agent is playing blind; after: it might need more parameters
+to use the information. **Caveat:** a larger transformer was tried in M3 and
+retired for underperforming, so bigger is not automatic.
 
-**4. A bigger brain (medium).** The network is **151,187 parameters** — tiny.
-We keep asking "what should it study?" and never "can it hold what it studies?"
-Its ~54% ceiling at predicting human moves might be capacity, not curriculum.
-**Caveat:** a larger transformer was already tried in M3 and *retired* for
-underperforming, so bigger is not automatically better here.
+**5. Fixed-team Gen 1 OU instead of random teams (~1 day).** Reduces team-luck
+variance. The code already supports it; the missing piece is plumbing teams and
+picking a roster. Downside: Gen 1 OU ladder is slower, so validation takes longer.
 
-**5. Switch to Gen 9 (large).** ~45× the data and ladder traffic. But it's a
-restart, not a pivot: abilities, items, terastallisation, ~1000 species, and
-every checkpoint M2→M9 becomes worthless. Costed in `docs/DATA-INVENTORY.md`.
-Not recommended.
-
-**6. Call it.** The agent is a solid club player, not a tournament threat. M8
-and M9 produced almost entirely negative results on "make it stronger," and
-these levers are worth single digits against a ~40-point gap.
+**6. Call it.** The agent is a solid club player. M8–M9 tried two structural
+bets and both failed. The observation fix is well-motivated and measurable, but
+it is a retraining — invalidates all checkpoints, costs time. **This is a
+legitimate stopping point** if the resource/motivation calculation doesn't favor
+continuing.
 
 ## Recommendation
 
-Option 1 came back empty, and that genuinely narrowed things: opponent realism
-is not the binding constraint, so the live candidates are **capacity** and
-**team luck**.
+**Do option 1 next.** The observation poverty hypothesis is the first one that
+predicts the gap's shape rather than proposing another knob. It is well-evidenced
+from the code review (`docs/CODE-REVIEW-FINDINGS.md`), and M8 Phase 1A's
+failure to help with speed ratio now reads as a second confound on top of a
+fundamentally incomplete observation.
 
-**Do option 4 next (a bigger brain), but as a cheap probe first.** The network
-is 151,187 parameters, and we have never once asked whether it can hold what we
-keep feeding it. Before committing to a redesign, run the smallest honest
-version: widen the existing network, retrain with the standard recipe, measure
-at n=2,000. That's ~70 minutes and reuses everything. **Weigh the caveat
-properly** — M3 tried a larger transformer and retired it — but that was a
-different architecture, not a wider version of what currently works, and
-"bigger failed once" is not the same as "capacity isn't the constraint."
+**Scope M11 carefully:** The new observation schema invalidates every
+checkpoint. Estimate BC retraining time, the full training run, eval power.
+Pre-register the gates. Only proceed if the costs are clear and agreed.
 
-**Then option 3 (fixed teams)** if the answer is to keep going seriously. It's
-about a day, and it attacks luck — a source of noise that *no amount of skill
-overcomes*, and which makes every future experiment harder to measure. It also
-stays in Gen 1, so nothing has to be rewritten.
+**Do option 2 as a quick smoke first** (reward fix is ~3 lines and an eval run).
+It is a direct test of a new hypothesis from the code review, costs nothing
+extra, and might move the dial.
 
-**Option 2 is now low value.** It was cheap and worth a side quest when the
-data-distribution story looked live; after 2c and 2d, expect very little.
+**Option 3 is closed** — greedy is confirmed offline and is now the ladder
+default. Every ladder number this project holds was scored while sampling, so
+the next ladder session is not comparable to them on that axis.
 
-**Expectation to hold onto — and it has hardened.** Everything we have tried
-moves bot-eval scores by single digits, and the gap to human-level play is
-around 40 points. Six theories are now closed. The realistic outcome is
-*understanding why the gap exists*, not erasing it, and Gen 1 random battles
-carry real team luck that puts a ceiling below 100% no matter how good the
-player is. **Option 6 (stop) is a legitimate answer, not a failure** — the
-project has produced a genuinely strong bot-eval agent and an unusually
-rigorous measurement setup.
+**Expectation:** The realistic outcome is *understanding why the gap exists*,
+not erasing it. Gen 1 random battles carry real team luck that puts a ceiling
+below 100% no matter how good the player is. The project has produced a strong
+bot-eval agent and an unusually rigorous measurement setup. If observation
+fixes don't close the gap substantially, that is a finding worth recording.

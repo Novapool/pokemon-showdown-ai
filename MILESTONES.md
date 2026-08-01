@@ -177,6 +177,15 @@ actually populates the opponent tokens described above.
 - ✅ PPO with MLP trunk on flattened structured obs achieves ≥ 50% win rate vs RandomPlayerAI at 50k battles — **51% (254/500) on the real evaluation, 2.6M-step training run** (`models/ppo/checkpoints/structured/ppo_step_2600000_final.pt`)
 - ❌ ~~Stat boosts for active Pokémon are non-constant~~ — dropped, see above
 
+**⚠️ CORRECTION (2026-08-01): Architecture comparison confound. See
+`docs/CODE-REVIEW-FINDINGS.md §5e`.** `models/evaluate.py:71,79` set
+`epsilon=0` (greedy) for q_learning/DQN while PPO sampled stochastically.
+The 51% PPO baseline was achieved under sampling; an apples-to-apples
+comparison to the tabular baselines would require greedy evaluation. The
+structured representation itself is sound (verified in M2), but M2's
+relative-strength conclusion depends on comparing arms under identical
+decision rules, which was not done.**
+
 ### Unblocks
 M3 (transformer encoder needs per-Pokémon tokens as input) — fully unblocked. The structured representation is verified at parity with the M1 flat baseline.
 
@@ -566,6 +575,13 @@ readings were 150-battle noise, ±8pp):
 seat-balanced): 45% as p1 (227/500), 51% as p2 (253/500) → **48.0% combined
 (480/1000)** — parity-to-slightly-worse, inside the ±3.1pp CI.
 
+**⚠️ CORRECTION (2026-08-01): The ~3pp seat bias cited in `models/CLAUDE.md`
+is unsupported by its own measurement. See `docs/CODE-REVIEW-FINDINGS.md
+§5d`.** This h2h shows 6pp (45%/51%, CI ±3.1pp), which includes 0. M4's
+60.4%/60.0% shows no effect. An unmeasured constant has been serving as an
+error bar for nine milestones. Do not quote "~3pp seat bias" without the
+caveat that it is a convention, not measured.
+
 ### Success Criteria — ❌ NOT MET
 - ❌ ≥ 65% vs RandomPlayerAI (500 battles) — best confirmed **54%**
 - ❌ ≥ 60% vs DamageFirstAI (200+ battles) — best **46%**, still below the
@@ -715,6 +731,17 @@ Artifacts: `models/mcts/results/{vs_random,vs_damagefirst,h2h_seat_p1,h2h_seat_p
   orientations. Combined with the DamageFirst gain, this confirms the M3.4
   hypothesis that *lookahead*, not observations or opponent distribution,
   was the binding constraint on this policy.
+
+**⚠️ CORRECTION (2026-08-01): This claim is false. See
+`docs/CODE-REVIEW-FINDINGS.md §3` — MCTS plays argmax over visit counts
+(deterministic) while the "raw checkpoint" arm sampled stochastically. Argmax
+alone measured **+7.8pp vs Random [+6.1, +9.5] and +5.0pp vs DamageFirst [+3.1,
++6.9]** (n=5,000/arm, 2026-08-01) — roughly the entire reported search gain,
+and a gain against *both* bots, not the opponent-dependent effect the first
+n=400 reading suggested. M4's "+8.6pp vs Random", the 60.2% head-to-head, the shipped
+"93.0% with MCTS vs 69.7% raw", and every ladder `--mcts` on/off comparison
+are all confounded by this decision-rule swap. Search's true contribution
+remains unknown; the lookahead hypothesis is not closed.**
 - The vs-Random criterion missed by 1.4pp (5 battles). Plausible reading:
   Random's blunders make many positions winnable by the prior alone, so
   search adds less there than against coherent opposition — the gain is
@@ -1452,6 +1479,17 @@ M8 (if v3 succeeds): further obs refinements, AlphaZero-style self-play value ta
   rule, Phase 1A gates negative → **Phase 1B (full 5M run) is skipped;
   escalate to Phase 2 (AlphaZero value targeting).**
 
+**⚠️ CORRECTION (2026-08-01): Phase 1A's closure ("richer observations are not
+the constraint") is now DOUBLY CONFOUNDED and should be REOPENED. See
+`docs/CODE-REVIEW-FINDINGS.md §1 & §6`.** (a) The trunk width was held
+constant at 128 while the schema grew from 77 to 87 dims; (b) `sim/tools/replay-adapter.ts`
+has no v3-extended path, so the speed-ratio arm could not have been BC
+warm-started while its control lineage was, invalidating the comparison to the
+v3 control that was BC warm-started. The speed-ratio feature itself is sound
+and worth retesting with a proper warm-start baseline — but the current
+closure sits on two uncontrolled variables. This matters because the new
+leading hypothesis is precisely about observation poverty.**
+
 **Phase 1B (if Phase 1A gates positive):** Full v3-extended PPO run
 
 - **Goal:** Train the obs-refined model to convergence and confirm the bot-eval improvement.
@@ -1577,6 +1615,16 @@ If obs refinement doesn't move the needle, the binding constraint is likely that
   Logs: `models/mcts/results/m8_phase2_df_valft_{criterionC,train}.log`;
   checkpoint `models/ppo/checkpoints/v3_valft/ppo_v3_df_valft_outcome.pt`
   (home box only — not committed).
+
+**⚠️ NEW CANDIDATE CAUSE FOR THE NULL (2026-08-01): Reward scale asymmetry.
+See `docs/CODE-REVIEW-FINDINGS.md §2`.** `battle-sim.ts` (the MCTS forward
+model) applies **neither** the turn penalty nor the reward clip that
+`gym.ts` applies. So `--target mc` (shaped env rewards used as targets)
+and `--target root` (search-tree root Q) sit on different reward scales
+while documented as interchangeable. This could suppress the value-head
+improvement's transfer to play strength. A retest with both targets under
+identical reward scaling — either both clipped or both unclipped — is a
+direct test of this explanation.**
 
   **Methodological note (applies project-wide): the +3pp gate at n=200 was
   underpowered.** A true +3pp effect would have been detected only ~1/3 of the
@@ -2259,4 +2307,167 @@ See `docs/BATTLE-LOG-ANALYSIS.md` for the comprehensive plan. Summary:
 **If positive:** Concrete intervention targets; evidence that tactical fixes are high-ROI.
 
 **If null/inconclusive:** Strong evidence to deprioritize tactical optimization; redirects to capacity (M11 → bigger-brain investigation) or team luck (format re-evaluation).
+
+---
+
+## M11: Observation Enrichment + Reward Asymmetry ⏳ SCOPED
+
+**Status:** ⏳ Scoped 2026-08-01 (code review findings; pending user approval to build)
+
+**Thesis:** The 93%-vs-bots / 30%-vs-humans gap is driven by observation poverty.
+The agent encodes moves without identity, carries no species/stats/trapping, and
+cannot reason about damage. Against `Random` and `DamageFirst`, which never
+switch, base power and type suffice. Against humans, which switch constantly and
+reason with stats and coverage, the agent is playing blind. This is the first
+hypothesis that predicts the *shape* of the gap (`docs/CODE-REVIEW-FINDINGS.md
+§1`) rather than another knob. Separately, the reward clip is asymmetric —
+penalizing long losses but not long wins — which favors stalling when behind,
+punishing the switching-heavy play this project has spent three milestones
+trying to teach.
+
+**⚠️ CRITICAL CAVEAT:** A new observation schema invalidates every existing
+checkpoint (BC and PPO). M11 means retraining the lineage from scratch:
+BC→PPO→eval→ladder. Estimate BC retraining (~2–3 hours), PPO training
+(~2 hours for an A/B run on each opponent), full eval (RL evals + ladder if
+gates pass). This is not a small cost and must be stated plainly, not buried.
+
+---
+
+### M11 Phases (contingency gates between them)
+
+**Phase 0 (Reward asymmetry fix): ~3 lines, ~1 hour.** Quick smoke test of a
+new hypothesis from the code review.
+
+- **Goal:** Test whether `battle-sim.ts` (MCTS forward model) and `gym.ts` (env)
+  should apply identical reward scaling, not just shaped-vs-unshapen. M8 Phase 2
+  found value-head fine-tuning improved in-distribution calibration but didn't
+  transfer to play strength; MCTS evaluates at leaves using the fine-tuned head,
+  but the targets were collected on a different reward scale.
+- **Design:** Apply both the turn penalty and the reward clip symmetrically in
+  `battle-sim.ts` (currently applies neither). Run M8 Phase 2's value fine-tune
+  pipeline on the M7 checkpoint with this fix; if the fine-tuned head transfers
+  to +3pp bot eval, escalate to Phase 1 (obs richness). If still null, conclude
+  the issue is deeper.
+- **Effort:** 30 min code, 2 hours eval.
+- **Acceptance:** Report whether the symmetry fix moved the needle on Phase 2's
+  reproduction run. If yes (≥+1pp, not a hard gate), proceed. If no, the issue
+  is not reward scale.
+
+---
+
+**Phase 1 (Observation enrichment):** Add move identity, species, stats, trapping, recharge.
+
+- **Goal:** Close the observation-poverty hypothesis end-to-end. Each missing
+  feature has been verified as critical and invisible to the current encoder:
+  - Move identity: Recover/Swords Dance/OHKO moves are byte-identical
+  - Species/stats: No damage estimate formable; bulk unknown; type coverage invisible
+  - Trapping: `maybeLocked` never read; agent cannot learn to punish recharge
+  - Hyper Beam recharge: Encodes as 0-BP physical Normal; agent structurally cannot punish
+- **Design:**
+  - New observation schema `v4` (working name; dims TBD):
+    - Per-move: add 1 dim for move_id (encoded 0–162 via `Dex.mod('gen1').moves` LUT)
+    - Per active Pokémon: add species_id (1 dim, 0–151 LUT), base stats (5 dims:
+      HP, Atk, Def, SpA, Spe), trapping-locked flag (1 dim)
+    - Recharge state: Hyper Beam recharge and multi-turn moves tracked as
+      `|-cant|…recharge` and `|-cant|…partiallytrapped` (parser already sees
+      these); encode as a flag on the active token
+  - Update `sim/tools/feature-extractor.ts` with v4 schema and LUTs
+  - Add matching `sim/tools/replay-adapter.ts` v4 path for BC retraining
+  - All other infrastructure (bridge, gym_client, schema dispatch) auto-detects
+    new size and flows through unchanged (tested in M3–M9)
+- **Implementation path:**
+  1. Schema design: decide dims, LUT structure, naming (1 day design + test)
+  2. Feature extractor + replay adapter + tests (1 day)
+  3. Build green, smoke training (2–3 hours on Mac)
+  4. BC retraining from raw replays (2–3 hours on home box per corpus)
+- **A/B runs (parallel arms, n=2,000/opponent, gate: ≥+3pp CI excl. 0):**
+  - Control: M7 checkpoint (`v3/ppo_step_5000002_final.pt`), v3 observation
+  - Candidate: v4 BC (trained on mixed corpus) warm-start → PPO 5M steps (M7 recipe)
+  - Report vs Random, vs DamageFirst, ladder candidate (if gates pass)
+- **Effort:** ~3–4 days (schema + code + BC retraining + PPO training + eval). BC
+  retraining is the parallelizable dependency (home-box task; can overlap with
+  feature work on the Mac).
+
+---
+
+**Phase 2 (if Phase 1 gates positive): Full ladder validation.** Same protocol
+as M9 Phase 3 — fresh accounts, paired concurrent A/B, power for +10pp, gate on
+the paired difference.
+
+---
+
+### Instrumentation Debt (parallel to Phase 1)
+
+The code review identified several defects that prevent future debugging:
+- `train.py` has no seeding anywhere, so no run-to-run A/B can use common random
+  numbers
+- No entropy, KL, clip fraction, or value loss is ever logged (only win-rate +
+  summed loss)
+- No run manifest (device / argv / SHA)
+
+**Fix alongside M11 Phase 1** (cheap, ~4 hours):
+- Add `--seed` to both trainers and seed all RNGs before creating the policy
+- Add histogram logging for entropy, KL, clip fraction, value loss per-step
+- Write `meta.json` with device, git SHA, argv, timestamp (template: `collect_value_data.py`)
+
+This cost is paid once and unblocks future A/Bs from confound creep.
+
+---
+
+### Success Criteria
+
+- **Phase 0 (reward fix A/B):** Report MSE change and bot-eval deltas vs M7.
+  If ≥+1pp and not regressed, proceed to Phase 1. If no movement, conclude
+  reward scale is not the issue.
+
+- **Phase 1 (obs enrichment A/B):**
+  - ✅ v4 schema properly implements all five feature categories above
+  - ✅ BC retraining completes and produces a checkpoint (v4 BC)
+  - ✅ v4 arm trains to 5M steps on the M7 recipe
+  - ✅ Raw-policy bot evals: ≥+3pp vs Random at n=2,000, CI excluding 0
+  - ✅ Report vs DamageFirst alongside (no gate, but directional)
+
+- **Phase 2 (if gates pass):**
+  - Paired ladder A/B at n≥350/arm, gate on difference: ≥+10pp with CI excl. 0
+  - Same protocol as M9 Phase 3
+
+- **Instrumentation debt:**
+  - ✅ Trainer has `--seed` and uses it
+  - ✅ Logs include entropy, KL, clip fraction per step
+  - ✅ `meta.json` written on every run
+
+### Decision Rules (pre-registered)
+
+**After Phase 0:** If the reward asymmetry fix doesn't move the needle (≤+0.5pp),
+conclude the issue is deeper in the observation, and proceed to Phase 1 anyway
+(this was the pre-registered hypothesis; a new candidate cause doesn't override
+it). If it does move the needle (≥+1pp), it's a cheap fix to include before
+Phase 1.
+
+**After Phase 1:** If v4 beats v3 by ≥+3pp on both Random and DamageFirst at
+n=2,000 with CIs excluding 0, escalate to Phase 2 (ladder). If it's negative or
+inside noise, close the hypothesis as "observation enrichment alone does not
+close the gap" and stop (a finding worth recording).
+
+---
+
+### Unblocks (if positive)
+
+Concrete evidence that observation poverty was the binding constraint; actionable
+directions for M12+ (other missing observations? bigger network now that the
+agent can use it? ladder optimization?). If gates pass, M7 shipping agent is
+replaced.
+
+### Risks and Mitigations
+
+**Risk 1: BC retraining is a bottleneck.** Run on home box in parallel with code
+work on the Mac. Estimated 2–3 hours per corpus.
+
+**Risk 2: Schema design choices cascade.** Design dims carefully; test shape
+stability on a 4k-step smoke first. All infrastructure auto-detects size, so
+shape mistakes are caught early.
+
+**Risk 3: New obs schema still doesn't help.** This is a possible finding, not
+a bug. Record it honestly and move to other directions (capacity, team luck, or
+stopping).
 
