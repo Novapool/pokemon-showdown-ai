@@ -143,6 +143,12 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 
 ## M9 Phase 2 — data/distribution runbook
 
+> **Read this before copying the fine-tune command below.** The commands here
+> are the *procedure*, not a recommendation. The randbats-only BC they build
+> won 2a as a standalone policy and then **lost 2c by −8.3pp** once fine-tuned.
+> **For a PPO warm-start or `--bc-anchor`, use the mixed `bc_mlp_gen1_v3.pt`.**
+> See `MILESTONES.md` → M9 Phase 2.
+
 **Train a format-aligned BC checkpoint** (2a). The only change from the M5.5/M7
 BC recipe is `--formats`; everything else is left at its default on purpose so
 the comparison has exactly one variable. ~3.5 min on the Mac:
@@ -164,8 +170,12 @@ Pick n from the arms' actual win rate, not habit — `--power --baseline-p 0.42`
 shows a mid-range agent needs ~4,300/arm to resolve +3pp, against 906 near
 p=0.93. See `docs/EVALUATION-METHODOLOGY.md`.
 
-**Fine-tune it** (2c, home box, ~4 h on the RTX 3080). Push first, then
-preflight; the run is M7's recipe with only the warm-start swapped:
+**Fine-tune it** (2c, home box, **~70 min** on the RTX 3080 — the "~4 h"
+estimate was from Mac-era throughput; measured rate is ~21k steps/min). Push
+first, then preflight. The run is M7's recipe with only the warm-start swapped
+— which is exactly what makes it a clean single-variable A/B, and exactly why
+its **result was negative**: swap the two `bc_mlp_gen1_v3_rb5.pt` paths below
+for `bc_mlp_gen1_v3.pt` to reproduce the *stronger* arm.
 
 ```bash
 git push && ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-preflight.sh"'
@@ -192,6 +202,29 @@ scratch with an empty pool. Then sweep and confirm on the home box:
 bash models/ppo/checkpoints/m9p2c/run_sweep.sh
 bash models/ppo/checkpoints/m9p2c/run_confirm.sh ppo_step_5000002_final.pt
 ```
+
+Both runners take `DIR=` to point at another run, and both exclude pool seeds by
+the `ppo_step_0_<name>.pt` filename convention — **not** by matching "seed" in
+the path, which silently emptied the sweep for a directory named `m9seed`.
+
+### Seed replication — how to tell a real effect from a lucky run
+
+`train.py` does **no seeding** (no `manual_seed`, no `np.random.seed`, anywhere
+in the trainer, agent or gym clients), so re-running an identical command is an
+independent draw. That makes a replication a one-line job — same command, new
+`--checkpoint-dir`:
+
+```bash
+DIR=models/ppo/checkpoints/m9seed bash models/ppo/checkpoints/m9p2c/run_confirm.sh \
+  ppo_step_5000004_final.pt
+python3 scripts/bot_eval_ab.py --arm m7=1433/2000 --arm m9seed=1421/2000
+```
+
+**Measured 2026-08-01: run-to-run spread is under 1pp** (M7 reproduced to
+−0.6pp vs Random, CI including 0, across an `mps`→`cuda` change). So single-run
+A/Bs here are trustworthy for effects of ~3pp and up, and a ~70-minute
+replication is cheap insurance before believing a *surprising* result. Run both
+arms of an A/B on the same machine.
 
 ---
 
