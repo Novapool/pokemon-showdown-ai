@@ -74,3 +74,21 @@ Companion note: `/Users/laithassaf/Documents/Obsidian/nebula/1 Projects/pokemon-
 When you make a large/architectural change or complete a milestone, update that
 note's **Summary / Status / Next** sections to match (keep it concise). See the
 "Obsidian Vault Sync" convention in `~/.claude/CLAUDE.md`.
+
+## ⚠️ You are in the EXPERIMENTAL worktree
+
+This checkout is `experiment/hierarchical-action-policy`, a git worktree at
+`~/Documents/Programs/pokemon-ai-experimental/`. The main line lives at
+`~/Documents/Programs/Archived/pokemon-showdown/` on `master`.
+
+- **Read `docs/experimental/hierarchical-action-policy.md` first.** That is the
+  only doc that belongs to this branch; everything else here is a copy of master.
+- **Main-line project state (M11, ladder reads, milestone updates) belongs on
+  `master`, not here.** Two such commits landed on this branch by accident on
+  2026-08-02 and had to be cherry-picked back out.
+- `node_modules`, `.venv`, and `data/{replays,replay_trajs,value_targets}` are
+  **symlinks into the main repo** (read-only inputs, ~3.7 GB not duplicated).
+  `dist/` is built independently here — `./build` in this directory does not
+  affect master's build.
+- Checkpoint dirs are NOT shared. To use a master baseline, point at it by
+  absolute path rather than copying.
