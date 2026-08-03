@@ -75,6 +75,11 @@ the timeline. Surface it to the user after a context clear.
 
 ## Current Work
 
+**👉 THE IMMEDIATE NEXT ACTION: run the M11 eval battery. Both arms finished
+training 2026-08-02** — `m11_h128` at 5,000,003 steps, `m11_h512` at 5,000,006,
+on the home box at `~/Projects/pokemon-showdown-ai/models/ppo/checkpoints/<arm>/`.
+Nothing has been evaluated yet. Full runbook in **Next Steps §1**.
+
 **Field observation (2026-08-02, user watching a live ladder game) — added to
 M11 Phase 1 scope.** The agent switched a Water type in after a faint against an
 Electric, then spent the following turn switching it out for a Normal. Checked
@@ -180,12 +185,12 @@ closes the capacity question with a mechanism attached rather than a shrug.
 ## Blockers
 
 - **M11 approval:** Observation schema v4 invalidates all checkpoints (BC + PPO). Retraining cost: ~2–3h BC + ~2h PPO + ~2h full eval + ladder if gates pass. User approval required before committing to M11.
-- **Width-512 probe: LAUNCHED, not pending** — both arms in flight, ETA ~5 h from
-  ~11:50 local 2026-08-01. See Current Work. Will inform whether the
-  bigger-network direction is worth pursuing, or observation-fixing is higher
-  leverage. Expectation is an informative null.
-- ~~Greedy decoding~~ — **resolved 2026-08-01.** Confirmed offline and adopted as
-  the ladder default; the ladder A/B was costed and declined. See Next Steps §0.
+- **Width-512 probe: TRAINED 2026-08-02, UNMEASURED.** Both arms hit 5M steps.
+  Not a blocker on anyone — it is the immediate next action. Runbook in Next
+  Steps §1. Expectation is still an informative null on width.
+- ~~Greedy decoding~~ — **resolved 2026-08-02.** Confirmed offline (+7.8pp /
+  +5.0pp), adopted as the ladder default; the one ladder read was flat and
+  diluted by `--mcts`. Closed. See Next Steps §0.
 
 ---
 
@@ -234,7 +239,39 @@ closes the capacity question with a mechanism attached rather than a shrug.
    ```
    Pooled across both, all 867 rated games: **27.6% [24.7, 30.6]**.
 
-1. **If width-512 PPO A/B is run first (in parallel with M11 approval):** Run both arms on same machine at n=2,000. If ≥+2pp and observations are expected to add more, proceed to M11 Phase 0 (reward fix). If <+2pp or regression, that answers "is bigger capacity the answer?" — likely no.
+1. **▶ M11 eval battery — BOTH ARMS TRAINED, NOTHING MEASURED YET.**
+   Finished 2026-08-02: `m11_h128` (151,187 params) at 5,000,003 steps,
+   `m11_h512` (801,299) at 5,000,006. Checkpoints live **on the home box only**
+   at `~/Projects/pokemon-showdown-ai/models/ppo/checkpoints/<arm>/` — they do
+   not sync via git (`docs/MULTI-MACHINE.md`).
+
+   **Two pre-registered comparisons**, each single-variable:
+   - `m11_h128` vs **`m9seed`** → the **reward fix** (width held at 128)
+   - `m11_h512` vs **`m11_h128`** → **width** (reward held fixed)
+
+   Pre-registered gate: **≥+3pp vs Random with the CI on the difference
+   excluding 0**; DamageFirst reported alongside but not gated. Expectation was
+   an informative null on width.
+
+   **Runbook:** evaluate the **final** checkpoint of each arm (never a sweep
+   pick — `docs/EVALUATION-METHODOLOGY.md`), **all arms in one session on one
+   machine**, identical decision rule across arms, then
+   `scripts/bot_eval_ab.py --arm base=W/N --arm cand=W/N --gate 3`.
+
+   **Two open calls, flagged before any number exists:**
+   - **n.** Pre-registration says 2,000. These arms will land near 0.6–0.7 like
+     M7, where 2,000 resolves only ~±4.5pp against a +3pp gate — underpowered by
+     the project's own rule (n=5,000 for anything in the 0.3–0.7 band).
+     **Recommend running n=5,000 and recording plainly that the registration was
+     widened**, rather than running a test known in advance to be underpowered.
+   - **Decision rule.** The gate compares *training recipes*, so it only needs to
+     be identical across arms. **Recommend `sampled`** for the gate — keeps these
+     comparable to every historical number including M7's 69.7% — and add a
+     `--greedy` read on the winner only.
+
+   Then: if width gates ≥+3pp, capacity is live and M11 Phase 1 should budget a
+   wider net; if null (expected), the capacity question closes with a mechanism
+   attached and Phase 1 proceeds at width 128.
 
 2. **M11 Phase 0 (reward asymmetry fix, ~1 hour):** ~3 lines in `battle-sim.ts`, 1 replication of M8 Phase 2's value fine-tune. If moves needle (≥+1pp), include before Phase 1. If not, proceed to Phase 1 directly.
 
