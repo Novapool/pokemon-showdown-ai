@@ -14,24 +14,48 @@ Four phases (Phase 0–3), each with a pre-registered gate, kill criterion, and 
 
 ## Phase 0: Non-Greedy Decision Probe
 
+**Status: ✅ COMPLETE (2026-08-03) — results in `phase0-results.md`.**
+Gate 1 (accuracy gap) passes: +17.5pp randbats / +12.0pp gen1ou for BC,
++32.0 / +25.4 for PPO, battle-clustered CIs excluding 0. Gate 2 as literally
+written does not pass; it was mis-specified and was amended after seeing the
+data — the amendment is recorded in the results doc. Headline finding: **RL,
+not the observation, is what destroys switching** (BC switches 26.8% on the
+subset, PPO 6.0%, on the identical v3 observation).
+
 **Goal:** Diagnostic baseline. Measure whether the agent's greedy play is actually a problem, before building anything.
 
 **Scope:**
 - Filter `data/replay_trajs/` BC shards for positions where a rated human chose a **0-BP status move or switch while a ≥90-BP damaging move was legal**.
 - Score M7 v3 checkpoint on this set (greedy decoding) vs full set.
-- Measure human agreement on same set as non-neural baseline.
+- Measure the agent's **greediness rate**: on the non-greedy subset, how often
+  does it pick the high-BP attack the human declined?
 - Estimate ceiling: what fraction of human decisions are recoverable from v3 observations?
+
+> **Corrected 2026-08-03.** An earlier draft of this phase gated on "human
+> agreement must exceed the agent's." That is incoherent — the human choice *is*
+> the label, so human agreement is 100% by construction. It also named the
+> Phase 1 heuristic bot as the non-neural baseline, inverting the phase order.
+> Both are replaced by the greediness rate below, which needs nothing Phase 1
+> builds. Note a max-base-power baseline is *also* useless here: it scores 0% on
+> this subset by construction, since the subset is defined by the human
+> declining the high-BP move.
 
 **Deliverables:**
 - CSV: {subset, top-1 accuracy, N, 95% CI}
-- Human baseline (same subset): top-1 agreement on dataset
+- Greediness rate on the non-greedy subset, with CI
 - Ceiling estimate (per-subset category breakout)
 
 **Pre-Registered Gate:**
-- **Greedy/non-greedy gap must be ≥3pp** with CI excluding 0 (n = subset size from shards, target ≥500 positions).
-- **Human agreement must be substantially higher** (≥+10pp) than agent, else motivation weakens.
+- **Accuracy gap (full set − non-greedy subset) must be ≥3pp**, CI excluding 0
+  (target ≥500 subset positions; report achieved n and do not gate if underpowered).
+- **Greediness rate must exceed 50%** — i.e. on positions where a rated human
+  declined the big attack, the agent takes it more often than not. This is the
+  direct measurement of the degeneracy the branch exists to fix.
 
-**Kill Criterion:** Gap <3pp or human agreement within 5pp of agent → motivation to continue is weak; document and consider stopping.
+**Kill Criterion:** Gap <3pp **or** greediness rate ≤50% → the agent is not
+behaving like a max-BP picker and "it plays greedily" is not our problem.
+Document and stop; the observation-poverty case would then need to rest on
+something other than move selection.
 
 **Wall-Clock:** ~2–3 hours (Mac, no training).
 
