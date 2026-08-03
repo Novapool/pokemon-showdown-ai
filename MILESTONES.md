@@ -314,6 +314,32 @@ analysis bear directly on this milestone's design:
    arm this milestone compares losses against. Use
    `ladder_analysis.py --min-decisions 16` semantics.
 
+**Preliminary probe (2026-08-03, ~30 min, 864 logs) — the first tactical error
+metric already fires.** Definition: a *wasted-turn double switch* is a voluntary
+switch-in that we voluntarily switch back out on the very next turn, with no
+faint forcing either move — a free turn handed to the opponent, and the exact
+pattern observed live on 2026-08-02.
+
+| | double-switches / voluntary switches | rate | 95% CI |
+|---|---|---:|---|
+| our wins | 18 / 297 | 6.06% | [3.87, 9.38] |
+| our losses | 230 / 1468 | **15.67%** | [13.90, 17.62] |
+| difference | | **+9.61pp** | **[+5.85, +12.54]** ✅ excludes 0 |
+
+And it climbs with game length, tracking the win-rate decay: **3.7%** (≤20
+turns) → 13.9% (21–25) → 14.1% (26–30) → **17.1%** (31–40). Holding length
+fixed at 26–30 turns it is still 14.9% in losses vs 8.8% in wins.
+
+**This is a lead, not a finding.** Three caveats that Phase 2/3 must resolve:
+(a) **direction of causation is unresolved** — losing positions may force
+defensive shuffling, so this could be a symptom rather than a cause; (b) it
+pools the greedy and sampling eras across all 864 logs on disk, not the clean
+360-game run; (c) **it has no human baseline**, which is the only thing that
+converts "we do this 16% of the time" into "this is a mistake." **Phase 3 is
+therefore promoted from conditional to required** — the human comparison is
+what makes this metric mean anything. Probe script was throwaway; Phase 1 should
+reimplement it properly inside `models/battle_log_parser.py`.
+
 **Data confirmed usable (2026-08-03):** the logs are not just public protocol —
 they carry `|request|` lines with our exact stats, HP, PP and legal move set at
 every decision, plus the opponent's full revealed state. Ground truth for damage
@@ -352,7 +378,9 @@ See `docs/BATTLE-LOG-ANALYSIS.md` for the comprehensive plan. Summary:
   length stratification is the primary endpoint: it is the one pattern we
   already know needs explaining.
 
-**Phase 3: Human Baseline** (2 days)
+**Phase 3: Human Baseline** (2 days) — **REQUIRED, not conditional** (promoted
+2026-08-03: the double-switch probe shows a rate with no reference point, and
+without the human number every Tier 1 metric has the same problem)
 - Sync human replay corpus from home box (if not already synced)
 - Run same metrics on ~5k human games
 - Compare agent vs human error rates with CIs
@@ -402,9 +430,11 @@ See `docs/BATTLE-LOG-ANALYSIS.md` for the comprehensive plan. Summary:
 **Effort breakdown:**
 - Phase 1: 2 days
 - Phase 2: 3 days  
-- Phase 3: 2 days (conditional on home-box sync)
+- Phase 3: 2 days (required as of 2026-08-03; needs the home-box replay sync)
 - Phase 4: 1 day
-- **Total: ~8 days if home-box sync exists; ~5 days if agent-only metrics suffice**
+- **Total: ~8 days.** The "~5 days if agent-only metrics suffice" variant is
+  withdrawn — agent-only error rates have no reference point and cannot be
+  interpreted.
 
 **Go/no-go decisions:**
 - After Phase 1: If logs are too corrupted or incomplete, abort and document the data limitation.

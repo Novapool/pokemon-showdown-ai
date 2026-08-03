@@ -58,7 +58,8 @@ swing was **sample size, not drift** (±13pp CI at n=50; session heterogeneity
 `phi=1.21, p=0.303`), and that the 42% was **the better of two unreported 50-game
 sessions that day** (the other scored 24.0%). Pooling all 387 M7-era rated games
 gives the number no single run could see: **M7 = 30.5% on ladder, 95% CI
-[26.1, 35.3]**.
+[26.1, 35.3]** — **22.9% [18.7, 27.6] excluding opponent concessions**, which is
+the figure to quote for play strength (see Recently Completed, 2026-08-03).
 
 **👉 For a plain-language, one-screen orientation — what the agent can and
 can't do, what's settled, and the live menu of options with a recommendation —
@@ -153,6 +154,27 @@ closes the capacity question with a mechanism attached rather than a shrug.
 
 ## Recently Completed
 
+- **Ladder log deep-dive + analysis tooling (2026-08-03).** Three findings from
+  the 360-game `m7-greedy` run beyond the headline win rate:
+  1. **~10% of ladder games are opponent concessions and they are ~35% of all
+     our wins.** Across 747 rated games we have never lost one in under 16
+     decisions; 74 wins came that fast. Contested-only: **greedy 19.3%
+     (n=326)**, M7-era sampling **22.9% (n=341)** — the same −3.5pp difference,
+     so no comparison changes, but every absolute ladder number this project has
+     quoted is ~7pp high. Logged as correction 4 in MILESTONES.md.
+  2. **Win rate decays with game length:** 31.2% (16–20 decisions) → 24.1%
+     (21–25) → 18.8% (26–30) → **14.6% (31–40)**. First behavioral evidence
+     matching the observation-poverty prediction — short games are damage races,
+     long games are position games.
+  3. **Win rate decays with opponent Elo:** 34.4% (1000–1099) → 15.3%
+     (1200–1299), r=−0.143, t=−2.72, n=360. Own rating never left ~1000–1120 and
+     hit the 1000 floor twice.
+
+  `scripts/ladder_analysis.py` now reports the concession split and a
+  win-rate-by-opponent-Elo table on every run, and takes `--min-decisions N`
+  (use 16) to score contested games only. Both CSV schemas still parse.
+  **Consequence: M10 is re-prioritised ahead of M11 Phase 1** — finding (2) is a
+  correlation that M10 can turn into a mechanism without any retraining.
 - **Greedy decoding shipped and confirmed offline (2026-08-01).** `--greedy` now
   exists on `models/evaluate.py`, `models/infer_server.py` and
   `tools/ladder-bot/ladder-bot.js`; `PPOAgent`/`TransformerAgent`
@@ -177,14 +199,15 @@ closes the capacity question with a mechanism attached rather than a shrug.
   out). **Untested: the ladder**, where determinism against adapting humans is
   the one risk bot evals cannot speak to — costed at ~83 h and declined.
 - **Code Review (2026-08-01):** Three independent read-only reviews of the training path, observation pipeline, and evaluation machinery. Identified root cause of the bot/human gap: **observation poverty**. The agent encodes moves without identity, carries no species/stats/trapping, cannot reason about damage. Also found: (1) MCTS confound (argmax vs sampling, ~+7.8pp vs Random), (2) M8 Phase 1A doubly confounded (trunk width fixed, no replay-adapter v3-extended path), (3) M8 Phase 2 new candidate cause (reward scale asymmetry in battle-sim), (4) M2 decision-rule confound (epsilon=0 for some arms, sampling for PPO), (5) "~3pp seat bias" unsupported by CI including 0.
-- **M9 Phases 2a–2d and seed replication (complete 2026-08-01):** Format-aligned BC is a better imitator (+5.6pp) but worse RL substrate (−8.3pp RL). Run-to-run spread is <1pp. Sparring-partner hypothesis null (−1.0pp vs Random, 0.0 vs DamageFirst). All findings pre-registered; both positive/null results are real.
-- **Observation poverty hypothesis scoped:** First hypothesis that predicts the gap's shape, not just another knob. Measured to carry ~25 distinct values; width-512 probe bought only +2.8pp BC val acc. New leading direction identified.
+<!-- Older entries (M9 phases 2a–2d, seed replication, observation-poverty
+     scoping) now live in MILESTONES.md — Results Ledger and M11 respectively,
+     per the three-item rule at the bottom of this file. -->
 
 ---
 
 ## Blockers
 
-- **M11 approval:** Observation schema v4 invalidates all checkpoints (BC + PPO). Retraining cost: ~2–3h BC + ~2h PPO + ~2h full eval + ladder if gates pass. User approval required before committing to M11.
+- **M11 approval:** Observation schema v4 invalidates all checkpoints (BC + PPO). Retraining cost: ~2–3h BC + ~2h PPO + ~2h full eval + ladder if gates pass. User approval required before committing to M11. **As of 2026-08-03 the recommendation is to run M10 first** — it needs no approval, no retraining, and should tell M11 which dims to prioritise. See MILESTONES.md → M10 Recommendation.
 - **Width-512 probe: TRAINED 2026-08-02, UNMEASURED.** Both arms hit 5M steps.
   Not a blocker on anyone — it is the immediate next action. Runbook in Next
   Steps §1. Expectation is still an informative null on width.
