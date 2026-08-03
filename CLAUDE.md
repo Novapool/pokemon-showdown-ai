@@ -20,6 +20,9 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 | File | Read when |
 |---|---|
 | `docs/WHERE-WE-ARE.md` | **Start here at the beginning of any session, and surface it to the user when context is cleared.** One screen, plain language, no timeline: what the agent can and can't do, what's been settled, what's a dead end, and the live menu of options with a recommendation. Keep it updated as things close |
+| `IN-PROGRESS.md` | Current work, the active plan, blockers, and the standing rules that keep A/Bs valid. The timeline; `WHERE-WE-ARE.md` is the orientation |
+| `MILESTONES.md` | Planning the next milestone, or checking what a past one concluded. Results ledger for M0–M9 (condensed) + the live M10/M11 plans |
+| `docs/MILESTONES-ARCHIVE.md` | You need a completed milestone **in full** — original plans, build phasing, file manifests, complete results tables, run logs. Read on demand only |
 | `docs/DATA-INVENTORY.md` | **Read first before proposing any data-acquisition work.** What human data exists (the gen 1 archive is exhausted), what we hold, and what BC training actually consumes — vs what the manifest suggests |
 | `docs/EVALUATION-METHODOLOGY.md` | **Read first before running or gating on any evaluation, ladder or bot.** The protocol: required sample sizes, account/arm setup, `scripts/ladder_analysis.py`, reporting template |
 | `docs/LADDER-MEASUREMENT.md` | Why GXE/Elo readings from M6–M8 don't support per-run conclusions — the diagnosis behind the protocol above |

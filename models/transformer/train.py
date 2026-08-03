@@ -7,7 +7,7 @@ Usage:
 
     # Warm-started from the M2.5 BC checkpoint — checkpoints land in
     # checkpoints/pretrained/, so the two runs never collide. Both are
-    # required for the M3 comparison (MILESTONES.md).
+    # required for the M3 comparison (docs/MILESTONES-ARCHIVE.md).
     python models/transformer/train.py --steps 2600000 --checkpoint-every 250000 \
         --pretrain_checkpoint models/checkpoints/bc_pretrain_gen1ou.pt
 

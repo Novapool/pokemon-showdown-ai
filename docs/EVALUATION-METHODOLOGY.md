@@ -142,7 +142,7 @@ Games per arm to detect an effect on bot opponents:
 | +3pp | 906 | 2,137 |
 | +5pp | 269 | 723 |
 
-**The M9 Phase 2 gate as written in MILESTONES.md — "≥+2pp on both bot opponents
+**The M9 Phase 2 gate as written in `docs/MILESTONES-ARCHIVE.md` — "≥+2pp on both bot opponents
 at n=500" — is underpowered by 4–10×**, the same defect as M8's "+3pp at n=200".
 It cannot pass reliably even if the candidate is genuinely +2pp better.
 
