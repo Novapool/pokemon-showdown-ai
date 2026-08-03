@@ -7,7 +7,7 @@ the running log and `MILESTONES.md` has the full record with numbers.
 **Keep this current.** Update it whenever a milestone or experiment closes, and
 prune anything that stops being true. It should stay roughly one screen.
 
-Last updated: **2026-08-01**
+Last updated: **2026-08-02**
 
 ---
 
@@ -37,6 +37,17 @@ category, PP, disabled. **There is no move identity.** So to the agent:
 **Species and stats are completely absent.** The gym sends HP as a ratio;
 absolute bulk is invisible. No damage estimate is formable.
 
+**Type effectiveness is encoded in one direction only.** v3 dims 77–80 give each
+token's moves vs the *opponent's active* — the attacking direction. There is no
+dim for the defending direction (the opponent's moves vs this token's typing),
+so choosing a switch-in that *resists* the incoming attack requires learning the
+15×15 chart unaided from two type one-hots. Watching a live ladder game
+(2026-08-02) showed the predicted shape: after a faint the agent brought in a
+Water type against an Electric, then burned the next turn switching it out for a
+Normal — a defensively better choice reached one turn late. One game is an
+anecdote, and the wasted turn isn't fully explained by this dim; but the gap is
+real and is the cheapest item in the v4 schema.
+
 **Trapping and Hyper Beam recharge are invisible.** The agent cannot learn to
 punish DamageFirst spamming Hyper Beam into recharge, even though DamageFirst
 does this structurally every fifth move.
@@ -55,8 +66,15 @@ actually support the claim. That was not true of this project before M9.
 - **The agent is strong vs bots, weak vs humans.** 93% vs Random with search;
   **30.5% on ladder** (n=387, CI [26.1, 35.3]) — scored while *sampling* the
   policy, which we now know costs ~5–8pp offline.
-- **Playing the argmax beats sampling it.** +7.8pp vs Random, +5.0pp vs
-  DamageFirst, n=5,000/arm. Never tested on the ladder.
+- **Playing the argmax beats sampling it — offline.** +7.8pp vs Random, +5.0pp
+  vs DamageFirst, n=5,000/arm. **It did not show up on the ladder** (26.9% at
+  n=360 vs 30.5% before, −3.5pp [−10.0, +3.0]) — but that run was under
+  `--mcts`, where search already argmaxes, so greedy reached only the ~20% of
+  decisions that bypass search. Diluted treatment, underpowered test.
+- **~20% of ladder decisions never reach search.** Force-switches after a faint
+  and locked states fall back to the raw policy (`ladder-bot.js:291`). Those are
+  the "what do I bring in" decisions, which is where the missing defensive
+  type-effectiveness dim would bite hardest.
 - **Our measuring instrument is now sound.** Early ladder reads were 50–100
   games where the noise (±13pp) was larger than any effect we could produce.
   Protocol now lives in `docs/EVALUATION-METHODOLOGY.md`.
@@ -100,15 +118,18 @@ neither penalty nor clip. M8 Phase 2's null may have been suppressed by this
 asymmetry. Direct test: apply symmetric reward scaling and retest value
 fine-tuning.
 
-**3. Greedy decoding — CLOSED, and now the ladder default.** The ladder bot
-sampled from the policy for its entire history. At n=5,000/arm greedy is
-**+7.8pp vs Random [+6.1, +9.5]** and **+5.0pp vs DamageFirst [+3.1, +6.9]** —
-both gates passed, and the DamageFirst reading *reverses* the underpowered
-n=400 −2.0pp in the code review. `ladder-bot.js` is greedy by default as of
-2026-08-01 (`--sample` opts out). Adopted on the offline evidence rather than
-A/B'd on the ladder: a properly powered ladder read costs ~83 h, which buys
-only the one thing bot evals can't say — whether adapting humans punish
-determinism. **Every ladder number in this doc predates the change.**
+**3. Greedy decoding — settled offline, unresolved on the ladder.** At
+n=5,000/arm greedy is **+7.8pp vs Random [+6.1, +9.5]** and **+5.0pp vs
+DamageFirst [+3.1, +6.9]**; the DamageFirst reading *reverses* the underpowered
+n=400 −2.0pp in the code review. `ladder-bot.js` has been greedy by default
+since 2026-08-01 (`--sample` opts out). **The one ladder run since (n=360,
+`--mcts`) read 26.9%, −3.5pp [−10.0, +3.0] against the 30.5% baseline — no
+detectable effect either way.** That run is not a refutation: under `--mcts`
+search already argmaxes, so greedy reached only the ~20% of decisions that fall
+back to the raw policy, and the comparison is against July sessions with no
+recorded opponent Elo. Keeping the default on the offline evidence. A real
+ladder test means `--sample` as a paired control arm, no search, ~83 h — **not
+worth it before the observation fix**, since M11 invalidates the checkpoint.
 
 **4. A bigger brain (medium effort).** The network is 151,187 parameters — tiny.
 At observation poverty's root, bigger capacity may help *after* the observation
@@ -142,9 +163,10 @@ Pre-register the gates. Only proceed if the costs are clear and agreed.
 It is a direct test of a new hypothesis from the code review, costs nothing
 extra, and might move the dial.
 
-**Option 3 is closed** — greedy is confirmed offline and is now the ladder
-default. Every ladder number this project holds was scored while sampling, so
-the next ladder session is not comparable to them on that axis.
+**Option 3 is done as far as it is worth taking it** — greedy is confirmed
+offline, is the ladder default, and its one ladder read was flat. Resolving it
+properly on the ladder costs ~83 h to answer a question M11 would invalidate.
+Leave it on and move on.
 
 **Expectation:** The realistic outcome is *understanding why the gap exists*,
 not erasing it. Gen 1 random battles carry real team luck that puts a ceiling

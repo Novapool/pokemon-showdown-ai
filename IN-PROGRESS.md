@@ -75,6 +75,19 @@ the timeline. Surface it to the user after a context clear.
 
 ## Current Work
 
+**Field observation (2026-08-02, user watching a live ladder game) — added to
+M11 Phase 1 scope.** The agent switched a Water type in after a faint against an
+Electric, then spent the following turn switching it out for a Normal. Checked
+the encoder: **type effectiveness is encoded offensively only.** `fillV3MoveDims`
+(`sim/tools/feature-extractor.ts`) fills dims 77–80 with each token's moves vs
+`ctx.defenderTypes` — always the opponent's active. No dim anywhere encodes the
+opponent's moves vs *this* token's typing, so resistant-switch-in selection has
+to be learned from raw type one-hots while the attacking direction is
+precomputed. Added to the v4 schema list in MILESTONES.md → M11 Phase 1
+(swap the arguments to `computeTypeEffMultiplier`; no new type logic).
+**Status: hypothesis from n=1 game plus a code read, not a measurement.** The
+wasted turn specifically (double switch) is *not* explained by this alone.
+
 **M11 SCOPED (2026-08-01): Observation Enrichment + Reward Asymmetry.**
 A code review on 2026-08-01 identified the root cause of the 93%-vs-bots / 30%-vs-humans gap: the observation is information-poor in ways invisible against scripted bots and expensive against humans. The agent encodes moves without identity (Recover and Swords Dance are byte-identical), carries no species/stats/trapping, and cannot reason about damage. This is the first hypothesis that predicts the *shape* of the gap rather than proposing another knob.
 
@@ -178,23 +191,48 @@ closes the capacity question with a mechanism attached rather than a shrug.
 
 ## Next Steps
 
-0. **Greedy is now the ladder default (2026-08-01) — decision recorded, not
-   A/B'd on the ladder.** Adopted on 10,000 offline battles (+7.8pp / +5.0pp,
-   both CIs excluding 0). A properly powered ladder read was costed and
-   **declined**: at p₁≈0.30 a +7.5pp gate needs 623 games/arm ≈ 83 h total, and
-   356/arm resolves only +10pp against a +5–8pp effect — i.e. the affordable
-   version returns "inconclusive" by construction, the exact failure mode
-   `docs/EVALUATION-METHODOLOGY.md` exists to prevent.
+0. **Greedy is the ladder default (2026-08-01); the ladder read was flat
+   (2026-08-02).** Adopted on 10,000 offline battles (+7.8pp / +5.0pp, both CIs
+   excluding 0).
 
-   **What stays open:** whether determinism is punished by humans who adapt.
-   Bot evals cannot answer it. If a ladder A/B is ever run, both arms must be
-   **without `--mcts`** (the search already argmaxes, so the decision rule only
-   reaches raw-policy fallbacks — `ladder-bot.js:291`), block-alternated 25
-   games at a time, `--sample` as the control arm.
+   **Ladder run `m7-greedy`** (M7 `ppo_step_5000002_final.pt`, account
+   `Novapool`, `--mcts`, greedy): **97/360 = 26.9% [22.6, 31.8], mean opponent
+   Elo 1148.5.** Against the M7-era sampled baseline (118/387 = 30.5%):
+   **−3.5pp, 95% CI [−10.0, +3.0] — inconclusive, CI includes 0.** Against the
+   full 507-game pre-change pool (28.0%): −1.1pp [−7.0, +5.0].
 
-   ⚠️ **All ladder numbers in this file — 30.5%, 28.0%, every per-session read —
-   were scored while sampling.** Post-2026-08-01 sessions are not comparable to
-   them on the decision-rule axis. Do not pool across the change.
+   **This is not a refutation of the offline result, and must not be recorded as
+   one.** Three reasons: (a) the run used `--mcts`, where search already returns
+   an argmax, so greedy reached only the **~20% of decisions that fall back to
+   the raw policy** (`ladder-bot.js:291`) — a ~5× diluted treatment; (b) it is a
+   historical comparison, not a paired A/B, against July sessions weeks apart;
+   (c) the pre-change CSV has **no `opp_rating` column**, so the opponent-Elo
+   confound check the methodology mandates is impossible. Verdict: **greedy is
+   not harmful in the shipping config at ±6.5pp.** Nothing stronger is
+   supportable.
+
+   **Decision: keep greedy on, stop testing it.** A real ladder A/B needs
+   `--sample` as a paired control, no search on either arm, ~83 h — to answer a
+   question M11 invalidates by changing the checkpoint.
+
+   **Two findings worth keeping independent of greedy:**
+   - **26.9% at n=360 (±4.6pp) is the most precise ladder number this project
+     has**, and the first with opponent Elo recorded.
+   - **~20% of ladder decisions never reach search.** Force-switches after a
+     faint and locked states go to the raw policy. Those are precisely the
+     "what do I bring in" decisions where the missing *defensive* type-matchup
+     dim bites. Two independent lines now point at the same v4 item.
+
+   ⚠️ **Ladder history is split across two CSVs.** The M9 schema change rotated
+   the old file to `ladder_results.pre-m9.csv`, and `ladder_analysis.py` defaults
+   to `ladder_results.csv` alone — so a bare invocation **silently drops all 507
+   pre-2026-08-01 games**. Always pass both paths:
+   ```bash
+   python3 scripts/ladder_analysis.py \
+     data/replays/self_ladder/ladder_results.pre-m9.csv \
+     data/replays/self_ladder/ladder_results.csv --since 2026-07-16
+   ```
+   Pooled across both, all 867 rated games: **27.6% [24.7, 30.6]**.
 
 1. **If width-512 PPO A/B is run first (in parallel with M11 approval):** Run both arms on same machine at n=2,000. If ≥+2pp and observations are expected to add more, proceed to M11 Phase 0 (reward fix). If <+2pp or regression, that answers "is bigger capacity the answer?" — likely no.
 
