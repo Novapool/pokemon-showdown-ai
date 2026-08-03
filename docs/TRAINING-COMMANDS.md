@@ -70,7 +70,7 @@ Saves checkpoints to `models/ppo/checkpoints/ppo_step_XXXXX.pt`.
 ```bash
 python models/transformer/train.py --steps 2600000 --checkpoint-every 250000 --num-envs 8
 ```
-Same flags as PPO (minus `--structured` — the transformer always consumes the raw `(12,65)` tokens), plus `--pretrain_checkpoint` (BC warm-start) and `--resume`. See `models/CLAUDE.md` for the full quick-start block. Note: M3 concluded with this architecture **losing** to the MLP-PPO baseline (46% vs 51%); retraining it is gated on the M3.2 fixes in `MILESTONES.md`.
+Same flags as PPO (minus `--structured` — the transformer always consumes the raw `(12,65)` tokens), plus `--pretrain_checkpoint` (BC warm-start) and `--resume`. See `models/CLAUDE.md` for the full quick-start block. Note: M3 concluded with this architecture **losing** to the MLP-PPO baseline (46% vs 51%); retraining it is gated on the M3.2 fixes in `docs/MILESTONES-ARCHIVE.md`.
 
 ---
 
@@ -147,7 +147,7 @@ Prints: win rate as a fraction (e.g. `0.73 (146/200)`). Opponent is always `Rand
 > are the *procedure*, not a recommendation. The randbats-only BC they build
 > won 2a as a standalone policy and then **lost 2c by −8.3pp** once fine-tuned.
 > **For a PPO warm-start or `--bc-anchor`, use the mixed `bc_mlp_gen1_v3.pt`.**
-> See `MILESTONES.md` → M9 Phase 2.
+> See `docs/MILESTONES-ARCHIVE.md` → M9 Phase 2.
 
 **Train a format-aligned BC checkpoint** (2a). The only change from the M5.5/M7
 BC recipe is `--formats`; everything else is left at its default on purpose so

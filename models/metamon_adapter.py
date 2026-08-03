@@ -6,7 +6,7 @@ Metamon (https://github.com/UT-Austin-RPL/metamon) publishes human Showdown
 replays parsed into per-timestep UniversalState dicts plus action indices
 (https://huggingface.co/datasets/jakegrigsby/metamon-parsed-replays).
 This adapter replays those trajectories as (obs, action, done) tuples where
-obs is the (12, 65) token array defined by the M2 spec in MILESTONES.md.
+obs is the (12, 65) token array defined by the M2 spec in docs/MILESTONES-ARCHIVE.md.
 
 Observation layout — 12 tokens:
     [0]     own active

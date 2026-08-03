@@ -142,7 +142,7 @@ Games per arm to detect an effect on bot opponents:
 | +3pp | 906 | 2,137 |
 | +5pp | 269 | 723 |
 
-**The M9 Phase 2 gate as written in MILESTONES.md — "≥+2pp on both bot opponents
+**The M9 Phase 2 gate as written in `docs/MILESTONES-ARCHIVE.md` — "≥+2pp on both bot opponents
 at n=500" — is underpowered by 4–10×**, the same defect as M8's "+3pp at n=200".
 It cannot pass reliably even if the candidate is genuinely +2pp better.
 
@@ -277,6 +277,20 @@ recorded before that date — 30.5%, 28.0%, all per-session reads — was scored
 while sampling. **Do not pool across the change**, and state the decision rule
 in the writeup. The banner prints `policy=greedy|sampled` at startup; if you are
 unsure what an arm ran, that line is the record.
+
+⚠️ **`--mcts` masks the decision rule.** Search returns an argmax over visit
+counts, so `--greedy`/`--sample` only reach the ~20% of decisions that fall back
+to the raw policy (force switches, locked states — `ladder-bot.js:291`). **Any
+A/B on the decision rule must run both arms without `--mcts`**, or it tests a
+fifth of the change and reads as a null for the wrong reason. This is not
+hypothetical: run `m7-greedy` (2026-08-02) did exactly that.
+
+⚠️ **Ladder history lives in two CSVs.** `ladder_analysis.py` defaults to
+`ladder_results.csv` only, and the M9 schema change rotated everything before it
+into `ladder_results.pre-m9.csv`. A bare invocation silently drops 507 games.
+Pass both paths. The old file also has **no `opp_rating` column**, so the
+opponent-Elo confound check cannot be run against pre-M9 arms — a historical
+comparison to them is confounded in a way no analysis can repair.
 
 - `--run-id` is **mandatory** — it is the arm label written to every CSV row.
 - `--battles` is the **absolute** target. The run is resumable: re-running the

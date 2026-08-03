@@ -2,7 +2,7 @@
 transformer_policy.py — Shared transformer policy/value network for the
 (12, 65) structured observation.
 
-Architecture (M3 spec in MILESTONES.md):
+Architecture (M3 spec in docs/MILESTONES-ARCHIVE.md):
     Linear(65 -> d_model=128)
     TransformerEncoder(layers=2, nhead=4, d_ff=256, dropout=0.1)
     mean-pool over non-unknown tokens -> (batch, 128)

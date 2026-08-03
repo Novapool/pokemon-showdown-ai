@@ -19,7 +19,11 @@ Pokemon Showdown battle simulator — used here for training a Pokemon trainer M
 
 | File | Read when |
 |---|---|
+| `docs/experimental/hierarchical-action-policy.md` | **Read first on this branch.** The only doc owned by `experiment/hierarchical-action-policy`; everything else below is a copy of master |
 | `docs/WHERE-WE-ARE.md` | **Start here at the beginning of any session, and surface it to the user when context is cleared.** One screen, plain language, no timeline: what the agent can and can't do, what's been settled, what's a dead end, and the live menu of options with a recommendation. Keep it updated as things close |
+| `IN-PROGRESS.md` | Current work, the active plan, blockers, and the standing rules that keep A/Bs valid. The timeline; `WHERE-WE-ARE.md` is the orientation |
+| `MILESTONES.md` | Planning the next milestone, or checking what a past one concluded. Results ledger for M0–M9 (condensed) + the live M10/M11 plans |
+| `docs/MILESTONES-ARCHIVE.md` | You need a completed milestone **in full** — original plans, build phasing, file manifests, complete results tables, run logs. Read on demand only |
 | `docs/DATA-INVENTORY.md` | **Read first before proposing any data-acquisition work.** What human data exists (the gen 1 archive is exhausted), what we hold, and what BC training actually consumes — vs what the manifest suggests |
 | `docs/EVALUATION-METHODOLOGY.md` | **Read first before running or gating on any evaluation, ladder or bot.** The protocol: required sample sizes, account/arm setup, `scripts/ladder_analysis.py`, reporting template |
 | `docs/LADDER-MEASUREMENT.md` | Why GXE/Elo readings from M6–M8 don't support per-run conclusions — the diagnosis behind the protocol above |
@@ -85,7 +89,8 @@ This checkout is `experiment/hierarchical-action-policy`, a git worktree at
   only doc that belongs to this branch; everything else here is a copy of master.
 - **Main-line project state (M11, ladder reads, milestone updates) belongs on
   `master`, not here.** Two such commits landed on this branch by accident on
-  2026-08-02 and had to be cherry-picked back out.
+  2026-08-02 and had to be cherry-picked back out. This branch's own plan lives
+  in `docs/experimental/`, never in root `MILESTONES.md` / `IN-PROGRESS.md`.
 - `node_modules`, `.venv`, and `data/{replays,replay_trajs,value_targets}` are
   **symlinks into the main repo** (read-only inputs, ~3.7 GB not duplicated).
   `dist/` is built independently here — `./build` in this directory does not

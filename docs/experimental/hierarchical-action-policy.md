@@ -1,11 +1,11 @@
-# Experiment: Hierarchical Action Policy + Move Embeddings
+# Experiment: Hierarchical Action Policy + Move Embeddings (RESCOPED)
 
-**Status:** 🧪 Design only — no code written, nothing in the training pipeline touched.
+**Status:** 🧪 Rescoped 2026-08-03 — no code written, nothing in the training pipeline touched.
 **Branch:** `experiment/hierarchical-action-policy`
-**Written:** 2026-08-02
+**Original design:** 2026-08-02
+**Rescope:** 2026-08-03
 
-A parallel exploration, not a replacement for the M11 line. Read
-`docs/WHERE-WE-ARE.md` first for what the main lineage is doing and why.
+A parallel exploration, not a replacement for the M11 line. **Arm B (category→move routing) is now an auxiliary category-prediction head only, not a hard routing hierarchy.** Read `docs/WHERE-WE-ARE.md` first for what the main lineage is doing and why. The plan (phases and gates) lives in `docs/experimental/MILESTONES-EXPERIMENTAL.md`.
 
 ---
 
@@ -166,123 +166,58 @@ interpretability), here are the anti-myopia options, ranked:
 | **Action-conditioned (pointer) scoring head** | **The strongest genuinely-novel item in this design.** Replace `Linear(H, 9)` with `logit_i = ⟨W·h(s), e(move_i)⟩` over the *legal actions present in this state*. Learning transfers across slots and across Pokémon. Needs no hierarchy. |
 | Cross-move attention | New (moves have never been tokens). Plausible for "coverage" reasoning — which of my 4 moves is redundant given the other 3. Speculative; costs a token-layout redesign. |
 
-### Proposed architecture (arms are separable — that is the point)
+### Revised architecture (rescoped 2026-08-03)
 
 ```
-                     obs (12 × 86)  ──►  trunk  ──►  h(s)  [H dims]
-                                                      │
-   move ids (4)  ──► E_move (168×16) ──► e_i  ───────►│
-   move hand-feats (6+4) ────────────► ─────────────► │
-                                                      ▼
-   ARM A   logit_i = ⟨W_q h(s), [e_i ; f_i]⟩        (pointer head, 9 logits,
-           switch actions score against species embeddings   masked as today)
+                     obs (12 × 86 → v4)  ──►  trunk  ──►  h(s)  [H dims]
+                                                         │
+   move ids (4)  ──► E_move (169×d) ──► e_i  ──────────►│
+   move hand-feats (6→10) ──────────► f_i  ──────────► │
+                                                         ▼
+   PRIMARY ARCHITECTURE
+   
+   Pointer head (Arm A):  logit_i = ⟨W_q h(s), [e_i ; f_i]⟩
+                          Action-conditioned scoring over legal actions,
+                          replacing Linear(H, 9).
+                          **This is the core building block.**
 
-   ARM B   c ~ π_hi(c | h(s))         categories: {damage, status/setup, switch}
-           a ~ π_lo(a | h(s), c)      = ARM A's head, restricted to c's members
-           trained end-to-end, single shared PPO advantage
-
-   ARM C   π_lo distilled from MCTS root visits (collect_value_data.py output),
-           π_hi trained on the marginalized visit mass per category
+   Auxiliary head (demoted Arm B):
+                          Category prediction (damage / status / switch)
+                          trained with λ=0.1 auxiliary loss.
+                          No hard routing; provides interpretability only.
 ```
 
-**Arm A is the recommended first build.** It captures move identity, slot
-invariance and the embedding geometry, and it is a head swap plus one obs dim
-per move slot — no hierarchy, no new reward, no new training loop.
+**Arm B is demoted to an auxiliary head.** Reason: no expressiveness gain over a 9-way softmax, plus demonstrated exploration-collapse risk aimed at switching (M7–M9 spent three milestones teaching it and failed). The hierarchy does not help; the pointer head does.
 
-Category set for Arm B, given Gen 1: `{damage, status/setup, switch}` — three,
-not five or six. "Hazard" is empty. Body Slam (damage + 30% paralysis) already
-shows the labels are leaky, which is itself an argument for letting the aux
-head *predict* categories rather than *route through* them.
-
-### Risks specific to Arm B
-
-- **Exploration collapse.** π_hi commits to a category before any member is
-  evaluated; if it collapses early to `damage`, the switch branch gets no
-  gradient. This project has spent three milestones trying to teach switching
-  (M7–M9) and `Random`/`DamageFirst` never switch, so the training signal
-  already leans this way. A hierarchy could make it worse. Mitigation: entropy
-  bonus on π_hi specifically, and monitor per-category entropy (which we
-  currently log for *nothing* — see the M11 instrumentation-debt item).
-- **Credit assignment.** A bad outcome after a good category / bad move
-  penalizes both factors. Flat softmax has the same issue in a less structured
-  form; not obviously worse, but not obviously better either.
-- **It is a bet on inductive bias with no expressiveness gain.** That is the
-  honest one-line summary of Arm B.
+Category set remains `{damage, status/setup, switch}` — three, not five or six. "Hazard" is empty. The aux loss provides a steering signal without the hard bottleneck that created M7–M9's switching problems.
 
 ---
 
-## Part 3 — Minimal test plan (before any real training compute)
+## Part 3 — Execution Plan
 
-Three stages, each gating the next. Total ≈ 1 day of wall-clock, mostly on the
-home box, none of it touching `models/ppo/train.py`.
+**See `docs/experimental/MILESTONES-EXPERIMENTAL.md` for the full buildable plan, including phases, gates, kill criteria, wall-clock estimates, and checkpoint invalidation notes.**
 
-### Stage 0 — Non-greedy decision probe (≈2 h, no training at all)
+Phases (rescoped 2026-08-03):
 
-Build the diagnostic *before* the architecture, so there's a baseline to beat
-and a direct measurement of the degeneracy the design is meant to fix.
+- **Phase 0:** Diagnostics on existing BC shards (non-greedy decision probe). No training. Kill criterion: if greedy/non-greedy gap is small, motivation weakens.
+- **Phase 1:** Gen 1 damage calculator + `HeuristicAI`. Evaluation instrument fix only. Not a direct agent competitor.
+- **Phase 2:** Observation schema (damage-derived features, move-type one-hot, move-id coordinated with M11 v4).
+- **Phase 3:** Pointer head + demoted auxiliary category head. Head swap only, no hierarchy.
+- **Phase 4:** Short RL validation (2M steps per arm, not 5M).
 
-Filter the existing BC shards (`data/replay_trajs/`) for positions where a
-rated human chose a **0-BP status move or a switch while a ≥90-BP damaging move
-was legal**. That is a corpus-derived "the greedy answer was wrong" set, free to
-construct. Then score the **current M7 v3 checkpoint** on it, greedy decoding.
-
-- Output: current top-1 agreement on the non-greedy set vs on the full set.
-- Value regardless of this experiment: if the gap is small, "the agent plays
-  greedily" is not actually our problem and this whole design loses its
-  motivation. **Run this first even if you build nothing else.**
-
-### Stage 1 — BC ablation (≈3 h on the home box, existing corpus)
-
-Same corpus, same optimizer, same steps; only the head/features change. Four
-arms:
-
-| Arm | Change |
-|---|---|
-| baseline | current MLP, v3 obs (known: **55.5%** randbats val @ H=512) |
-| +onehot | move type as 15-dim one-hot instead of `typeIdx/20` (defect 2) |
-| +embed | move-id embedding concatenated to the hand features |
-| +pointer | Arm A: embedding **and** action-conditioned scoring head |
-
-Report top-1 / top-3 held-out accuracy on the full set **and** on Stage 0's
-non-greedy subset. `bc_pretrain_mlp.py` already prints val accuracy; the
-existing `55.5%` at width 512 is the number to beat.
-
-**Gate: `+pointer` must beat baseline by ≥2pp top-1 on the non-greedy subset.**
-Below that, stop — the architecture isn't extracting anything the flat head
-couldn't.
-
-⚠️ **A BC win is a screen, not a decision.** M9 Phase 2c is the standing
-counterexample: a BC checkpoint that imitated +5.6pp better finished **−8.3pp**
-after the same 5M-step PPO recipe. Passing Stage 1 buys the right to spend RL
-compute; it does not predict RL outcome.
-
-### Stage 2 — Short RL arm (≈2 h/arm, only if Stage 1 gates)
-
-2M steps, not 5M — this is a signal check, not a decision run. Two arms
-(baseline v3 recipe vs `+pointer`), same seed, `--opponent-mix` as M7.
-Evaluate raw-policy greedy at **n=2,000/opponent**, gate **≥+3pp with CI
-excluding 0**, per `docs/EVALUATION-METHODOLOGY.md`. Pre-register before
-looking. Only *then* is Arm B (the actual hierarchy) worth building, and it
-should be A/B'd against Arm A — not against the v3 baseline, or the embedding
-win will be misattributed to the hierarchy.
+**Coordination with master's M11 Phase 1:** Move-id observation work is M11's dependency. This branch takes it as a shared dependency rather than duplicating it. Flag coordination points in each phase where master's v4 schema must land first.
 
 ---
 
-## Sequencing note (important)
+## Caveats Carried Forward
 
-Arm A needs a **move-id dim in the observation**, which is exactly M11 Phase 1's
-first bullet. Building this experiment before M11 v4 means writing the same
-schema plumbing (`feature-extractor.ts` + `replay-adapter.ts` + LUT + BC
-re-conversion) twice, and re-running BC twice. **Recommendation: let M11 Phase 1
-land the move-id and species dims, then branch this experiment off v4.**
-Stage 0 is the exception — it needs nothing new and can run today.
+- **A BC win is a screen, not a decision.** M9 Phase 2c imitated +5.6pp better but finished **−8.3pp** after RL. Passing BC gates buys compute rights, not RL guarantees.
+- **Checkpoint invalidation cost:** Any observation schema change invalidates every existing checkpoint (BC + PPO). Phase 2 triggers full retraining.
+- **Gen 1 damage estimates are computable but approximate.** Random DVs (0–15 range) create a small band of uncertainty (~few %, accurately sampled in randbats; less so in gen1ou). State the caveat when reporting Phase 1 heuristic-bot numbers.
 
-## Open questions
+---
 
-- Should switch actions score against a **species** embedding in the same
-  pointer head (symmetric, elegant) or keep the 5 fixed switch logits? Symmetric
-  is nicer but couples this to the species-id dim as well.
-- Is per-slot move data even reachable for the *opponent's* bench, where moves
-  are only partially revealed? The embedding of an unrevealed move is a
-  different problem from the embedding of a known one — probably needs a
-  dedicated `<unknown>` token in the table.
+## Open Questions (deferred to Phase 3+)
+
+- Should switch actions score against a **species** embedding in the same pointer head (symmetric, elegant) or keep the 5 fixed switch logits? Symmetric couples this to species-id dim, added in Phase 2.
+- Is per-slot move data reachable for opponent bench (partially revealed)? Needs `<unknown>` token in embedding table if yes.

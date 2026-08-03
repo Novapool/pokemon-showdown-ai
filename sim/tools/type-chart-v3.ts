@@ -148,7 +148,7 @@ export function computeTypeEffMultiplier(moveType: string, defenderTypes: string
  * 0x immunity encodes to exactly 0.0. NOTE: an empty/absent move slot should
  * ALSO be written as 0.0 by Job 1.1's extractor, so 0.0 is shared by "immune"
  * and "no move" — the disabled/PP dims already distinguish empty slots, so this
- * collision is acceptable and documented (see MILESTONES.md v3 spec).
+ * collision is acceptable and documented (see docs/MILESTONES-ARCHIVE.md, M7 v3 spec).
  */
 export function encodeTypeEff(multiplier: number): number {
 	return multiplier / TYPE_EFF_SCALE;
@@ -179,7 +179,7 @@ export function typeEffDim(moveType: string, defenderTypes: string[]): number {
  * v1/v2 status bitmask (burn, freeze, paralysis, poison, sleep, toxic) shifted
  * by +1 so that 0 can mean "inflicts no status" (the common case).
  *
- * NOTE / deviation from MILESTONES.md's literal "0–5": the spec's 0–5 conflated
+ * NOTE / deviation from the M7 v3 spec's literal "0–5": the spec's 0–5 conflated
  * "none" with a real status. A dedicated 0 = none sentinel is required because
  * most moves inflict nothing, so the range here is 0–6. Job 1.1 may normalise
  * (e.g. `/ 6`) for placement; the raw id is exposed for clarity.
