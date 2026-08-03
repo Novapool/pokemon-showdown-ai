@@ -20,8 +20,16 @@ Usage:
     # paired A/B: the primary M9 Phase 3 endpoint
     python3 scripts/ladder_analysis.py --arm m9p3-control --arm m9p3-candidate
 
+    # score contested games only, dropping opponent forfeits (see
+    # report_concessions) — combines with --run and --arm
+    python3 scripts/ladder_analysis.py --min-decisions 16
+
     # required sample sizes, no data needed
     python3 scripts/ladder_analysis.py --power
+
+Every run also prints a concession split and a win-rate-by-opponent-Elo table.
+Roughly 10% of our "wins" are games the opponent quit; quote the contested line
+when the claim is about play strength.
 """
 
 import argparse
@@ -35,6 +43,11 @@ import sys
 DEFAULT_CSV = 'data/replays/self_ladder/ladder_results.csv'
 Z95 = 1.959964
 Z80 = 0.8416212
+
+# Games shorter than this many decisions were not played out — see
+# report_concessions(). 16 is where the W/L asymmetry closes in our own data:
+# across 747 rated games we have never lost one faster.
+CONCESSION_CUT = 16
 
 
 # --------------------------------------------------------------------------
@@ -129,7 +142,7 @@ def chi2_sf(x, df):
 
 class Battle:
     __slots__ = ('ts', 'run_id', 'account', 'checkpoint', 'opponent',
-                 'opp_rating', 'own_rating', 'result')
+                 'opp_rating', 'own_rating', 'result', 'decisions')
 
     def __init__(self, row):
         self.ts = datetime.datetime.fromisoformat(
@@ -141,6 +154,7 @@ class Battle:
         self.opp_rating = _int_or_none(row.get('opp_rating'))
         self.own_rating = _int_or_none(row.get('own_rating'))
         self.result = row['result']
+        self.decisions = _int_or_none(row.get('decisions'))
 
 
 def _int_or_none(v):
@@ -228,6 +242,73 @@ def report_breakdown(battles, min_session, gap):
         else:
             print(f'  -> extra-binomial variation present; inflate required '
                   f'sample sizes by phi={phi:.2f}.')
+
+
+def report_concessions(battles, cut=CONCESSION_CUT):
+    """Split out games too short to have been played out.
+
+    A Gen 1 random battle cannot legitimately be won in a handful of decisions
+    — both sides bring six Pokemon. Games under `cut` decisions are opponent
+    forfeits, timeouts and disconnects. They are real ladder wins and they move
+    Elo, but they measure the opponent's quit rate, not our play. Reported
+    separately because in the 2026-08-02 greedy run they were 34W/0L — 35% of
+    every win the agent recorded.
+    """
+    short = [b for b in battles if b.decisions is not None and b.decisions < cut]
+    played = [b for b in battles if b.decisions is not None and b.decisions >= cut]
+    unknown = [b for b in battles if b.decisions is None]
+    if not short and not unknown:
+        return
+    print(f'\n=== concessions vs contested games (cut: {cut} decisions) ===')
+    sw = sum(1 for b in short if b.result == 'win')
+    print(f'  under {cut} decisions:  {sw}W  {len(short)-sw}L  '
+          f'({100*len(short)/len(battles):.1f}% of games, '
+          f'{100*sw/max(1, sum(1 for b in battles if b.result == "win")):.0f}% of all wins)')
+    if unknown:
+        print(f'  no decision count:  {len(unknown)} games (pre-M9 rows) — '
+              f'excluded from the contested figure')
+    print(fmt_group(f'  contested (>={cut})', played))
+    print('  A near-total W/L asymmetry below the cut is the signature of '
+          'opponent concessions, not fast wins. The contested line is the\n'
+          '  honest read of play strength; the pooled line is the honest read '
+          'of ladder standing. Quote whichever the claim needs, not both.')
+
+
+def report_opp_elo(battles, edges=(1000, 1100, 1200, 1300)):
+    """Win rate against opponent rating — does the agent hold up as the pool
+    gets stronger, or is its record built on the bottom of the ladder?"""
+    rated = [b for b in battles if b.opp_rating is not None]
+    if len(rated) < 30:
+        return
+    print('\n=== win rate by opponent Elo ===')
+    bands = []
+    for i, lo_e in enumerate(edges):
+        hi_e = edges[i + 1] if i + 1 < len(edges) else None
+        bs = [b for b in rated if b.opp_rating >= lo_e
+              and (hi_e is None or b.opp_rating < hi_e)]
+        if bs:
+            label = f'  {lo_e}-{hi_e - 1}' if hi_e else f'  {lo_e}+'
+            bands.append(fmt_group(label, bs, width=14))
+    below = [b for b in rated if b.opp_rating < edges[0]]
+    if below:
+        print(fmt_group(f'  <{edges[0]}', below, width=14))
+    for line in bands:
+        print(line)
+
+    # point-biserial correlation: is the trend real, or bucket noise?
+    xs = [b.opp_rating for b in rated]
+    ys = [1.0 if b.result == 'win' else 0.0 for b in rated]
+    mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+    num = sum((a - mx) * (b - my) for a, b in zip(xs, ys))
+    den = math.sqrt(sum((a - mx) ** 2 for a in xs)
+                    * sum((b - my) ** 2 for b in ys))
+    if den == 0:
+        return
+    r = num / den
+    t = r * math.sqrt((len(xs) - 2) / max(1e-12, 1 - r * r))
+    verdict = 'real trend' if abs(t) > 1.96 else 'not distinguishable from noise'
+    print(f'  opponent Elo vs win: r={r:+.3f}  t={t:+.2f}  n={len(xs)} '
+          f'-> {verdict}')
 
 
 def report_arms(battles, arms):
@@ -337,6 +418,15 @@ def main():
                          'heterogeneity test (default 30)')
     ap.add_argument('--phi', type=float, default=1.0,
                     help='variance inflation for the power table (default 1.0)')
+    ap.add_argument('--min-decisions', type=int, default=0, metavar='N',
+                    help='drop games shorter than N decisions from the whole '
+                         f'analysis (try {CONCESSION_CUT} to score contested '
+                         'games only). Default 0 = keep everything and report '
+                         'the concession split separately')
+    ap.add_argument('--concession-cut', type=int, default=CONCESSION_CUT,
+                    metavar='N',
+                    help=f'decision count below which a game is treated as a '
+                         f'concession in the breakdown (default {CONCESSION_CUT})')
     ap.add_argument('--power', action='store_true',
                     help='print the sample-size table and exit')
     args = ap.parse_args()
@@ -362,18 +452,25 @@ def main():
         battles = [b for b in battles if b.ts <= hi]
     if args.run:
         battles = [b for b in battles if b.run_id in args.run]
+    if args.min_decisions:
+        battles = [b for b in battles if b.decisions is not None
+                   and b.decisions >= args.min_decisions]
 
     if not battles:
         sys.exit('no battles matched the filters')
 
     print(f'{len(battles)} battles  '
           f'{battles[0].ts:%Y-%m-%d %H:%M} -> {battles[-1].ts:%Y-%m-%d %H:%M}'
-          f'{"" if args.include_unrated else "  (rated only)"}')
+          f'{"" if args.include_unrated else "  (rated only)"}'
+          f'{f"  (>={args.min_decisions} decisions)" if args.min_decisions else ""}')
 
     if args.arm:
         report_arms(battles, args.arm)
     else:
         report_breakdown(battles, args.min_session, args.gap_minutes)
+    if not args.min_decisions:
+        report_concessions(battles, args.concession_cut)
+    report_opp_elo(battles)
     report_power(args.phi)
 
 
