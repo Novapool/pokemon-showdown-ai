@@ -1,5 +1,8 @@
 /config/*
 !/config/formats.ts
+# M12 fixed roster — the pre-registered team, must be tracked (see docs/BATTLE-FORMATS.md)
+!/config/rosters/
+!/config/rosters/*.txt
 /logs/**/*
 /test/modlogs
 /test/replays/*.html
@@ -100,3 +103,6 @@ models/transformer/checkpoints/m32/train.log
 # etc. See docs/EVALUATION-METHODOLOGY.md.
 showdown_login.txt
 showdown_login_*.txt
+
+# Analysis outputs from scripts/mine_gen1ou_*.py (regenerable)
+results/gen1ou_*.json

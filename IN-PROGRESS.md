@@ -1,6 +1,25 @@
 # In Progress — Pokemon Showdown AI Training
 
-Last updated: 2026-08-03
+Last updated: 2026-08-05
+
+---
+
+## 🏁 THE PROJECT IS IN A BOUNDED FINISH (decided 2026-08-05)
+
+**One milestone left: M12 (fixed-team Gen 1 OU), Phases 0–4.** Phase 5 is
+optional. When Phase 4 reports its number, the project is done and gets archived
+— pass or fail. Full rationale and disposition table: `MILESTONES.md` → PROJECT
+STATUS.
+
+**Closed without execution:** M10 (battle log analysis), M11 Phase 1
+(observation schema v4), instrumentation debt (`--seed`, per-step logging,
+`meta.json`). **Off the critical path:** the M11 h128/h512 eval battery — run it
+only if SSH is back and it is genuinely cheap; it changes no decision.
+
+**The rule for this phase: do not add scope.** If M12 Phase 4 fails its gate,
+that is the finding — record it and stop. No second roster, no diagnosis pass,
+no "one more idea." This project's own standing rules call re-rolling after
+seeing the result what it is.
 
 ---
 
@@ -76,31 +95,37 @@ the timeline. Surface it to the user after a context clear.
 
 ## Current Work
 
-**👉 THE IMMEDIATE NEXT ACTION: run the M11 eval battery. Both arms finished
-training 2026-08-02** — `m11_h128` at 5,000,003 steps, `m11_h512` at 5,000,006,
-on the home box at `~/Projects/pokemon-showdown-ai/models/ppo/checkpoints/<arm>/`.
-Nothing has been evaluated yet. Full runbook in **Next Steps §1**.
+**✅ M12 Phase 0 COMPLETE (2026-08-05) — the roster is locked and
+pre-registered.** Full record in `docs/BATTLE-FORMATS.md` → THE FIXED ROSTER.
 
-**Field observation (2026-08-02, user watching a live ladder game) — added to
-M11 Phase 1 scope.** The agent switched a Water type in after a faint against an
-Electric, then spent the following turn switching it out for a Normal. Checked
-the encoder: **type effectiveness is encoded offensively only.** `fillV3MoveDims`
-(`sim/tools/feature-extractor.ts`) fills dims 77–80 with each token's moves vs
-`ctx.defenderTypes` — always the opponent's active. No dim anywhere encodes the
-opponent's moves vs *this* token's typing, so resistant-switch-in selection has
-to be learned from raw type one-hots while the attacking direction is
-precomputed. Added to the v4 schema list in MILESTONES.md → M11 Phase 1
-(swap the arguments to `computeTypeEffMultiplier`; no new type logic).
-**Status: hypothesis from n=1 game plus a code read, not a measurement.** The
-wasted turn specifically (double switch) is *not* explained by this alone.
+**Tauros / Chansey / Snorlax / Exeggutor / Starmie / Alakazam**, modal human
+move sets, packed team at `config/rosters/gen1ou-standard.txt`. Validated
+(`validate-team gen1ou` passes) and smoke-tested 5/5 completed battles.
 
-**M11 SCOPED (2026-08-01): Observation Enrichment + Reward Asymmetry.**
-A code review on 2026-08-01 identified the root cause of the 93%-vs-bots / 30%-vs-humans gap: the observation is information-poor in ways invisible against scripted bots and expensive against humans. The agent encodes moves without identity (Recover and Swords Dance are byte-identical), carries no species/stats/trapping, and cannot reason about damage. This is the first hypothesis that predicts the *shape* of the gap rather than proposing another knob.
+Chosen from **10,101 local gen1ou replays rated ≥1300** → 16,743 revealed teams.
+This is the **rank-#1 most-used exact team** (1,088 teams, 6.50%); the Rhydon
+variant was rank #2 (6.10%). Tiebreak: usage rank, plus Rhydon's value is
+*defensive positional* (Ground = Thunder Wave immunity) which v3 cannot see since
+type effectiveness is encoded offensively only, plus 1,772 vs 237 revealed sets
+for BC. Reproducible via `scripts/mine_gen1ou_teams.py` and
+`scripts/mine_gen1ou_movesets.py`.
 
-**Scope:** Phase 0 (reward asymmetry fix, ~1 hour), Phase 1 (observation enrichment, ~4 days), Phase 2 (ladder validation if gates pass). New schema v4 invalidates all checkpoints; retraining from BC scratch. See MILESTONES.md → M11 for full plan.
+**Two caveats recorded with the selection:**
+- **Team win rate was computed, found invalid, and discarded.** Extracting a team
+  needs all 6 revealed, and winners often never bring in their 6th: P(win)=44.5%
+  given 6 revealed vs 81.2% given 5. The filter selects for *losing* teams. Usage
+  counts are unaffected; win rates by roster are not usable and were not used.
+- **Expect long mirror matches.** Smoke test ran 66–151 turns (Soft-Boiled /
+  Recover / Rest on both sides). Fewer episodes per 5M PPO steps in Phase 3, and
+  longer ladder wall-clock if Phase 5 runs.
 
-**Blocker:** User approval to commit the retraining cost (BC + PPO + full eval
-cycle). Note Phase 0 is already done — the blocker is Phase 1 (schema v4) only.
+**Next: Phase 1 (plumbing).** Mostly doable on the Mac. Everything from Phase 2
+on waits for home box SSH (see Blockers), which the user restores when home.
+
+**Closed, not deferred:** observation enrichment (v4 schema) and M10. The
+earlier note here said v4 was "deferred post-pivot" for re-derivation on OU —
+that is now a closure, because the project ends at M12 Phase 4. See
+`MILESTONES.md` → M11 for what a future reader should pick up first.
 
 **✅ M11 Phase 0 (reward asymmetry) IS DONE AND SHIPPED** — `applyStallPenalty`
 now clips before charging the duration cost, so it applies equally to wins and
@@ -109,19 +134,14 @@ historical. `gamma` already discounts terminal reward symmetrically, so
 `--stall-penalty 0` is a live experiment, not a fallback. Regression test added
 that asserts win/loss duration costs are equal, with the old formula inlined —
 the previous test asserted rewards stayed in `[-1,1]`, which **encoded the bug**.
+This is the one part of M11 that shipped; it carries forward into M12 unchanged.
 
-**🔬 IN FLIGHT (launched 2026-08-01 ~11:50 local, home box, both `cuda`):**
-two PPO arms, `models/ppo/checkpoints/m11_h128/` and `m11_h512/`.
-
-| arm | params | warm-start + anchor |
-|---|---:|---|
-| `m11_h128` | 151,187 | `bc_mlp_gen1_v3.pt` |
-| `m11_h512` | **801,299** | `bc_mlp_gen1_v3_h512.pt` |
-
-Everything else identical: 5M steps, `selfplay=0.5,damagefirst=0.3,random=0.2`,
-`--bc-anchor-coef 0.05`, 200k value warmup, same two pool seeds
-(`ppo_step_0_seed_m2.pt`, `ppo_step_0_seed_m33best.pt`), same machine, same
-commit, **same fixed reward**.
+**🔬 TRAINED 2026-08-02, UNMEASURED — the two PPO arms.**
+`models/ppo/checkpoints/m11_h128/` (151,187 params, 5,000,003 steps) and
+`m11_h512/` (**801,299**, 5,000,006), home box, both `cuda`. Identical
+otherwise: 5M steps, `selfplay=0.5,damagefirst=0.3,random=0.2`,
+`--bc-anchor-coef 0.05`, 200k value warmup, same two pool seeds, same machine,
+same commit, **same fixed reward**.
 
 **Why two arms and not one.** The reward fix landed *before* the launch, so
 `m9seed` stopped being a valid control — it trained under the buggy reward.
@@ -132,23 +152,34 @@ Two arms give two clean single-variable comparisons for one wall-clock cost:
 - `m11_h128` vs **m9seed** → the **reward fix** (width held at 128)
 - `m11_h512` vs **m11_h128** → **width** (reward held fixed)
 
-**ETA ~5 h, not the ~70 min quoted elsewhere in this file.** Measured 16.5k
-steps/min with two concurrent runs sharing 24 cores. Concurrency does not
-threaten validity — 5M steps is 5M steps — it only costs wall-clock.
+⚠️ **Verify `m9seed`'s final checkpoint still exists on the box before starting.**
+Without it the reward comparison is dead and only the width comparison survives.
 
-**Do not read the early rollout win rates as a result.** At step ~248k the
-policy has only just unfrozen (value warmup ends at 200k) and the arms showed
-0.33 (h128) vs 0.50 (h512). That is 5% of training, during a transient, on a
-metric that does not record which opponent family it was against. **Gate on the
-n=2,000 bot evals, all arms in one session on one machine, per
-`docs/EVALUATION-METHODOLOGY.md`.**
+**Pre-registered gate, with one deliberate widening.** Width gate is **≥+3pp vs
+Random with the CI on the difference excluding 0**; DamageFirst reported
+alongside but not gated. **n widened from the registered 2,000 to 5,000**
+(2026-08-03): these arms land near 0.6–0.7, where 2,000 resolves only ~±4.5pp
+against a +3pp gate — underpowered by the project's own rule. Recorded here
+rather than quietly changed. Decision rule for the gate is **sampled** (keeps
+these comparable to every historical number including M7's 69.7%), with a
+`--greedy` read on the winner only.
 
-**Pre-registered, written before any result exists:** width gate is **≥+3pp vs
-Random at n=2,000/arm with the CI on the difference excluding 0**; DamageFirst
-reported alongside but not gated (needs ~4,948/arm to resolve ±2pp). Expect an
-**informative null on width** — the observation was measured to carry ~25
-distinct values, and 5.3× params bought only +2.8pp BC val accuracy. A null now
-closes the capacity question with a mechanism attached rather than a shrug.
+Expect an **informative null on width** — the observation carries ~25 distinct
+values, and 5.3× params bought only +2.8pp BC val accuracy. Either way this does
+not gate M12: **the pivot happens regardless**, and the width result only decides
+whether M12 budgets a wider net or stays at 128.
+
+**Evidence that carries into the deferred v4 work (M11), not into M12 directly.**
+Field observation 2026-08-02, user watching a live ladder game: the agent
+switched a Water type in after a faint against an Electric, then spent the
+following turn switching it out for a Normal. The encoder explains the shape —
+**type effectiveness is encoded offensively only.** `fillV3MoveDims`
+(`sim/tools/feature-extractor.ts`) fills dims 77–80 with each token's moves vs
+`ctx.defenderTypes`, always the opponent's active; no dim encodes the opponent's
+moves vs *this* token's typing. **Status: hypothesis from n=1 game plus a code
+read, not a measurement**, and the wasted turn itself is not fully explained by
+it. Keep for whenever v4 is re-derived for the fixed-team format.
+
 
 ---
 
@@ -207,132 +238,102 @@ closes the capacity question with a mechanism attached rather than a shrug.
 
 ## Blockers
 
-- **M11 approval:** Observation schema v4 invalidates all checkpoints (BC + PPO). Retraining cost: ~2–3h BC + ~2h PPO + ~2h full eval + ladder if gates pass. User approval required before committing to M11. **As of 2026-08-03 the recommendation is to run M10 first** — it needs no approval, no retraining, and should tell M11 which dims to prioritise. See MILESTONES.md → M10 Recommendation.
-- **Width-512 probe: TRAINED 2026-08-02, UNMEASURED.** Both arms hit 5M steps.
-  Not a blocker on anyone — it is the immediate next action. Runbook in Next
-  Steps §1. Expectation is still an informative null on width.
-- ~~Greedy decoding~~ — **resolved 2026-08-02.** Confirmed offline (+7.8pp /
-  +5.0pp), adopted as the ladder default; the one ladder read was flat and
-  diluted by `--mcts`. Closed. See Next Steps §0.
+- **Home box SSH unreachable (2026-08-03).** Tailscale reports the host
+  **online and directly reachable** (`active; direct`), but port 22 **times out**
+  rather than refusing — a drop, not a closed port. `home-pc` is Windows and the
+  repo/sshd live in WSL2, which has its own network namespace: sshd binds the WSL
+  VM's IP, not the Windows host's tailscale IP, and **WSL2's IP changes on every
+  boot**, so any previously-working `netsh portproxy` rule now points at a stale
+  address. Diagnosis path on the box (elevated PowerShell): `wsl hostname -I` for
+  the current IP, `netsh interface portproxy show all` to see the stale rule, then
+  re-add `listenaddress=0.0.0.0 listenport=22 → connectaddress=<new WSL IP>`, plus
+  a firewall rule allowing inbound 22 (Windows Firewall drops silently, which is
+  why this times out instead of refusing). Inside WSL: `sudo service ssh start`.
+  Blocks: **M12 Phases 2–4** (BC/PPO training and therefore the terminal gate),
+  plus the optional M11 eval battery (both trained arms live only on the home
+  box). **User will restore this when back home — record as blocked, not
+  failed.** M10 Phase 3 is no longer affected; M10 is closed.
+- **M12 Phase 0 (roster selection):** Not blocked by SSH — a design decision made
+  and pre-registered on the Mac. This is the work that survives the outage, and
+  it is what's in progress now.
+- ~~M12 approval~~ — **APPROVED 2026-08-03.** User has committed to the pivot.
+- ~~Width-512 probe~~ — **TRAINED 2026-08-02, UNMEASURED** due to home box SSH
+  blocker (see above).
 
 ---
 
 ## Next Steps
 
-0. **Greedy is the ladder default (2026-08-01); the ladder read was flat
-   (2026-08-02).** Adopted on 10,000 offline battles (+7.8pp / +5.0pp, both CIs
-   excluding 0).
+**This is the complete remaining task list for the project.** Nothing else is
+planned. Items 2–5 wait on home box SSH.
 
-   **Ladder run `m7-greedy`** (M7 `ppo_step_5000002_final.pt`, account
-   `Novapool`, `--mcts`, greedy): **97/360 = 26.9% [22.6, 31.8], mean opponent
-   Elo 1148.5.** Against the M7-era sampled baseline (118/387 = 30.5%):
-   **−3.5pp, 95% CI [−10.0, +3.0] — inconclusive, CI includes 0.** Against the
-   full 507-game pre-change pool (28.0%): −1.1pp [−7.0, +5.0].
+1. ~~**M12 Phase 0 — roster selection.**~~ ✅ **DONE 2026-08-05.** See Current
+   Work above and `docs/BATTLE-FORMATS.md`.
 
-   **This is not a refutation of the offline result, and must not be recorded as
-   one.** Three reasons: (a) the run used `--mcts`, where search already returns
-   an argmax, so greedy reached only the **~20% of decisions that fall back to
-   the raw policy** (`ladder-bot.js:291`) — a ~5× diluted treatment; (b) it is a
-   historical comparison, not a paired A/B, against July sessions weeks apart;
-   (c) the pre-change CSV has **no `opp_rating` column**, so the opponent-Elo
-   confound check the methodology mandates is impossible. Verdict: **greedy is
-   not harmful in the shipping config at ±6.5pp.** Nothing stronger is
-   supportable.
+2. **M12 Phase 1 — plumbing (~1 day). ← NEXT.** Load
+   `config/rosters/gen1ou-standard.txt` in gym, evaluator, ladder-bot and BC
+   preprocessing; format `gen1ou`, same team both sides. `./build` passes; 10
+   battles per subsystem on the fixed roster. Mostly doable on the Mac.
+   **Also decide and pre-register the BC corpus** (recommendation on record:
+   gen1ou + tournament, to avoid confounding format and corpus at once).
 
-   **Decision: keep greedy on, stop testing it.** A real ladder A/B needs
-   `--sample` as a paired control, no search on either arm, ~83 h — to answer a
-   question M11 invalidates by changing the checkpoint.
+3. **M12 Phase 2 — BC retraining (~2–3 h, home box).** gen1ou corpus, fixed
+   roster. Report checkpoint path + held-out accuracy.
 
-   **Two findings worth keeping independent of greedy:**
-   - **26.9% at n=360 (±4.6pp) is the most precise ladder number this project
-     has**, and the first with opponent Elo recorded.
-   - **~20% of ladder decisions never reach search.** Force-switches after a
-     faint and locked states go to the raw policy. Those are precisely the
-     "what do I bring in" decisions where the missing *defensive* type-matchup
-     dim bites. Two independent lines now point at the same v4 item.
+4. **M12 Phase 3 — PPO training (~2–3 h, home box).** 5M-step warm start from
+   Phase 2, M7 recipe, single arm.
 
-   ⚠️ **Ladder history is split across two CSVs.** The M9 schema change rotated
-   the old file to `ladder_results.pre-m9.csv`, and `ladder_analysis.py` defaults
-   to `ladder_results.csv` alone — so a bare invocation **silently drops all 507
-   pre-2026-08-01 games**. Always pass both paths:
-   ```bash
-   python3 scripts/ladder_analysis.py \
-     data/replays/self_ladder/ladder_results.pre-m9.csv \
-     data/replays/self_ladder/ladder_results.csv --since 2026-07-16
-   ```
-   Pooled across both, all 867 rated games: **27.6% [24.7, 30.6]**.
+5. **M12 Phase 4 — bot-eval gate (~3–4 h). 🏁 TERMINAL.** n=5,000/opponent,
+   sampled, no search. Gate ≥10% on both Random and DamageFirst.
+   **Pass → record the number, optionally run Phase 5, archive.**
+   **Fail → record the number as the finding, archive.** Either way the project
+   ends here. Do not diagnose, do not re-roll the roster.
 
-1. **▶ M11 eval battery — BOTH ARMS TRAINED, NOTHING MEASURED YET.**
-   Finished 2026-08-02: `m11_h128` (151,187 params) at 5,000,003 steps,
-   `m11_h512` (801,299) at 5,000,006. Checkpoints live **on the home box only**
-   at `~/Projects/pokemon-showdown-ai/models/ppo/checkpoints/<arm>/` — they do
-   not sync via git (`docs/MULTI-MACHINE.md`).
+6. **(Optional) M12 Phase 5 — gen1ou ladder, ~24–48 h.** Only if Phase 4 clears
+   with room to spare. User runs ladder sessions personally — hand over the
+   command, don't launch it in a background task.
 
-   **Two pre-registered comparisons**, each single-variable:
-   - `m11_h128` vs **`m9seed`** → the **reward fix** (width held at 128)
-   - `m11_h512` vs **`m11_h128`** → **width** (reward held fixed)
+7. **(Optional, off critical path) M11 eval battery.** `m11_h128` vs `m9seed`
+   (reward fix) and `m11_h512` vs `m11_h128` (width), n=5,000/opponent. Only if
+   SSH is back and it's cheap. Expected null; changes no decision.
 
-   Pre-registered gate: **≥+3pp vs Random with the CI on the difference
-   excluding 0**; DamageFirst reported alongside but not gated. Expectation was
-   an informative null on width.
-
-   **Runbook:** evaluate the **final** checkpoint of each arm (never a sweep
-   pick — `docs/EVALUATION-METHODOLOGY.md`), **all arms in one session on one
-   machine**, identical decision rule across arms, then
-   `scripts/bot_eval_ab.py --arm base=W/N --arm cand=W/N --gate 3`.
-
-   **Two open calls, flagged before any number exists:**
-   - **n.** Pre-registration says 2,000. These arms will land near 0.6–0.7 like
-     M7, where 2,000 resolves only ~±4.5pp against a +3pp gate — underpowered by
-     the project's own rule (n=5,000 for anything in the 0.3–0.7 band).
-     **Recommend running n=5,000 and recording plainly that the registration was
-     widened**, rather than running a test known in advance to be underpowered.
-   - **Decision rule.** The gate compares *training recipes*, so it only needs to
-     be identical across arms. **Recommend `sampled`** for the gate — keeps these
-     comparable to every historical number including M7's 69.7% — and add a
-     `--greedy` read on the winner only.
-
-   Then: if width gates ≥+3pp, capacity is live and M11 Phase 1 should budget a
-   wider net; if null (expected), the capacity question closes with a mechanism
-   attached and Phase 1 proceeds at width 128.
-
-2. **M11 Phase 0 (reward asymmetry fix, ~1 hour):** ~3 lines in `battle-sim.ts`, 1 replication of M8 Phase 2's value fine-tune. If moves needle (≥+1pp), include before Phase 1. If not, proceed to Phase 1 directly.
-
-3. **M11 Phase 1 (observation enrichment, ~4 days):** Scope v4 schema carefully; estimate BC/PPO/eval costs; pre-register gates. A/B at n=2,000/opponent, gate ≥+3pp CI excluding 0.
-
-4. **Phase 2 (if Phase 1 gates pass):** Paired ladder A/B, n≥350/arm, power for +10pp.
-
+**Then: wind-down.** Final numbers into `MILESTONES.md`, `docs/WHERE-WE-ARE.md`
+rewritten as a closing summary, Obsidian note updated to Complete.
 
 ---
 
 ## Active Plan
 
-**M11: Observation Enrichment + Reward Asymmetry.** Full spec in
-`MILESTONES.md` → M11.
+**M12: Fixed-Team Gen 1 OU Pivot — the final milestone.** Full spec in
+`MILESTONES.md` → M12.
 
 ```
-Phase 0  reward asymmetry fix          ✅ SHIPPED (applyStallPenalty clips
-                                          before charging duration cost)
-  │
-Width/reward probe  m11_h128, m11_h512  ✅ TRAINED 2026-08-02 (home box)
-  │                                     ⏳ UNMEASURED ← immediate next action
-  │      m11_h128 vs m9seed  → reward fix (width held)
-  │      m11_h512 vs m11_h128 → width (reward held)
-  │      gate: ≥+3pp vs Random, CI on the difference excluding 0
-  ▼
-Phase 1  observation schema v4          🚫 BLOCKED on user approval
-         move identity, species/base stats, trapping, recharge,
-         defensive type effectiveness
-  │      invalidates every checkpoint → BC + PPO retrain from scratch
-  │      gate: ≥+3pp vs Random at n=2,000/arm, CI excluding 0
-  ▼
-Phase 2  paired ladder A/B              (only if Phase 1 gates pass)
-         n≥350/arm, powered for +10pp, M9 Phase 3 protocol
+Phase 0  roster selection & curation   ✅ DONE 2026-08-05
+         Tauros/Chansey/Snorlax/Exeggutor/Starmie/Alakazam
+         config/rosters/gen1ou-standard.txt — locked
+         │
+Phase 1  plumbing & corpus decision    ⏳ NEXT (Mac, no blocker)
+         fixed-team encoding into gym/eval/ladder, BC corpus choice
+         │
+Phase 2  BC retraining (home box)       ⏳ BLOCKED (home box SSH)
+         gen1ou corpus, fixed roster, report accuracy
+         │
+Phase 3  PPO training (home box)        ⏳ BLOCKED (home box SSH)
+         5M steps, M7 recipe, warm-start from Phase 2 BC
+         │
+Phase 4  bot-eval gate (~3–4h)          ⏳ BLOCKED (needs Phase 3)
+         n=5,000/opponent, gate ≥10% on both Random/DamageFirst
+         🏁 TERMINAL — project ends here, pass or fail
+         │
+Phase 5  ladder baseline (24–48h)       ⚪ OPTIONAL (only if Phase 4 clears well)
 ```
 
-Instrumentation debt to pay alongside Phase 1 (~4 h, unblocks every future
-A/B): `--seed` on both trainers, per-step entropy/KL/clip-fraction/value-loss
-logging, and a `meta.json` run manifest (device, git SHA, argv, timestamp).
+**Dropped as part of the bounded finish (2026-08-05):**
+- M10 battle log analysis (~8 days) — diagnosis with nothing downstream to act on
+- M11 Phase 1 observation schema v4 — the best untested idea, left on the table
+  deliberately; it is where a future reader should start
+- Instrumentation debt (`--seed`, per-step logging, `meta.json`) — insurance for
+  future A/Bs that are no longer planned; M12's phases are single-arm
 
 ---
 

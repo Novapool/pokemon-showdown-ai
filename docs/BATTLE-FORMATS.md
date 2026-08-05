@@ -5,6 +5,91 @@ Relevant source: `config/formats.ts`, `sim/TEAMS.md`, `simulate.js`.
 
 ---
 
+## 🔒 THE FIXED ROSTER (M12 Phase 0 — pre-registered 2026-08-05)
+
+**This is the project's final experimental configuration.** Format `gen1ou`, one
+fixed 6-Pokémon team used by **both sides** in every training battle, bot eval and
+ladder game from here forward. Locked before any code was written or any result
+seen — see `MILESTONES.md` → M12 for the terminal Phase 4 gate.
+
+**Do not change this roster.** If M12 Phase 4 fails its gate, that is the
+finding. Re-rolling the roster after seeing the result is the sweep-picking
+banned by the standing rules in `IN-PROGRESS.md`.
+
+### The team
+
+| Slot | Pokémon | Moves | Human set usage |
+|---|---|---|---:|
+| 1 | **Tauros** | Body Slam / Hyper Beam / Blizzard / Earthquake | 81.7% |
+| 2 | **Chansey** | Ice Beam / Thunderbolt / Thunder Wave / Soft-Boiled | 34.3% |
+| 3 | **Snorlax** | Body Slam / Earthquake / Reflect / Rest | 21.1% |
+| 4 | **Exeggutor** | Psychic / Sleep Powder / Stun Spore / Explosion | 46.0% |
+| 5 | **Starmie** | Psychic / Blizzard / Thunder Wave / Recover | 33.1% |
+| 6 | **Alakazam** | Psychic / Seismic Toss / Thunder Wave / Recover | 65.6% |
+
+Gen 1 has no items or abilities. All Pokémon are level 100 with maximum DVs and
+stat experience (the Showdown default, and what `Teams.pack` emits below).
+
+### Packed team string
+
+Canonical copy lives at `config/rosters/gen1ou-standard.txt`. Validated with
+`./pokemon-showdown validate-team gen1ou` (passes) and smoke-tested for 5/5
+completed `gen1ou` battles via `BattleStream` + `RandomPlayerAI`.
+
+```
+Tauros||||BodySlam,HyperBeam,Blizzard,Earthquake||255,255,255,255,255,255|||||]Chansey||||IceBeam,Thunderbolt,ThunderWave,SoftBoiled||255,255,255,255,255,255|||||]Snorlax||||BodySlam,Earthquake,Reflect,Rest||255,255,255,255,255,255|||||]Exeggutor||||Psychic,SleepPowder,StunSpore,Explosion||255,255,255,255,255,255|||||]Starmie||||Psychic,Blizzard,ThunderWave,Recover||255,255,255,255,255,255|||||]Alakazam||||Psychic,SeismicToss,ThunderWave,Recover||255,255,255,255,255,255|||||
+```
+
+### How it was chosen
+
+Mined from **10,101 local gen1ou replays rated ≥1300** (`data/replays/gen1ou/`,
+filtered via `manifest.csv`), yielding 16,743 fully-revealed 6-Pokémon teams.
+
+**Species usage across those teams:**
+
+| Pokémon | % of teams | | Pokémon | % of teams |
+|---|---:|---|---|---:|
+| Tauros | 91.4% | | Alakazam | 43.9% |
+| Chansey | 78.9% | | Jynx | 26.4% |
+| Snorlax | 76.5% | | Rhydon | 24.1% |
+| Exeggutor | 71.2% | | Zapdos | 21.9% |
+| Starmie | 48.8% | | Gengar | 21.0% |
+
+The top five are the metagame's core. For the sixth slot, the two candidates
+were near-tied by usage as **exact** teams:
+
+- **+Alakazam — 1,088 teams (6.50%), rank #1** ✅ chosen
+- +Rhydon — 1,021 teams (6.10%), rank #2
+
+**Tiebreak — three reasons, recorded before the run:**
+1. **Rank #1 by usage.** An objective, pre-registerable rule rather than taste.
+2. **Its value doesn't depend on perception the agent lacks.** Rhydon's main
+   contribution is Ground typing (immunity to every Thunder Wave, and paralysis
+   is Gen 1's dominant mechanic) — but that is *defensive positional* value, and
+   v3 encodes type effectiveness **offensively only** (`docs/WHERE-WE-ARE.md`).
+   We would be handing the agent a piece it cannot see. Alakazam's value is raw
+   offensive pressure plus Thunder Wave/Recover.
+3. **More BC signal.** 1,772 fully-revealed Alakazam sets vs 237 for Rhydon.
+
+Move sets are the modal fully-revealed 4-move set per species in the same pool
+(percentages in the table above), so every slot is the dominant human build.
+
+### ⚠️ Two caveats recorded with the selection
+
+**Win rate by team is NOT usable, and was discarded.** Extracting a team requires
+all 6 Pokémon to appear in the log, and winners frequently never bring in their
+6th. Measured directly: P(win) is 44.5% given 6 revealed vs 81.2% given 5. The
+"6 revealed" filter **selects for losing teams**, so any win rate computed this
+way is biased downward and cannot rank rosters. Usage counts are unaffected by
+this in any way that matters — they concern which species appear at all.
+
+**Expect long mirror matches.** The 5-battle smoke test ran 66–151 turns.
+Chansey's Soft-Boiled, Starmie/Alakazam's Recover and Snorlax's Rest on *both*
+sides make this a slower episode than randbats. Relevant to PPO throughput in
+M12 Phase 3 (fewer episodes per 5M steps) and to Phase 5 ladder wall-clock.
+
+---
+
 ## What a format ID is
 
 A format ID is the lowercase, no-spaces version of the format name. It is passed to:

@@ -8,26 +8,57 @@ and `docs/MILESTONES-ARCHIVE.md` has M0–M9 in full.
 **Keep this current.** Update it whenever a milestone or experiment closes, and
 prune anything that stops being true. It should stay roughly one screen.
 
-Last updated: **2026-08-03**
+Last updated: **2026-08-05**
+
+---
+
+## 🏁 Read this first: the project is finishing
+
+**Decided 2026-08-05.** This is a deliberate, bounded wind-down — ending on an
+answer rather than fading out mid-blocker.
+
+**One milestone left: M12 (fixed-team Gen 1 OU), Phases 0–4.** Phase 4 is a
+pre-registered bot-eval gate. When it reports its number the project is
+**done and archived — pass or fail.** No diagnosis pass, no second roster, no
+"one more idea." Phase 5 (gen1ou ladder) is optional.
+
+**Closed without execution:** M10 (tactical error diagnosis, ~8 days — a
+diagnosis with nothing downstream to act on) and M11 Phase 1 (observation schema
+v4 — the best untested idea in the project, left on the table on purpose).
+
+**Why.** Eight milestones, seven tested hypotheses back null or weak, every
+intervention sized at 1–5pp against a ~30pp gap, and infrastructure now eating
+more of a session than the ML. The honest ceiling on M12 is "less bad in a
+narrower format," not "competitive." It is worth doing anyway because fixed teams
+is the one idea that shrinks the *problem* instead of adding another knob — and
+because a project that concludes reads differently than one that was abandoned.
+
+**If you are picking this up later:** start at `MILESTONES.md` → M11, the
+observation-poverty work. The section below tells you why.
 
 ---
 
 ## The one-paragraph version
 
-We have a Pokémon-battling agent that is **very good against simple bots and
-mediocre against humans**. It wins ~93% against our scripted opponents but only
-**~27% on the real ladder — and ~19–23% of the games that are actually played
-out**, because roughly a third of our ladder wins are opponents forfeiting in
-the first few turns. A code review on 2026-08-01 identified the root
-cause: **the agent cannot see what it needs to play Gen 1 well.** Its observation
+We have a Pokémon-battling agent that is **mediocre**. The long-standing framing
+— "great against bots, bad against humans" — was largely two measurement
+artifacts, both now corrected. With MCTS it wins ~93% against our scripted
+opponents, but the **raw greedy policy wins 77.7% against `Random`**, an
+opponent that plays random legal moves, and MCTS's true contribution is
+confounded and unknown. On the ladder it wins ~27% of games and **19.3% of the
+games that actually get played out** — roughly a third of our "wins" are
+opponents forfeiting in the first few turns.
+
+The best available explanation for *why* is **observation poverty**: the agent
 encodes moves without identity (Recover and Swords Dance are byte-identical),
-and carries no species or stats at all, making damage estimation impossible.
-This is invisible against `Random` and `DamageFirst`, which never switch and
-mostly attack (base power suffices), and expensive against humans (which switch
-constantly and reason with stats and coverage). **This is the first hypothesis
-that predicts the shape of the gap rather than proposing another knob.** Six
-other theories have been tested and ruled out since M7. The binding constraint
-is now measured and understood.
+carries no species or stats, and encodes type effectiveness offensively but
+never defensively. It is well-evidenced from a 2026-08-01 code review and
+predicts the shape of the gap — but it is **still an untested diagnosis**, and
+seven hypotheses before it were tested and came back null or weak.
+
+**As of 2026-08-03 the project is pivoting to fixed-team Gen 1 OU** — the first
+change that shrinks the problem rather than adding another knob. See "The plan"
+below.
 
 ## What the observation poverty looks like
 
@@ -134,106 +165,100 @@ actually support the claim. That was not true of this project before M9.
 | Pick the best checkpoint off a sweep | Sweep peak is luck-inflated; it regressed 4.2pp |
 | Speed-ratio observation feature | M8 Phase 1A: −3pp, and doubly confounded (see `docs/MILESTONES-ARCHIVE.md` → M8) |
 
-## Options from here
+## The plan — the bounded finish, decided 2026-08-05
 
-**The new leading hypothesis is observation poverty.** This is the first lever
-that predicts *why* the gap has this exact shape. It is not yet tested end-to-end,
-and closing it requires retraining (new obs schema invalidates every existing
-checkpoint). The honest options:
+**M12 only, Phases 0–4.** Fixed 6-Pokémon roster, Gen 1 OU:
 
-**1. Fix observations (M11, ~2–3 days training).** Add move identity, species,
-stats, trapping, and Hyper Beam recharge. Requires new `obs_schema_v4`,
-matching `replay-adapter.ts` path, BC retraining. Gates on raw-policy bot evals
-at n=2,000/opponent with CI excluding 0 (currently ~+3pp bar). **This is the
-highest-leverage option, and the first one worth spending time on.**
+| Phase | What | Where |
+|---|---|---|
+| **0** | ✅ **DONE** — roster locked, pre-registered in `docs/BATTLE-FORMATS.md` | Mac |
+| 1 | Fixed-team plumbing: gym, evaluator, ladder-bot, BC preprocessing | Mac — **next** |
+| 2 | BC retrain on gen1ou, ~2–3 h | home box |
+| 3 | PPO 5M steps, M7 recipe, single arm, ~2–3 h | home box |
+| **4** | **Bot-eval gate, n=5,000/opponent, ≥10% vs Random and DamageFirst** | 🏁 **terminal** |
+| 5 | gen1ou ladder, n=360 | ⚪ optional, only if Phase 4 clears well |
 
-**2. Reward asymmetry — DONE, shipped 2026-08-01 (M11 Phase 0).**
-`applyStallPenalty` now clips before charging the duration cost, so wins and
-losses pay it equally, and `--stall-penalty` makes it settable (default 0.001 =
-historical). The regression test that "passed" under the old formula encoded the
-bug; it has been replaced. **Not yet re-tested end-to-end** — whether the fix
-un-suppresses M8 Phase 2's value-head null is still an open question, and it
-rides along free on the next training run.
+Phases 2–4 are blocked on home box SSH (WSL2 portproxy — diagnosis in
+IN-PROGRESS.md → Blockers). The user restores it when back home.
 
-**3. Greedy decoding — settled offline, unresolved on the ladder.** At
-n=5,000/arm greedy is **+7.8pp vs Random [+6.1, +9.5]** and **+5.0pp vs
-DamageFirst [+3.1, +6.9]**; the DamageFirst reading *reverses* the underpowered
-n=400 −2.0pp in the code review. `ladder-bot.js` has been greedy by default
-since 2026-08-01 (`--sample` opts out). **The one ladder run since (n=360,
-`--mcts`) read 26.9%, −3.5pp [−10.0, +3.0] against the 30.5% baseline — no
-detectable effect either way.** That run is not a refutation: under `--mcts`
-search already argmaxes, so greedy reached only the ~20% of decisions that fall
-back to the raw policy, and the comparison is against July sessions with no
-recorded opponent Elo. Keeping the default on the offline evidence. A real
-ladder test means `--sample` as a paired control arm, no search, ~83 h — **not
-worth it before the observation fix**, since M11 invalidates the checkpoint.
+**The roster (locked 2026-08-05):** Tauros / Chansey / Snorlax / Exeggutor /
+Starmie / Alakazam — the rank-#1 most-used exact team in 10,101 local replays
+rated ≥1300, with each slot's modal human move set. Packed team at
+`config/rosters/gen1ou-standard.txt`; full rationale and caveats in
+`docs/BATTLE-FORMATS.md`.
 
-**4. A bigger brain — trained, awaiting evaluation.** The shipping network is
-151,187 parameters. Two PPO arms finished on the home box 2026-08-02:
-`m11_h128` (151,187 params) and `m11_h512` (**801,299**), both 5M steps,
-identical recipe, differing only in width. **Nothing has been evaluated yet —
-running that battery is the immediate next action.** Note this is a capacity
-test on the *old* v3 schema: if width helps while the agent is still playing
-blind, that is informative; if it does nothing, it does not rule out width
-helping after the observation fix. A larger transformer was tried in M3 and
-retired for underperforming, so bigger is not automatic.
+**One roster, pre-registered, one result.** The old plan allowed multi-roster
+averaging and "try another roster if the gate fails." Both are withdrawn — after
+seeing the result, re-rolling is the sweep-picking this project banned in its own
+standing rules.
 
-**5. Diagnose the losses directly (M10, ~5 days, no retraining).** We have 885
-full ladder logs on disk, and they carry `|request|` lines — exact stats, HP and
-the legal move set at every decision. That is enough to replay each decision
-against ground truth and count *categorical* blunders: switching into a
-weakness, failing to leave a losing matchup, using a big move where a priority
-move already secures the KO, attacking into an immunity. Scored in wins vs
-losses with CIs. **This is the only option that tells us what the agent does
-wrong rather than inferring it**, and the long-game decay above is precisely the
-pattern it would explain. It is also the one option whose value survives
-whatever M11 does to the checkpoints. Fully planned in MILESTONES.md → M10.
+**Also dropped:** M10, the v4 schema, and the instrumentation debt (`--seed`,
+per-step logging, `meta.json` — insurance for future A/Bs that no longer exist).
+The M11 h128/h512 eval battery is optional and off the critical path: hours of
+compute if SSH is back, expected null, changes no decision.
 
-**6. Fixed-team Gen 1 OU instead of random teams (~1 day).** Reduces team-luck
-variance. The code already supports it; the missing piece is plumbing teams and
-picking a roster. Downside: Gen 1 OU ladder is slower, so validation takes longer.
+## Two things to walk in knowing
 
-**7. Call it.** The agent is a solid club player. M8–M9 tried two structural
-bets and both failed. The observation fix is well-motivated and measurable, but
-it is a retraining — invalidates all checkpoints, costs time. **This is a
-legitimate stopping point** if the resource/motivation calculation doesn't favor
-continuing.
+**The bundle is declared.** "Fixed team" and "Gen 1 OU" are two changes.
+Fixing the team requires the format switch; the format switch does not require
+fixing the team. The design **cannot attribute** results between them. This was
+accepted deliberately — the outcome matters more than the attribution here — but
+it is written down, because this project has twice been burned by confounds that
+were not (M8 Phase 1A, the M4 search comparisons).
 
-## Recommendation
+**The data story is a tradeoff, not an upgrade.** The pivot puts more human data
+on-format (~99k gen1ou vs ~21.6k randbats) but at **lower average quality** —
+the randbats corpus was scraped at ≥1300, gen1ou mostly was not, so at equal
+quality bar gen1ou is the *smaller* pile (~10.7k vs ~21.6k). Do not record this
+as a clean win.
 
-**First, finish what is already paid for: run the eval battery on the two
-trained arms (option 4).** They have been sitting untouched since 2026-08-02.
-Costs hours, not days, and option 1's scoping depends on knowing whether width
-does anything.
+**The pivot also resets the measurement baseline.** Every bot-eval number and all
+885 ladder logs are randbats. gen1ou starts from scratch.
 
-**Then do option 5 (M10) before option 1.** This is a change from the previous
-recommendation, and the 360-game run is why. M11 is a multi-day retraining
-justified by a hypothesis assembled from a code read, one live game, and an
-aggregate correlation — we have never once looked at what the agent actually
-does wrong. M10 needs no retraining, runs on data already on disk, and either
-confirms the observation story concretely (blunder rates that track the missing
-dims, concentrated in long games) or finds something else entirely. **Going
-straight to M11 means spending the project's largest remaining budget on an
-untested diagnosis when the test is five days and already planned.**
+## Left on the table (closed 2026-08-05, not disproven)
 
-**Then option 1 (M11 Phase 1), scoped by what M10 finds.** The observation
-hypothesis remains the best one we have and is well-evidenced from the code
-review (`docs/CODE-REVIEW-FINDINGS.md`); M10 should sharpen which dims to
-prioritise rather than replace it. The new schema invalidates every checkpoint,
-so pre-register the gates and confirm the cost before starting.
+**M11 Phase 1 (observation schema v4) — the best untested idea here. Start here
+if you resume.** The observation genuinely is broken —
+no move identity, no species or stats, type effectiveness encoded offensively
+only. But a fixed roster changes the calculus: species identity drops from 151
+values to 6 compile-time constants and base stats become static lookups, so much
+of v4 becomes cheap or moot and the rest should be **re-derived for the new
+format after M12, not ported from randbats**. The findings behind it carry
+forward; the design does not. (M11 Phase 0, the reward-asymmetry fix, shipped
+2026-08-01 and carries into M12 unchanged.)
 
-**Option 3 is done as far as it is worth taking it** — greedy is confirmed
-offline, is the ladder default, and its one ladder read was flat and diluted by
-search. Resolving it properly costs ~83 h to answer a question M11 would
-invalidate. Leave it on and move on.
+**Greedy decoding.** Confirmed offline (+7.8pp vs Random, +5.0pp vs
+DamageFirst), is the ladder default, and its one ladder read was flat and
+diluted by `--mcts`. Leave it on and stop testing it.
 
-**One free fix regardless:** the ladder bot should record `opp_rating` on every
-run (it now does) and future ladder claims should quote contested win rate. Two
-of the three numbers this project has argued over were partly measuring how
-often strangers rage-quit.
+**M10 (tactical error diagnosis).** Its one probe fired: wasted-turn double
+switches at 15.7% in losses vs 6.1% in wins (+9.6pp, CI excludes 0), climbing
+with game length. That is a **lead, not a finding** — no human baseline, and
+causation could run the other way (losing positions may force defensive
+shuffling). Closed because it costs ~8 days and produces a diagnosis with nothing
+downstream to act on.
 
-**Expectation:** The realistic outcome is *understanding why the gap exists*,
-not erasing it. Gen 1 random battles carry real team luck that puts a ceiling
-below 100% no matter how good the player is. The project has produced a strong
-bot-eval agent and an unusually rigorous measurement setup. If observation
-fixes don't close the gap substantially, that is a finding worth recording.
+## Honest expectation
+
+The agent's raw greedy policy wins **77.7% vs Random** — an opponent that plays
+random legal moves — and **19.3% of contested ladder games**. That is not "great
+against bots, bad against humans"; it is mediocre across the board, with the
+apparent split produced by two measurement artifacts (search-vs-sampling, and
+forfeit inflation) that have now been corrected.
+
+**19% → 50% is not a feature fix.** Every intervention this project has run was
+sized at 1–5pp, and seven have come back null or weak. The pivot is worth doing
+because it is the first change that shrinks the *problem* rather than adding
+another knob — but a realistic good outcome is a meaningfully stronger agent in a
+narrower format, not a competitive one.
+
+**And either way, M12 Phase 4 is the end.** That was decided before the roster
+was chosen, precisely so the result can't move the finish line. A failed gate is
+a finding, not a reason to keep going.
+
+**What this project actually produced.** The agent is mediocre. The method is
+not: pre-registered gates, sample-size widenings recorded rather than quietly
+applied, a dead-ends table, four self-issued corrections invalidating its own
+earlier numbers, and confounds caught in M4 and M8 by its own review. Most of the
+value here is in `docs/EVALUATION-METHODOLOGY.md`, and it transfers to problems
+whose ceiling isn't set by a 1990s hidden-information game.
