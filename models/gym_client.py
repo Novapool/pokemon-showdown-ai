@@ -101,6 +101,8 @@ class GymClient:
         obs_v2: bool = False,
         obs_v3: bool = False,
         obs_v3_extended: bool = False,
+        battle_format: str = None,
+        roster: str = None,
     ):
         """opponent: 'random' (legacy default) or 'damagefirst' (M3.3 heuristic).
         selfplay=True runs the bridge in dual-seat mode (opponent seat driven
@@ -110,7 +112,12 @@ class GymClient:
         obs_v3_extended=True (M8 Phase 1A) selects the (12, 87) schema — v3 plus
         the own/opp active base-speed ratio at dim 86.
         set_opponent() switches the opponent (and single/dual protocol) for
-        subsequent resets — used by --opponent-mix training."""
+        subsequent resets — used by --opponent-mix training.
+
+        battle_format (M12) selects the battle format; 'gen1ou' additionally
+        loads the pre-registered fixed roster and gives the SAME team to both
+        seats. roster overrides the roster file. Default None keeps the
+        historical gen1randombattle random-team behaviour."""
         if bridge_path is None:
             bridge_path = str(Path(__file__).parent / "gym_bridge.js")
         if (obs_v2 or obs_v3 or obs_v3_extended) and not structured:
@@ -139,6 +146,10 @@ class GymClient:
             args.append("--selfplay")
         elif opponent != "random":
             args.extend(["--opponent", opponent])
+        if battle_format:
+            args.extend(["--format", battle_format])
+        if roster:
+            args.extend(["--roster", roster])
         self._proc = subprocess.Popen(
             args,
             stdin=subprocess.PIPE,

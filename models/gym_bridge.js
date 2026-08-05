@@ -35,6 +35,9 @@
  *
  * Opponent selection (M3.3):
  *   --opponent random|damagefirst   picks the built-in p2 AI (default random)
+ *   --format <id>                   battle format (default gen1randombattle)
+ *   --roster <file>                 packed team for BOTH seats (M12 fixed
+ *                                   roster; implied by --format gen1ou)
  *   --stall-penalty <float>         per-turn terminal cost (default 0.001;
  *                                   0 disables it — see applyStallPenalty)
  *   --selfplay                      dual-seat mode: p2 is a second externally
@@ -78,6 +81,7 @@
 
 const readline = require('readline');
 const { PokemonGymEnv } = require('../dist/sim/tools/pokemon-gym');
+const { loadRoster, FIXED_ROSTER_FORMAT } = require('../dist/sim/tools/roster');
 const { BattleSim } = require('../dist/sim/tools/battle-sim');
 
 const flat = process.argv.includes('--flat');
@@ -96,6 +100,27 @@ const stallIdx = process.argv.indexOf('--stall-penalty');
 const stallPenalty = stallIdx !== -1 ? Number(process.argv[stallIdx + 1]) : undefined;
 if (stallIdx !== -1 && !Number.isFinite(stallPenalty)) {
 	process.stdout.write(JSON.stringify({ error: `--stall-penalty must be a number` }) + '\n');
+	process.exit(1);
+}
+
+// M12: fixed-roster play. `--format gen1ou` alone loads the pre-registered
+// roster (config/rosters/gen1ou-standard.txt) and hands the SAME packed team to
+// both seats; `--roster <file>` overrides which file. Random-team formats stay
+// team-less and let the engine generate. See docs/BATTLE-FORMATS.md.
+const formatIdx = process.argv.indexOf('--format');
+const format = formatIdx !== -1 ? process.argv[formatIdx + 1] : undefined;
+const rosterIdx = process.argv.indexOf('--roster');
+const rosterFile = rosterIdx !== -1 ? process.argv[rosterIdx + 1] : undefined;
+
+let team;
+try {
+	if (rosterFile) {
+		team = loadRoster(rosterFile);
+	} else if ((format ?? 'gen1randombattle') === FIXED_ROSTER_FORMAT) {
+		team = loadRoster();
+	}
+} catch (err) {
+	process.stdout.write(JSON.stringify({ error: `roster load failed: ${err.message}` }) + '\n');
 	process.exit(1);
 }
 
@@ -164,7 +189,7 @@ async function processCommand(command) {
 		if (env) env.destroy();
 		sims.clear(); // stale sims reference the previous battle
 		currentOpponent = requested;
-		env = new PokemonGymEnv({ obsMode, opponent: currentOpponent, stallPenalty });
+		env = new PokemonGymEnv({ obsMode, opponent: currentOpponent, stallPenalty, format, team });
 		if (currentOpponent === 'self') {
 			const result = await env.resetDual();
 			initialized = true;

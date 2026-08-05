@@ -104,6 +104,7 @@ def _run_battles_vec(
     agent, n_battles: int, num_envs: int, structured: bool, flatten: bool,
     opponent: str = "random", obs_v2: bool = False, obs_v3: bool = False,
     obs_v3_extended: bool = False, track_opp: bool = False,
+    battle_format: str = None, roster: str = None,
 ) -> BattleResult:
     """Run n_battles episodes across num_envs parallel envs; return
     (wins, total, opp_correct, opp_total).
@@ -119,7 +120,8 @@ def _run_battles_vec(
     """
     num_envs = max(1, min(num_envs, n_battles))
     env = VecGymClient(num_envs, structured=structured, opponent=opponent,
-                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended)
+                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended,
+                       battle_format=battle_format, roster=roster)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -178,6 +180,7 @@ def _run_battles_vec(
 def _run_battles_h2h(
     agent, opponent_agent, n_battles: int, num_envs: int, structured: bool,
     obs_v2: bool = False, obs_v3: bool = False, obs_v3_extended: bool = False,
+    battle_format: str = None, roster: str = None,
 ) -> BattleResult:
     """Head-to-head (M3.3): agent (seat p1) vs a second checkpoint (seat p2).
 
@@ -192,7 +195,8 @@ def _run_battles_h2h(
     """
     num_envs = max(1, min(num_envs, n_battles))
     env = VecGymClient(num_envs, structured=structured, selfplay=True,
-                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended)
+                       obs_v2=obs_v2, obs_v3=obs_v3, obs_v3_extended=obs_v3_extended,
+                       battle_format=battle_format, roster=roster)
     quotas = [n_battles // num_envs] * num_envs
     for i in range(n_battles % num_envs):
         quotas[i] += 1
@@ -253,6 +257,7 @@ def _run_battles_h2h(
 def _run_battles_mcts(
     mcts, n_battles: int, opponent: str = "random", obs_v2: bool = False,
     obs_v3: bool = False, obs_v3_extended: bool = False,
+    battle_format: str = None, roster: str = None,
 ) -> BattleResult:
     """MCTS evaluation (M4): one env, search runs per decision via sim_* commands.
 
@@ -263,7 +268,8 @@ def _run_battles_mcts(
     import time
 
     env = GymClient(structured=True, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3,
-                    obs_v3_extended=obs_v3_extended)
+                    obs_v3_extended=obs_v3_extended,
+                    battle_format=battle_format, roster=roster)
     wins = 0
     latencies = []
     log_every = min(50, max(1, n_battles // 10))
@@ -300,6 +306,7 @@ def _run_battles_mcts(
 def _run_battles_mcts_h2h(
     mcts, opponent_agent, n_battles: int, obs_v2: bool = False, obs_v3: bool = False,
     obs_v3_extended: bool = False,
+    battle_format: str = None, roster: str = None,
 ) -> BattleResult:
     """Head-to-head (M4): MCTS vs a raw PPO checkpoint via dual-seat self-play.
 
@@ -310,7 +317,8 @@ def _run_battles_mcts_h2h(
     import time
 
     env = GymClient(structured=True, selfplay=True, obs_v2=obs_v2, obs_v3=obs_v3,
-                    obs_v3_extended=obs_v3_extended)
+                    obs_v3_extended=obs_v3_extended,
+                    battle_format=battle_format, roster=roster)
     wins = 0
     latencies = []
     log_every = min(50, max(1, n_battles // 10))
@@ -361,6 +369,7 @@ def _run_battles(
     agent, n_battles: int, structured: bool = False, flatten: bool = True,
     opponent: str = "random", obs_v2: bool = False, obs_v3: bool = False,
     obs_v3_extended: bool = False, track_opp: bool = False,
+    battle_format: str = None, roster: str = None,
 ) -> BattleResult:
     """Run n_battles greedy episodes; return (wins, total, opp_correct, opp_total).
 
@@ -372,7 +381,8 @@ def _run_battles(
     structured=True, flatten=False.
     """
     env = GymClient(structured=structured, opponent=opponent, obs_v2=obs_v2, obs_v3=obs_v3,
-                    obs_v3_extended=obs_v3_extended)
+                    obs_v3_extended=obs_v3_extended,
+                    battle_format=battle_format, roster=roster)
     wins = 0
     opp_correct = 0
     opp_total = 0
@@ -417,6 +427,16 @@ def _run_battles(
 def main():
     parser = argparse.ArgumentParser(
         description="Evaluate a trained Pokemon Showdown RL agent vs RandomPlayerAI."
+    )
+    parser.add_argument(
+        "--format", default=None,
+        help="battle format (default: the bridge's gen1randombattle). "
+             "'gen1ou' (M12) also loads the pre-registered fixed roster and "
+             "gives the SAME team to both sides — see docs/BATTLE-FORMATS.md.",
+    )
+    parser.add_argument(
+        "--roster", default=None,
+        help="packed-team file for both sides; overrides the roster --format gen1ou implies.",
     )
     parser.add_argument(
         "--model",
@@ -610,12 +630,14 @@ def main():
             result = _run_battles_mcts_h2h(
                 mcts, opponent_agent, args.battles, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
                 obs_v3_extended=args.obs_v3_extended,
+                battle_format=args.format, roster=args.roster,
             )
             opponent_name = args.vs_checkpoint
         else:
             result = _run_battles_mcts(
                 mcts, args.battles, opponent=args.opponent, obs_v2=args.obs_v2,
                 obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
+                battle_format=args.format, roster=args.roster,
             )
             opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
         wins, total = result.wins, result.total
@@ -648,6 +670,7 @@ def main():
         result = _run_battles_h2h(
             agent, opponent_agent, args.battles, args.num_envs, structured=structured,
             obs_v2=args.obs_v2, obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
+            battle_format=args.format, roster=args.roster,
         )
         opponent_name = args.vs_checkpoint
     elif args.num_envs > 1:
@@ -655,12 +678,14 @@ def main():
             agent, args.battles, args.num_envs, structured=structured, flatten=flatten,
             opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
             obs_v3_extended=args.obs_v3_extended, track_opp=track_opp,
+            battle_format=args.format, roster=args.roster,
         )
     else:
         result = _run_battles(
             agent, args.battles, structured=structured, flatten=flatten,
             opponent=args.opponent, obs_v2=args.obs_v2, obs_v3=args.obs_v3,
             obs_v3_extended=args.obs_v3_extended, track_opp=track_opp,
+            battle_format=args.format, roster=args.roster,
         )
     wins, total, opp_correct, opp_total = result
     win_rate = wins / total if total > 0 else 0.0
@@ -669,6 +694,9 @@ def main():
         opponent_name = "DamageFirstAI" if args.opponent == "damagefirst" else "RandomPlayerAI"
     print(f"Model: {args.model} | Checkpoint: {args.checkpoint}")
     print(f"Decision rule: {'greedy (masked argmax)' if args.greedy else 'sampled'}")
+    print(f"Format: {args.format or 'gen1randombattle'}"
+          f"{f' | roster: {args.roster}' if args.roster else ''}"
+          f"{' | FIXED ROSTER (both sides)' if (args.roster or args.format == 'gen1ou') else ''}")
     print(f"Battles: {total}")
     print(f"Win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
     if track_opp:

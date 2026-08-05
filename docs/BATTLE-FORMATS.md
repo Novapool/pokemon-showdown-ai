@@ -74,6 +74,47 @@ were near-tied by usage as **exact** teams:
 Move sets are the modal fully-revealed 4-move set per species in the same pool
 (percentages in the table above), so every slot is the dominant human build.
 
+### Running on the fixed roster (M12 Phase 1)
+
+`--format gen1ou` is enough everywhere — it implies the pre-registered roster and
+hands the **same** packed team to both seats. `--roster <file>` overrides which
+file. Random-team formats are untouched: with no `--format`, everything behaves
+exactly as it did before.
+
+```bash
+# Bot eval (Phase 4 shape; add --greedy for a decision-rule read)
+python models/evaluate.py --model ppo --obs-v3 --format gen1ou \
+    --checkpoint <ckpt> --opponent random      --battles 5000 --num-envs 8
+python models/evaluate.py --model ppo --obs-v3 --format gen1ou \
+    --checkpoint <ckpt> --opponent damagefirst --battles 5000 --num-envs 8
+
+# BC (Phase 2) — mixed corpus, the pre-registered M7 recipe
+python models/bc_pretrain_mlp.py --obs-v3 --formats gen1randombattle,gen1ou \
+    --epochs 5 --out models/checkpoints/bc_mlp_gen1ou_fixed.pt
+
+# PPO (Phase 3) — 5M steps, M7 recipe, single arm
+python models/ppo/train.py --obs-v3 --format gen1ou --steps 5000000 \
+    --num-envs 8 --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" \
+    --bc-anchor <bc.pt> --value-warmup-steps 200000 \
+    --checkpoint-dir models/ppo/checkpoints/m12
+
+# Ladder (Phase 5, OPTIONAL) — uploads the team via /utm before each search
+node tools/ladder-bot/ladder-bot.js --login-file config/showdown_login.txt \
+    --format gen1ou --checkpoint <ckpt> --battles 360 --mcts
+```
+
+`evaluate.py` prints `Format: gen1ou | FIXED ROSTER (both sides)` in its results
+header, and the ladder bot's banner prints `format=gen1ou (fixed roster)`, so no
+run is ambiguous about what it played.
+
+**MCTS determinization is roster-aware.** Under a mirror roster the opponent's
+bench is not hidden information, so search fills it from the roster instead of
+sampling. Without this, `gen1ou` silently falls through to the gen1 **random**
+generator (`Teams.getGenerator` does not throw for non-random formats), and
+search would model the opponent as arbitrary Gen 1 Pokémon. The ladder path
+(`BattleSim.fromTracked`) still samples on purpose — a human opponent brings
+their own team.
+
 ### ⚠️ Two caveats recorded with the selection
 
 **Win rate by team is NOT usable, and was discarded.** Extracting a team requires
@@ -83,10 +124,20 @@ all 6 Pokémon to appear in the log, and winners frequently never bring in their
 way is biased downward and cannot rank rosters. Usage counts are unaffected by
 this in any way that matters — they concern which species appear at all.
 
-**Expect long mirror matches.** The 5-battle smoke test ran 66–151 turns.
-Chansey's Soft-Boiled, Starmie/Alakazam's Recover and Snorlax's Rest on *both*
-sides make this a slower episode than randbats. Relevant to PPO throughput in
-M12 Phase 3 (fewer episodes per 5M steps) and to Phase 5 ladder wall-clock.
+**Expect long mirror matches, and DRAWS.** Measured at n=600 (Phase 1,
+`RandomPlayerAI` both sides): mean **111 turns** and **6.3% draws**. Chansey's
+Soft-Boiled, Starmie/Alakazam's Recover and Snorlax's Rest on *both* sides make
+this both slower and more drawish than randbats, where draws were negligible.
+
+Two consequences:
+- **Phase 4 must report draws explicitly.** Win rate + loss rate will not sum to
+  1, and the ≥10% gate reads as a share of *all* games.
+- **Fewer episodes per 5M PPO steps** in Phase 3, and longer ladder wall-clock if
+  the optional Phase 5 runs.
+
+Same run also gives a clean **seat-bias** reading, which a mirror roster makes
+possible for the first time: p1 won **49.2%**, 95% CI [45.2, 53.2] — covers 50%,
+no detectable bias.
 
 ---
 

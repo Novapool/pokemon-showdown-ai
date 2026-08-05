@@ -23,6 +23,12 @@ export interface EvalOptions {
 	p1Factory: AIFactory;
 	p2Factory: AIFactory;
 	seed?: PRNGSeed;
+	/**
+	 * M12: packed team handed to BOTH seats. Set for fixed-roster formats
+	 * (gen1ou); leave undefined for random-team formats, where the engine
+	 * generates each side's team from its own seed.
+	 */
+	team?: string;
 }
 
 export interface EvalResult {
@@ -97,6 +103,7 @@ async function runSingleBattle(
 	p2AISeed: PRNGSeed,
 	p1TeamSeed: PRNGSeed,
 	p2TeamSeed: PRNGSeed,
+	team?: string,
 ): Promise<BattleStats> {
 	const battleStream = new BattleStream();
 	const streams = getPlayerStreams(battleStream);
@@ -109,8 +116,8 @@ async function runSingleBattle(
 
 	const initMessage =
 		`>start ${JSON.stringify({ formatid: format, seed: battleSeed })}\n` +
-		`>player p1 ${JSON.stringify({ name: 'Bot1', seed: p1TeamSeed })}\n` +
-		`>player p2 ${JSON.stringify({ name: 'Bot2', seed: p2TeamSeed })}`;
+		`>player p1 ${JSON.stringify({ name: 'Bot1', seed: p1TeamSeed, ...(team ? { team } : {}) })}\n` +
+		`>player p2 ${JSON.stringify({ name: 'Bot2', seed: p2TeamSeed, ...(team ? { team } : {}) })}`;
 
 	void streams.omniscient.write(initMessage);
 
@@ -160,6 +167,7 @@ export async function evaluate(options: EvalOptions): Promise<EvalResult> {
 		p1Factory,
 		p2Factory,
 		seed = makeSeed(1, 2, 3, 4),
+		team,
 	} = options;
 
 	const startMs = Date.now();
@@ -184,6 +192,7 @@ export async function evaluate(options: EvalOptions): Promise<EvalResult> {
 				p2AISeed,
 				p1TeamSeed,
 				p2TeamSeed,
+				team,
 			)
 		);
 	}

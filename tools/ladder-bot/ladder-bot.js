@@ -47,6 +47,7 @@ const readline = require('readline');
 const { ObservationTrackers } = require('../../dist/sim/tools/pokemon-gym');
 const { actionToChoice, validActionsForRequest } = require('../../dist/sim/tools/pokemon-gym');
 const { extractFeaturesStructured } = require('../../dist/sim/tools/feature-extractor');
+const { loadRoster, FIXED_ROSTER_FORMAT } = require('../../dist/sim/tools/roster');
 
 const DEFAULT_SERVER = 'wss://sim3.psim.us/showdown/websocket';
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -59,6 +60,7 @@ function parseArgs(argv) {
 	const args = {
 		server: DEFAULT_SERVER,
 		format: 'gen1randombattle',
+		roster: null,      // packed-team file; implied by --format gen1ou (M12)
 		checkpoint: null,
 		battles: 1,
 		name: process.env.PS_USERNAME || null,
@@ -86,6 +88,7 @@ function parseArgs(argv) {
 		switch (argv[i]) {
 		case '--server': args.server = argv[++i]; break;
 		case '--format': args.format = argv[++i]; break;
+		case '--roster': args.roster = argv[++i]; break;
 		case '--checkpoint': args.checkpoint = argv[++i]; break;
 		case '--battles': args.battles = parseInt(argv[++i], 10); break;
 		case '--name': args.name = argv[++i]; break;
@@ -389,6 +392,17 @@ class LadderBot {
 		this.wins = 0;
 		this.searching = false;
 		this.loggedIn = false;
+		// M12: packed team uploaded via /utm before each search/challenge.
+		// Team formats (gen1ou) require one; random formats must NOT send it.
+		// NOTE: only OUR side is fixed — ladder opponents bring their own teams,
+		// which is why BattleSim.fromTracked still samples their unrevealed mons
+		// rather than assuming the roster (see sim/tools/battle-sim.ts).
+		this.packedTeam = null;
+		if (args.roster) {
+			this.packedTeam = loadRoster(args.roster);
+		} else if (args.format === FIXED_ROSTER_FORMAT) {
+			this.packedTeam = loadRoster();
+		}
 		this.infer = new InferServer(args);
 		this.obsV2 = null;     // set after ping (schema inferred from checkpoint obs_size)
 		this.obsV3 = null;     // set after ping (M7: (12,86) schema-v3 checkpoint)
@@ -452,10 +466,14 @@ class LadderBot {
 		}
 		const schema = this.obsV3Ext ? 'v3-extended' : this.obsV3 ? 'v3' : this.obsV2 ? 'v2' : 'v1';
 		this.mctsReady = this.args.mcts && !!pong.mcts;
+		const mctsBanner = this.mctsReady ?
+			`, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
+			`c_puct=${this.args.cPuct})` :
+			'';
 		console.log(`inference ready: obs_size=${obsSize} (${schema} schema)` +
 			`, policy=${this.args.greedy ? 'greedy' : 'sampled'}` +
-			(this.mctsReady ? `, MCTS on (sims=${this.args.sims}, det=${this.args.determinizations}, ` +
-				`c_puct=${this.args.cPuct})` : ''));
+			`, format=${this.args.format}${this.packedTeam ? ' (fixed roster)' : ''}` +
+			mctsBanner);
 
 		this._connect();
 	}
@@ -549,6 +567,7 @@ class LadderBot {
 			return; // resume searching only after the rejoined battle(s) finish
 		}
 		if (this.args.challenge) {
+			this.useTeam();
 			this.send(`|/challenge ${this.args.challenge}, ${this.args.format}`);
 			console.log(`challenged ${this.args.challenge} to ${this.args.format}`);
 		} else if (!this.args.acceptFrom) {
@@ -558,10 +577,21 @@ class LadderBot {
 		}
 	}
 
+	/**
+	 * Upload the fixed roster (M12). Must precede every /search and /challenge
+	 * in a team format; a no-op for random-team formats, where sending a team
+	 * would be rejected.
+	 */
+	useTeam() {
+		if (!this.packedTeam) return;
+		this.send(`|/utm ${this.packedTeam}`);
+	}
+
 	searchNext() {
 		if (this.finished >= this.args.battles) return;
 		if (this.searching) return;
 		this.searching = true;
+		this.useTeam();
 		this.send(`|/search ${this.args.format}`);
 		console.log(`searching ladder: ${this.args.format} ` +
 			`(battle ${this.finished + 1}/${this.args.battles})`);
@@ -590,6 +620,7 @@ class LadderBot {
 				} else if (type === 'pm' && parts[4] && parts[4].startsWith('/challenge')) {
 					const from = parts[2].replace(/^[^a-zA-Z0-9]/, '');
 					if (this.args.acceptFrom && toID(from) === toID(this.args.acceptFrom)) {
+						this.useTeam();
 						this.send(`|/accept ${from}`);
 						console.log(`accepted challenge from ${from}`);
 					}
@@ -676,6 +707,7 @@ class LadderBot {
 					this.ws.close();
 				} else if (this.args.challenge) {
 					setTimeout(() => {
+						this.useTeam();
 						this.send(`|/challenge ${this.args.challenge}, ${this.args.format}`);
 						console.log(`re-challenged ${this.args.challenge} ` +
 							`(battle ${this.finished + 1}/${this.args.battles})`);

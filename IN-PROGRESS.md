@@ -119,8 +119,55 @@ for BC. Reproducible via `scripts/mine_gen1ou_teams.py` and
   Recover / Rest on both sides). Fewer episodes per 5M PPO steps in Phase 3, and
   longer ladder wall-clock if Phase 5 runs.
 
-**Next: Phase 1 (plumbing).** Mostly doable on the Mac. Everything from Phase 2
-on waits for home box SSH (see Blockers), which the user restores when home.
+**✅ M12 Phase 1 COMPLETE (2026-08-05) — fixed-roster plumbing.**
+
+`sim/tools/roster.ts` is the single source of truth (loads
+`config/rosters/gen1ou-standard.txt`, resolves relative to the repo not
+`process.cwd()`, and **throws rather than falling back** to a generated team —
+a silent fallback would mean training on random teams while every doc says
+otherwise). Wired through:
+
+| Surface | Change |
+|---|---|
+| `sim/tools/pokemon-gym.ts` | `team` option → same packed team to **both** seats |
+| `sim/tools/evaluator.ts` | `team` in `EvalOptions` → both `>player` specs |
+| `sim/tools/battle-sim.ts` | determinizer fills the hidden bench **from the roster** |
+| `models/gym_bridge.js` | `--format` / `--roster` |
+| `models/gym_client.py`, `vec_gym_client.py` | `battle_format=` / `roster=` |
+| `models/evaluate.py`, `models/ppo/train.py` | `--format` / `--roster` |
+| `tools/ladder-bot/ladder-bot.js` | `--roster`; `/utm` before every search/challenge/accept |
+
+**A real bug found and fixed on the way.** `Teams.getGenerator('gen1ou')`
+does **not** throw — it silently falls back to the gen1 *random* generator. MCTS
+would therefore have searched against a bench of arbitrary Gen 1 Pokémon the
+opponent cannot have (measured: Clefable / Kangaskhan / Tentacool / Weezing).
+Under a mirror roster the bench is not hidden information at all, so it is now
+filled from the roster — search is strictly more accurate. **The ladder path
+(`fromTracked`) deliberately still samples**: on the real gen1ou ladder the
+opponent brings their own team, so roster-filling their bench would be wrong.
+
+**Verification:** `./build` passes; 126/126 project tool tests pass (14 new in
+`test/tools/roster.test.js`); 10/10 gym battles on gen1ou and randbats
+unregressed; evaluator, `evaluate.py`, MCTS and BC all run on the fixed roster.
+
+**Two measurements taken during verification, both worth keeping:**
+- **No seat bias.** Mirror roster, identical `RandomPlayerAI` both sides,
+  n=600: p1 **49.2%**, 95% CI [45.2, 53.2] — covers 50%. (The fixed roster makes
+  seat bias cleanly measurable for the first time; the project had it recorded as
+  "unmeasured, not known to be ~3pp".)
+- **~6% of mirror games are DRAWS**, and games run long (mean ~111 turns with
+  random play). New for this format — randbats draws were negligible. **Phase 4
+  must report draws explicitly**: win rate + loss rate will not sum to 1, and the
+  ≥10% gate should be read as a share of all games.
+
+**BC needs no fixed-team changes at all.** `bc_pretrain_mlp.py --obs-v3
+--formats gen1ou` runs unmodified (smoke: 27,866 samples, val acc 0.318). The
+reason is the observation poverty this project already documented — the v3
+schema carries **no species and no stats**, so a fixed roster is literally
+invisible to the encoder and human replays with arbitrary teams encode the same
+way. Convenient here; also a reminder of what M11 would have fixed.
+
+**Next: Phase 2 (BC retrain), blocked on home box SSH.**
 
 **Closed, not deferred:** observation enrichment (v4 schema) and M10. The
 earlier note here said v4 was "deferred post-pivot" for re-derivation on OU —
@@ -270,12 +317,26 @@ planned. Items 2–5 wait on home box SSH.
 1. ~~**M12 Phase 0 — roster selection.**~~ ✅ **DONE 2026-08-05.** See Current
    Work above and `docs/BATTLE-FORMATS.md`.
 
-2. **M12 Phase 1 — plumbing (~1 day). ← NEXT.** Load
-   `config/rosters/gen1ou-standard.txt` in gym, evaluator, ladder-bot and BC
-   preprocessing; format `gen1ou`, same team both sides. `./build` passes; 10
-   battles per subsystem on the fixed roster. Mostly doable on the Mac.
-   **Also decide and pre-register the BC corpus** (recommendation on record:
-   gen1ou + tournament, to avoid confounding format and corpus at once).
+2. ~~**M12 Phase 1 — plumbing.**~~ ✅ **DONE 2026-08-05.** See Current Work.
+
+   **BC corpus, pre-registered 2026-08-05: the mixed `gen1randombattle,gen1ou`
+   default — i.e. M7's exact recipe, unchanged.** Command in
+   `docs/BATTLE-FORMATS.md`.
+
+   *Why, stated honestly:* the only measured evidence (M9 Phase 2a/2c) is that
+   the format-aligned corpus made a **better imitator but a worse RL substrate**
+   (−8.3pp after 5M PPO steps), and Phase 3 is an RL run warm-started from this
+   BC. **But that result does not cleanly transfer** — M9 confounded "aligned"
+   with "narrower", and for a gen1ou target the aligned corpus is now also the
+   *larger* one (99 v3 shards vs 21). So this is a choice for **continuity with
+   the proven M7 recipe**, not a result being followed. The alternative
+   (gen1ou-only) is untested and will stay untested: testing it is a second
+   5M-step arm, which the bounded finish does not have room for.
+
+   Note the plan's old wording, "gen1ou + tournament", was misleading: tournament
+   (`smogtours-`) games are already *inside* the gen1ou corpus and are 74% of it,
+   so that phrase described gen1ou-only. The genuinely mixed corpus is
+   gen1ou + gen1randombattle.
 
 3. **M12 Phase 2 — BC retraining (~2–3 h, home box).** gen1ou corpus, fixed
    roster. Report checkpoint path + held-out accuracy.
@@ -312,10 +373,12 @@ Phase 0  roster selection & curation   ✅ DONE 2026-08-05
          Tauros/Chansey/Snorlax/Exeggutor/Starmie/Alakazam
          config/rosters/gen1ou-standard.txt — locked
          │
-Phase 1  plumbing & corpus decision    ⏳ NEXT (Mac, no blocker)
-         fixed-team encoding into gym/eval/ladder, BC corpus choice
+Phase 1  plumbing & corpus decision    ✅ DONE 2026-08-05
+         roster.ts + gym/eval/battle-sim/bridge/ladder wired
+         BC corpus pre-registered: mixed (M7 recipe)
+         126/126 tool tests pass; determinizer bug fixed
          │
-Phase 2  BC retraining (home box)       ⏳ BLOCKED (home box SSH)
+Phase 2  BC retraining (home box)       ⏳ NEXT — BLOCKED (home box SSH)
          gen1ou corpus, fixed roster, report accuracy
          │
 Phase 3  PPO training (home box)        ⏳ BLOCKED (home box SSH)

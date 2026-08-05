@@ -538,6 +538,11 @@ export function applyStallPenalty(reward: number, turns: number, penalty: number
 
 export class PokemonGymEnv {
 	private readonly _format: string;
+	/**
+	 * Packed team given to BOTH seats (M12 fixed roster). Undefined for
+	 * random-team formats, where the engine generates each side's team.
+	 */
+	private readonly _team: string | undefined;
 	private readonly _seed: PRNGSeed | undefined;
 	private readonly _obsMode: ObsMode;
 
@@ -572,10 +577,11 @@ export class PokemonGymEnv {
 	private _trackers = new ObservationTrackers();
 
 	constructor(options: {
-		seed?: PRNGSeed; format?: string; obsMode?: ObsMode; opponent?: OpponentKind;
-		stallPenalty?: number;
+		seed?: PRNGSeed, format?: string, obsMode?: ObsMode, opponent?: OpponentKind,
+		stallPenalty?: number, team?: string,
 	} = {}) {
 		this._format = options.format ?? 'gen1randombattle';
+		this._team = options.team;
 		this._seed = options.seed;
 		this._obsMode = options.obsMode ?? 'structured';
 		this._opponent = options.opponent ?? 'random';
@@ -634,8 +640,10 @@ export class PokemonGymEnv {
 		// Build seeds for the start message
 		const prng = new PRNG(this._seed ?? null);
 		const spec = { formatid: this._format, seed: prng.getSeed() };
-		const p1spec = { name: 'Gym', seed: prng.getSeed() };
-		const p2spec = { name: 'Opponent', seed: prng.getSeed() };
+		// M12: with a fixed roster both seats get the SAME packed team, so any
+		// win-rate difference is agent-only rather than team luck.
+		const p1spec = { name: 'Gym', seed: prng.getSeed(), ...(this._team ? { team: this._team } : {}) };
+		const p2spec = { name: 'Opponent', seed: prng.getSeed(), ...(this._team ? { team: this._team } : {}) };
 
 		const initMessage =
 			`>start ${JSON.stringify(spec)}\n` +

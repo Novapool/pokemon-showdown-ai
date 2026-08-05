@@ -30,6 +30,7 @@ import {
 	ObservationTrackers, actionToChoice, parseProgressLines, validActionsForRequest,
 } from './pokemon-gym';
 import type { GymSnapshot, ObsMode, TrackerSnapshot } from './pokemon-gym';
+import { rosterForFormat } from './roster';
 import {
 	extractFeatures, extractFeaturesStructured, N_TOKENS, TOKEN_DIM, TOKEN_DIM_V2, TOKEN_DIM_V3,
 	TOKEN_DIM_V3_EXT,
@@ -88,6 +89,19 @@ export interface SimOptions {
 	 * omitted → nondeterministic fresh seed.
 	 */
 	seed?: number;
+	/**
+	 * A packed team known to be run by **both sides** (M12 fixed roster).
+	 * Determinization then fills the opponent's unrevealed slots from it
+	 * instead of sampling — under a mirror roster the bench is not hidden
+	 * information at all.
+	 *
+	 * `fromSnapshot` (gym / bot eval — both seats provably share the roster)
+	 * resolves this from the battle's format when omitted. `fromTracked`
+	 * (ladder) does **not**: a human opponent brings their own team, so
+	 * roster-filling their bench would be actively wrong there. Pass `null` to
+	 * force generator sampling anywhere.
+	 */
+	roster?: string | null;
 }
 
 /** Deterministic gen5-style PRNG seed from an arbitrary integer. */
@@ -112,6 +126,8 @@ export class BattleSim {
 	private _winner: string | undefined;
 	/** Last actionable (non-wait) request per seat — obs source at wait/terminal points. */
 	private _lastActionable: { p1: ChoiceRequest | null, p2: ChoiceRequest | null } = { p1: null, p2: null };
+	/** Known team both sides run (M12), or undefined for random-team formats. */
+	private _fixedRoster: PokemonSet[] | undefined;
 
 	private constructor(battle: Battle, trackers: ObservationTrackers, obsMode: ObsMode, turnCount: number) {
 		this._battle = battle;
@@ -136,6 +152,9 @@ export class BattleSim {
 		);
 		const seed = options.seed !== undefined ? seedFromInt(options.seed) : PRNG.generateSeed();
 		battle.prng = new PRNG(seed);
+		// Both seats of a gym/eval battle run the same team, so a fixed-roster
+		// format's bench is known rather than sampled.
+		sim._fixedRoster = rosterForFormat(battle.format.id, options.roster);
 		if (options.determinize) {
 			const hiddenSide = (options.perspective ?? 'p1') === 'p1' ? 'p2' : 'p1';
 			sim._determinize(
@@ -324,6 +343,9 @@ export class BattleSim {
 		const sim = BattleSim.fromSnapshot(snap);
 		// fromSnapshot reseeded the RNG; restore the parent's stream instead.
 		sim._battle.prng = new PRNG(this._battle.prng.getSeed());
+		// Carry the parent's roster resolution rather than re-deriving it, so a
+		// child of an explicitly `roster: null` sim doesn't silently regain one.
+		sim._fixedRoster = this._fixedRoster;
 		return sim;
 	}
 
@@ -503,10 +525,22 @@ export class BattleSim {
 	}
 
 	/**
-	 * Replace `hiddenSide`'s unrevealed Pokémon with sets sampled from the
-	 * format's random-team generator. Unrevealed mons have never been on the
-	 * field (gen1 has no entry hazards), so they carry no battle state —
-	 * swapping the Pokemon object wholesale is safe. Revealed mons are untouched.
+	 * Replace `hiddenSide`'s unrevealed Pokémon with plausible sets. Unrevealed
+	 * mons have never been on the field (gen1 has no entry hazards), so they
+	 * carry no battle state — swapping the Pokemon object wholesale is safe.
+	 * Revealed mons are untouched.
+	 *
+	 * Two sampling sources, in order:
+	 *
+	 * 1. **The fixed roster (M12).** When both sides run one known team, the
+	 *    opponent's bench is not hidden information at all — it is the roster
+	 *    minus whatever is already revealed. Filling from it makes search
+	 *    strictly more accurate, and there is nothing to sample.
+	 * 2. **The format's random-team generator**, for randbats-style formats.
+	 *
+	 * Without (1), `gen1ou` would silently fall through to the gen1 *random*
+	 * generator — which does not throw, it just hands search a bench of
+	 * arbitrary Gen 1 Pokémon that the opponent cannot possibly have.
 	 */
 	private _determinize(hiddenSide: 'p1' | 'p2', samplePrng: PRNG): void {
 		const side = this._battle.sides[hiddenSide === 'p1' ? 0 : 1];
@@ -523,23 +557,41 @@ export class BattleSim {
 			if (!targets.includes(i)) keepSpecies.add(toID(pokemon.species.name));
 		}
 
-		// Sample replacement sets from the format's own generator.
 		const formatid = this._battle.format.id;
 		const sampled: PokemonSet[] = [];
 		const sampledSpecies = new Set<string>();
-		let guard = 20;
-		while (sampled.length < targets.length && guard-- > 0) {
-			const team = Teams.getGenerator(formatid, samplePrng).getTeam();
-			for (const set of team) {
+
+		if (this._fixedRoster) {
+			// (1) Known bench: take the roster members not already on the field.
+			for (const set of this._fixedRoster) {
 				if (sampled.length >= targets.length) break;
 				const speciesId = toID(set.species);
 				if (keepSpecies.has(speciesId) || sampledSpecies.has(speciesId)) continue;
-				sampled.push(set);
+				sampled.push(JSON.parse(JSON.stringify(set)) as PokemonSet);
 				sampledSpecies.add(speciesId);
 			}
-		}
-		if (sampled.length < targets.length) {
-			throw new Error(`BattleSim determinizer: could not sample ${targets.length} replacement sets`);
+			if (sampled.length < targets.length) {
+				throw new Error(
+					`BattleSim determinizer: fixed roster has only ${sampled.length} unrevealed ` +
+					`members for ${targets.length} hidden slots (roster/battle mismatch?)`
+				);
+			}
+		} else {
+			// (2) Sample replacement sets from the format's own generator.
+			let guard = 20;
+			while (sampled.length < targets.length && guard-- > 0) {
+				const team = Teams.getGenerator(formatid, samplePrng).getTeam();
+				for (const set of team) {
+					if (sampled.length >= targets.length) break;
+					const speciesId = toID(set.species);
+					if (keepSpecies.has(speciesId) || sampledSpecies.has(speciesId)) continue;
+					sampled.push(set);
+					sampledSpecies.add(speciesId);
+				}
+			}
+			if (sampled.length < targets.length) {
+				throw new Error(`BattleSim determinizer: could not sample ${targets.length} replacement sets`);
+			}
 		}
 
 		for (const [k, idx] of targets.entries()) {

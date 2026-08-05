@@ -593,6 +593,38 @@ primary corpus. See `docs/DATA-INVENTORY.md` for the full audit.
 
 ### M12 Phases (sequential, contingency gates between them)
 
+**Phase 0 (Team and roster selection): ✅ DONE 2026-08-05**
+
+Roster locked and pre-registered: **Tauros / Chansey / Snorlax / Exeggutor /
+Starmie / Alakazam**, each slot on its modal human move set. Rank-#1 most-used
+exact team across 16,743 revealed teams from 10,101 local replays rated ≥1300
+(6.50%, vs the Rhydon variant's 6.10%). Packed team:
+`config/rosters/gen1ou-standard.txt`. Full rationale, the usage table, the
+tiebreak and two caveats: `docs/BATTLE-FORMATS.md` → THE FIXED ROSTER.
+Reproducible via `scripts/mine_gen1ou_teams.py` / `mine_gen1ou_movesets.py`.
+Design options 2 and 3 below (multi-roster averaging, permutations) were
+**withdrawn** with the bounded finish — one roster, one result.
+
+**Phase 1 (Plumbing): ✅ DONE 2026-08-05**
+
+`sim/tools/roster.ts` is the single source of truth; `--format gen1ou` threads
+the same packed team to both seats through the gym, evaluator, bridge, Python
+clients, trainer and ladder bot (`/utm`). `./build` passes, 126/126 project tool
+tests pass (14 new). **Found and fixed a real bug:** `Teams.getGenerator` does
+not throw for `gen1ou` — it silently falls back to the gen1 *random* generator,
+so MCTS would have searched against a bench the opponent cannot have. The
+determinizer now fills from the roster; the ladder path still samples on purpose.
+**BC needed no changes** (the v3 observation has no species or stats, so the
+roster is invisible to the encoder). Measured: **no seat bias** (p1 49.2%, n=600,
+CI [45.2, 53.2]) and **~6% draws / ~111-turn games** — Phase 4 must report draws.
+
+**BC corpus pre-registered:** the mixed `gen1randombattle,gen1ou` default (M7's
+recipe). Chosen for continuity, not from a result — see `IN-PROGRESS.md` → Next
+Steps item 2 for why M9 Phase 2a/2c does not cleanly transfer to a gen1ou target.
+
+<details>
+<summary>Original Phase 0 + Phase 1 plans (superseded by the records above)</summary>
+
 **Phase 0 (Team and roster selection): ~1–2 days**
 
 - **Goal:** Pick a fixed 6-Pokémon Gen 1 OU roster to use for all training and
@@ -628,13 +660,20 @@ primary corpus. See `docs/DATA-INVENTORY.md` for the full audit.
   - **Recommendation:** Start with gen1ou+tournament (proven mixed corpus) to
     avoid confounding format + corpus changes. Can re-visit post-pivot if results
     warrant.
+    > ⚠️ **Superseded and the wording was wrong.** Tournament (`smogtours-`)
+    > games are already *inside* the gen1ou corpus (74% of it), so
+    > "gen1ou+tournament" described gen1ou-**only**. The actual pre-registered
+    > choice is the mixed `gen1randombattle,gen1ou` default — see the Phase 1
+    > record above.
 - **Effort:** ~1 day (plumbing + tests).
 - **Acceptance:** `./build` passes; gym/evaluator/ladder-bot run 10 battles each with
   fixed roster; BC starts on the chosen corpus.
 
+</details>
+
 ---
 
-**Phase 2 (BC Retraining on Gen 1 OU): ~2–3 hours (home box)**
+**Phase 2 (BC Retraining on Gen 1 OU): ~2–3 hours (home box)** ⏳ NEXT — blocked on home box SSH
 
 - **Goal:** Train a fresh BC checkpoint on the gen1ou corpus with the fixed roster.
 - **Design:**

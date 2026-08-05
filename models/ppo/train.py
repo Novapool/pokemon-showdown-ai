@@ -83,6 +83,20 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--format",
+        default=None,
+        help=(
+            "M12: battle format (default gen1randombattle). 'gen1ou' also "
+            "loads the pre-registered fixed roster and gives the SAME team to "
+            "both seats, removing team luck. See docs/BATTLE-FORMATS.md."
+        ),
+    )
+    parser.add_argument(
+        "--roster",
+        default=None,
+        help="packed-team file for both seats; overrides what --format gen1ou implies.",
+    )
+    parser.add_argument(
         "--obs-v3",
         action="store_true",
         help=(
@@ -349,7 +363,8 @@ def main() -> None:
     # The opponent family is set per reset by _switch_family() below, so the
     # constructor doesn't need spawn-time opponent flags.
     env = VecGymClient(num_envs, structured=args.structured, obs_v2=args.obs_v2,
-                       obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended)
+                       obs_v3=args.obs_v3, obs_v3_extended=args.obs_v3_extended,
+                       battle_format=args.format, roster=args.roster)
 
     def _flatten(o):
         # The MLP consumes flat vectors: (N, 12, D) -> (N, 12*D) in structured
