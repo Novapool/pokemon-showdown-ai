@@ -622,6 +622,38 @@ CI [45.2, 53.2]) and **~6% draws / ~111-turn games** — Phase 4 must report dra
 recipe). Chosen for continuity, not from a result — see `IN-PROGRESS.md` → Next
 Steps item 2 for why M9 Phase 2a/2c does not cleanly transfer to a gen1ou target.
 
+**Phase 2 (BC retraining): ✅ DONE 2026-08-06**
+
+Home box SSH restored (WSL). `data/replay_trajs/v3` regenerated there first — it
+is tier-2 local-only data and was absent; `replay_adapter_cli.js --obs-v3` on
+both formats reproduced the documented coverage exactly (**gen1ou 86.4%**,
+**randbats 90.7%**; 98,961/98,985 + 21,520 battles, 9.74M decisions).
+
+Command, verbatim — the M7 Job 4.1 recipe with only `--out` changed:
+```
+.venv/bin/python models/bc_pretrain_mlp.py --epochs 5 --obs-v3 --out bc_mlp_m12.pt
+```
+5/5 epochs, 25,397,540 samples, 973s. Checkpoint `models/checkpoints/bc_mlp_m12.pt`.
+
+| format | policy acc | opp-head acc | value-sign acc | val samples |
+|---|---|---|---|---|
+| gen1randombattle | **53.1%** | 34.5% | 62.3% | 121,876 |
+| gen1ou | **55.1%** | 35.6% | 67.2% | 36,434 |
+
+**This is a replication, not an improvement.** Against M7 Job 4.1 (52.7% /
+54.0%) the deltas are +0.4pp and +1.1pp — single arm, no CI, nothing controlled.
+The supported claim is that the pipeline reproduces after a corpus regeneration
+on a different machine. **Do not quote these deltas as evidence of anything.**
+
+**Caveat on comparability:** shards are now battle-sized (50 gen1ou / 11
+randbats vs the archive's 99 / 21), so `--val-shards 1` holds out ~2× the
+validation data the archived run used. The accuracy figures rest on more data
+but are not comparable to the archive at fine precision.
+
+**No roster filtering was applied, and none is possible.** Phase 1 established
+that the v3 observation carries no species or stats, so the fixed roster is
+invisible to the encoder and there is no feature to filter the corpus on.
+
 <details>
 <summary>Original Phase 0 + Phase 1 plans (superseded by the records above)</summary>
 

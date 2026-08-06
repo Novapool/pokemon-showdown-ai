@@ -167,7 +167,8 @@ schema carries **no species and no stats**, so a fixed roster is literally
 invisible to the encoder and human replays with arbitrary teams encode the same
 way. Convenient here; also a reminder of what M11 would have fixed.
 
-**Next: Phase 2 (BC retrain), blocked on home box SSH.**
+**Next: Phase 3 (PPO warm start). Phase 2 ✅ DONE 2026-08-06 — see Recently
+Completed. Home box SSH is restored.**
 
 **Closed, not deferred:** observation enrichment (v4 schema) and M10. The
 earlier note here said v4 was "deferred post-pivot" for re-derivation on OU —
@@ -231,6 +232,24 @@ it. Keep for whenever v4 is re-derived for the fixed-team format.
 ---
 
 ## Recently Completed
+
+- **M12 Phase 2 — BC retrain (✅ 2026-08-06, home box).** M7 recipe verbatim,
+  `bc_pretrain_mlp.py --epochs 5 --obs-v3 --out bc_mlp_m12.pt`. 5/5 epochs,
+  25,397,540 samples, 973s. Checkpoint: `models/checkpoints/bc_mlp_m12.pt`
+  (home box only — sweep checkpoints never git).
+
+  | format | policy acc | opp-head acc | value-sign acc | val samples |
+  |---|---|---|---|---|
+  | gen1randombattle | 53.1% | 34.5% | 62.3% | 121,876 |
+  | gen1ou | 55.1% | 35.6% | 67.2% | 36,434 |
+
+  **Read this as a replication, not an improvement.** vs M7 Job 4.1 (52.7% /
+  54.0%) this is +0.4pp and +1.1pp — uncontrolled, no CI, single arm. The claim
+  it supports is "the pipeline reproduces," nothing about play strength.
+  **Not comparable to the archive at fine precision:** `data/replay_trajs/v3`
+  was regenerated on the home box (it never syncs), and shards are now
+  battle-sized, so `--val-shards 1` holds out ~2× the gen1ou validation data the
+  archived run used. Coverage reproduced exactly: gen1ou 86.4%, randbats 90.7%.
 
 - **Ladder log deep-dive + analysis tooling (2026-08-03).** Three findings from
   the 360-game `m7-greedy` run beyond the headline win rate:
@@ -378,10 +397,12 @@ Phase 1  plumbing & corpus decision    ✅ DONE 2026-08-05
          BC corpus pre-registered: mixed (M7 recipe)
          126/126 tool tests pass; determinizer bug fixed
          │
-Phase 2  BC retraining (home box)       ⏳ NEXT — BLOCKED (home box SSH)
-         gen1ou corpus, fixed roster, report accuracy
+Phase 2  BC retraining (home box)       ✅ DONE 2026-08-06
+         mixed corpus (pre-registered), M7 recipe verbatim
+         bc_mlp_m12.pt — 53.1% randbats / 55.1% gen1ou
+         a replication of M7 Job 4.1, not an improvement
          │
-Phase 3  PPO training (home box)        ⏳ BLOCKED (home box SSH)
+Phase 3  PPO training (home box)        ⏳ NEXT
          5M steps, M7 recipe, warm-start from Phase 2 BC
          │
 Phase 4  bot-eval gate (~3–4h)          ⏳ BLOCKED (needs Phase 3)

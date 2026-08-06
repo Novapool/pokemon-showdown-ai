@@ -106,3 +106,6 @@ showdown_login_*.txt
 
 # Analysis outputs from scripts/mine_gen1ou_*.py (regenerable)
 results/gen1ou_*.json
+
+# Local Claude Code harness config — per-machine, not project code
+.claude/
