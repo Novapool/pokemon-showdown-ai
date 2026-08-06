@@ -36,11 +36,17 @@ from vec_gym_client import VecGymClient  # noqa: E402
 
 class BattleResult(NamedTuple):
     """Result of a _run_battles* call. opp_correct/opp_total are 0 for the
-    h2h/mcts variants, which don't track opp-head prediction accuracy."""
+    h2h/mcts variants, which don't track opp-head prediction accuracy.
+
+    M12: `draws` counts finished battles with no winner. Gen 1 OU on a mirror
+    roster draws ~6% of the time (Phase 1, n=600), and a draw is neither a win
+    nor a loss — so wins/total is a share of ALL games and win rate + loss rate
+    do NOT sum to 1. Report draws alongside any fixed-roster win rate."""
     wins: int
     total: int
     opp_correct: int = 0
     opp_total: int = 0
+    draws: int = 0
 
 
 def _opp_head_argmax(agent, obs_batch: np.ndarray) -> np.ndarray:
@@ -128,6 +134,7 @@ def _run_battles_vec(
 
     completed = [0] * num_envs
     wins = 0
+    draws = 0
     done_total = 0
     opp_correct = 0
     opp_total = 0
@@ -163,18 +170,24 @@ def _run_battles_vec(
                 if dones[i] and completed[i] < quotas[i]:
                     completed[i] += 1
                     done_total += 1
-                    if infos[i].get("winner") == "Gym":
+                    winner = infos[i].get("winner")
+                    if winner == "Gym":
                         wins += 1
+                    elif not winner:
+                        # No winner => draw. battle-sim maps Showdown's empty
+                        # `battle.winner` to undefined, so this is distinct from
+                        # "Opponent". Without this branch draws land in losses.
+                        draws += 1
                     if done_total % log_every == 0 or done_total == n_battles:
                         print(
                             f"Battle {done_total}/{n_battles} | running win rate: "
-                            f"{wins / done_total:.2f} ({wins}/{done_total})",
+                            f"{wins / done_total:.2f} ({wins}/{done_total}) | draws: {draws}",
                             flush=True,
                         )
     finally:
         env.close()
 
-    return BattleResult(wins, n_battles, opp_correct, opp_total)
+    return BattleResult(wins, n_battles, opp_correct, opp_total, draws)
 
 
 def _run_battles_h2h(
@@ -687,7 +700,8 @@ def main():
             obs_v3_extended=args.obs_v3_extended, track_opp=track_opp,
             battle_format=args.format, roster=args.roster,
         )
-    wins, total, opp_correct, opp_total = result
+    wins, total = result.wins, result.total
+    opp_correct, opp_total, draws = result.opp_correct, result.opp_total, result.draws
     win_rate = wins / total if total > 0 else 0.0
 
     if not args.vs_checkpoint:
@@ -699,6 +713,11 @@ def main():
           f"{' | FIXED ROSTER (both sides)' if (args.roster or args.format == 'gen1ou') else ''}")
     print(f"Battles: {total}")
     print(f"Win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
+    # M12: draws are neither wins nor losses, so the three rates sum to 1 and the
+    # win rate is a share of ALL games. Gen 1 OU on a mirror roster draws ~6%.
+    losses = total - wins - draws
+    print(f"Draws: {draws / total:.3f} ({draws}/{total}) | "
+          f"Losses: {losses / total:.3f} ({losses}/{total})")
     if track_opp:
         if opp_total > 0:
             print(
