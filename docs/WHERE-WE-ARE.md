@@ -8,7 +8,7 @@ and `docs/MILESTONES-ARCHIVE.md` has M0–M9 in full.
 **Keep this current.** Update it whenever a milestone or experiment closes, and
 prune anything that stops being true. It should stay roughly one screen.
 
-Last updated: **2026-08-05**
+Last updated: **2026-08-06**
 
 ---
 
@@ -17,10 +17,17 @@ Last updated: **2026-08-05**
 **Decided 2026-08-05.** This is a deliberate, bounded wind-down — ending on an
 answer rather than fading out mid-blocker.
 
-**One milestone left: M12 (fixed-team Gen 1 OU), Phases 0–4.** Phase 4 is a
-pre-registered bot-eval gate. When it reports its number the project is
-**done and archived — pass or fail.** No diagnosis pass, no second roster, no
-"one more idea." Phase 5 (gen1ou ladder) is optional.
+**Phases 0–4 are all DONE as of 2026-08-06, and the terminal gate PASSED.**
+On the fixed roster the agent wins **95.9% vs Random** [95.3, 96.4] and
+**92.2% vs DamageFirst** [91.4, 92.9], n=5,000 each, raw sampled policy, no
+search. The gate was ≥10% on both. **Read it as "no catastrophic regression from
+the format pivot" — which is exactly what it was designed to test — and not as a
+strength result.** It is a mirror-roster format against bots that cannot exploit
+a strong team; it is not comparable to M7's 69.7% on randbats.
+
+**Phase 5 (the optional gen1ou ladder) is running now** — 356 games, ~24 h, in
+tmux `m12ladder` on the home box. When it lands, the project is done and gets
+archived. No diagnosis pass, no second roster, no "one more idea."
 
 **Closed without execution:** M10 (tactical error diagnosis, ~8 days — a
 diagnosis with nothing downstream to act on) and M11 Phase 1 (observation schema
@@ -169,17 +176,17 @@ actually support the claim. That was not true of this project before M9.
 
 **M12 only, Phases 0–4.** Fixed 6-Pokémon roster, Gen 1 OU:
 
-| Phase | What | Where |
+| Phase | What | Status |
 |---|---|---|
-| **0** | ✅ **DONE** — roster locked, pre-registered in `docs/BATTLE-FORMATS.md` | Mac |
-| 1 | Fixed-team plumbing: gym, evaluator, ladder-bot, BC preprocessing | Mac — **next** |
-| 2 | BC retrain on gen1ou, ~2–3 h | home box |
-| 3 | PPO 5M steps, M7 recipe, single arm, ~2–3 h | home box |
-| **4** | **Bot-eval gate, n=5,000/opponent, ≥10% vs Random and DamageFirst** | 🏁 **terminal** |
-| 5 | gen1ou ladder, n=360 | ⚪ optional, only if Phase 4 clears well |
+| **0** | Roster locked, pre-registered in `docs/BATTLE-FORMATS.md` | ✅ 2026-08-05 |
+| **1** | Fixed-team plumbing: gym, evaluator, ladder-bot, MCTS determinizer | ✅ 2026-08-05 |
+| **2** | BC retrain, mixed corpus, M7 recipe | ✅ 2026-08-06 — 53.1% / 55.1% |
+| **3** | PPO 5M steps, M7 recipe, single arm | ✅ 2026-08-06 — stable, no collapse |
+| **4** | Bot-eval gate, n=5,000/opponent, ≥10% both | ✅ 🏁 **PASSED** — 95.9% / 92.2% |
+| 5 | gen1ou ladder, n=356 | ⏳ running (~24 h, tmux `m12ladder`) |
 
-Phases 2–4 are blocked on home box SSH (WSL2 portproxy — diagnosis in
-IN-PROGRESS.md → Blockers). The user restores it when back home.
+Home box SSH was restored 2026-08-06 (WSL). `data/replay_trajs` had to be
+regenerated there first — it is tier-2 local-only data and never syncs.
 
 **The roster (locked 2026-08-05):** Tauros / Chansey / Snorlax / Exeggutor /
 Starmie / Alakazam — the rank-#1 most-used exact team in 10,101 local replays

@@ -233,6 +233,37 @@ it. Keep for whenever v4 is re-derived for the fixed-team format.
 
 ## Recently Completed
 
+- **M12 Phases 3 + 4 — PPO and the terminal gate (✅ 2026-08-06, home box).**
+  Phase 3: 5M steps, M7 recipe, warm-started from `bc_mlp_m12.pt`.
+  `models/ppo/checkpoints/m12/ppo_step_5000005_final.pt`. Training-mix win rate
+  0.616 in the value-warmup window, plateau ~0.74 by 1M steps, flat for the
+  remaining 4M — stable, no collapse. **That is not a strength number:** half
+  the opponent mix is self-play, which converges toward 0.5 by construction.
+  **Deviation from M7 recorded:** `--selfplay-pool` left at its default (this
+  run's own checkpoints) rather than seeded with M2/M3.3-best, which are
+  randbats-trained and would be off-format in a fixed-roster gen1ou run.
+
+  Phase 4 — **the pre-registered terminal gate, PASSED.** Raw policy, sampled,
+  no search, n=5,000/opponent:
+
+  | opponent | win rate | 95% CI (Wilson) | draws | losses |
+  |---|---|---|---|---|
+  | RandomPlayerAI | **95.88%** (4794/5000) | [95.29, 96.40] | 0 | 206 |
+  | DamageFirstAI | **92.20%** (4610/5000) | [91.42, 92.91] | 0 | 390 |
+
+  **Do not compare this to M7's 69.7% / 59.4% on randbats.** Different format,
+  mirror roster, and the mirror removes the team-luck variance that dominated
+  randbats — a strong team played by RandomPlayerAI is a far easier opponent.
+  The gate tested "no catastrophic regression from the pivot," and that is all
+  it establishes. ⚠️ **The 0-draw figure is unconfirmed.** Draw counting was
+  added to `evaluate.py` this same session and never observed to increment; the
+  branch is reachable and does not crash, but it has no positive test. The gate
+  does not depend on it — `win_rate` divides by all battles either way.
+
+  Opp-head top-1 accuracy 0.259 vs Random, **0.891 vs DamageFirst** — the aux
+  head predicting a deterministic heuristic almost perfectly. A sanity check
+  that the head works, not a strength signal.
+
 - **M12 Phase 2 — BC retrain (✅ 2026-08-06, home box).** M7 recipe verbatim,
   `bc_pretrain_mlp.py --epochs 5 --obs-v3 --out bc_mlp_m12.pt`. 5/5 epochs,
   25,397,540 samples, 973s. Checkpoint: `models/checkpoints/bc_mlp_m12.pt`
@@ -402,14 +433,17 @@ Phase 2  BC retraining (home box)       ✅ DONE 2026-08-06
          bc_mlp_m12.pt — 53.1% randbats / 55.1% gen1ou
          a replication of M7 Job 4.1, not an improvement
          │
-Phase 3  PPO training (home box)        ⏳ NEXT
+Phase 3  PPO training (home box)        ✅ DONE 2026-08-06
          5M steps, M7 recipe, warm-start from Phase 2 BC
+         ppo_step_5000005_final.pt — curve stable, no collapse
          │
-Phase 4  bot-eval gate (~3–4h)          ⏳ BLOCKED (needs Phase 3)
-         n=5,000/opponent, gate ≥10% on both Random/DamageFirst
-         🏁 TERMINAL — project ends here, pass or fail
+Phase 4  bot-eval gate                  ✅ PASSED 2026-08-06 🏁
+         Random      95.88% (4794/5000) CI [95.29, 96.40]
+         DamageFirst 92.20% (4610/5000) CI [91.42, 92.91]
+         0 draws / 10,000 (see caveat below), gate was ≥10% both
          │
-Phase 5  ladder baseline (24–48h)       ⚪ OPTIONAL (only if Phase 4 clears well)
+Phase 5  gen1ou ladder (~24h)           ⏳ RUNNING (user-authorized 2026-08-06)
+         tmux m12ladder on home box, --run-id m12-ladder, n=356
 ```
 
 **Dropped as part of the bounded finish (2026-08-05):**

@@ -7,7 +7,7 @@ Python ML training code and models. Wraps the Node.js Pokemon Showdown gym via a
 | `gym_bridge.js` | Node.js stdio server wrapping `PokemonGymEnv`; spawned as subprocess by `gym_client.py` |
 | `gym_client.py` | Python `GymClient` class; spawns `gym_bridge.js` and exposes `reset()`, `step()`, `valid_actions()`, `close()` |
 | `vec_gym_client.py` | `VecGymClient(n_envs, structured)` — N parallel bridge subprocesses, pipelined batched `step()`, auto-reset (M3.1); used by both trainers and `evaluate.py` via `--num-envs` |
-| `evaluate.py` | CLI script to evaluate a trained checkpoint against `RandomPlayerAI` |
+| `evaluate.py` | CLI script to evaluate a trained checkpoint against `RandomPlayerAI`. **Reports draws separately as of 2026-08-06 (M12 Phase 4)** — before that a draw was silently counted as a loss. `win_rate` has always divided by all battles, so it is a share of ALL games and win + loss + draw rates sum to 1; a `>=X%` gate reads the same either way. ⚠️ The draw counter has **no positive test** — it returned 0 across the 10,000 Phase 4 games and has never been observed to increment. |
 | `q_learning/` | Tabular Q-learning agent (`q_agent.py`, `train.py`) |
 | `dqn/` | Deep Q-Network agent (`dqn_agent.py`, `replay_buffer.py`, `train.py`, `checkpoints/`) |
 | `ppo/` | PPO agent (`ppo_agent.py`, `trajectory_buffer.py`, `train.py`, `checkpoints/`) |

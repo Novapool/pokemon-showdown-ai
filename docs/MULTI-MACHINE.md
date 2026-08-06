@@ -158,16 +158,17 @@ Push from the Mac *before* running it, or the fast-forward has nothing to fetch:
 Both are handled inside the preflight, but they still bite every *other* remote
 command you send, so the `bash -lc` + `.venv/bin/python` habit is the rule.
 
-### Home box data state (updated 2026-07-31)
+### Home box data state (updated 2026-08-06)
 
 | Dir | Home box | Notes |
 |---|---|---|
-| `data/replays/gen1ou` | ✅ **98,983 logs, ~400 MB** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
-| `data/replays/gen1randombattle` | ✅ **21,583 logs** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
+| `data/replays/gen1ou` | ✅ **98,985 logs, 399 MB** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
+| `data/replays/gen1randombattle` | ✅ **21,581 logs, 88 MB** | **home box is AUTHORITATIVE** — extended there 2026-07-31 |
 | `data/value_targets/m8_v3_df` | ✅ 4.7 MB | collected there |
-| `data/replay_trajs` | ❌ absent | 1.7 GB — needed for BC pretrain |
+| `data/replay_trajs/v3` | ✅ **963 MB** | regenerated there 2026-08-06 for M12 Phase 2 |
 | `data/metamon_cache` | ❌ absent | |
 | `vendor/` | ❌ absent | |
+| `config/showdown_login.txt` | ✅ mode 600 | copied 2026-08-06 for the M12 ladder run; `config/` is gitignored, so credentials never sync — scp them per machine |
 
 ⚠️ **Both replay corpora are authoritative on the home box.** They were grown
 there by backfill runs on 2026-07-31 and the Mac copies are now behind. **Rsync
@@ -183,9 +184,19 @@ Consequences for job placement:
   self-play collection) run on the home box immediately.
 - **Replay scraping/backfill** should run there — that is where the corpora live
   now, and it is the machine that stays up.
-- **BC pretrain** still does not run there: it needs `data/replay_trajs`
-  (1.7 GB, absent). Either rsync it or regenerate with
-  `models/replay_adapter_cli.js` from the replays already present.
+- **BC pretrain now runs there** — `data/replay_trajs/v3` was regenerated on the
+  home box 2026-08-06 (both formats, ~25 min) rather than rsync'd, per the
+  never-rsync rule below. Coverage reproduced the documented figures exactly
+  (gen1ou 86.4%, randbats 90.7%), which is the check that the regeneration was
+  faithful. Rebuild it with:
+  ```bash
+  node models/replay_adapter_cli.js --format gen1ou --obs-v3 --out-dir data/replay_trajs/v3
+  node models/replay_adapter_cli.js --format gen1randombattle --obs-v3 --out-dir data/replay_trajs/v3
+  ```
+  ⚠️ Shards are **battle-sized** (50 gen1ou / 11 randbats at the default
+  `--shard-size 2000`), not the 99/21 the M7-era archive records. `--val-shards`
+  therefore holds out ~2× the data it used to, so held-out accuracies are not
+  comparable to pre-2026-08-06 numbers at fine precision.
 - `data/value_targets/*` dirs are ~5 MB each and rsync in seconds:
   `rsync -avz data/value_targets/ homebox:~/Projects/pokemon-showdown-ai/data/value_targets/`
 

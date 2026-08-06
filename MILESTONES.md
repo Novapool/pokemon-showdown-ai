@@ -654,6 +654,81 @@ but are not comparable to the archive at fine precision.
 that the v3 observation carries no species or stats, so the fixed roster is
 invisible to the encoder and there is no feature to filter the corpus on.
 
+**Phase 3 (PPO training): ✅ DONE 2026-08-06**
+
+```
+.venv/bin/python models/ppo/train.py --format gen1ou --obs-v3 --steps 5000000 \
+  --rollout-steps 512 --num-envs 8 \
+  --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" \
+  --pretrain-checkpoint models/checkpoints/bc_mlp_m12.pt \
+  --bc-anchor models/checkpoints/bc_mlp_m12.pt --bc-anchor-coef 0.05 \
+  --value-warmup-steps 200000 --opp-coef 0.1 \
+  --checkpoint-dir models/ppo/checkpoints/m12
+```
+
+Final: `ppo_step_5000005_final.pt` (hidden=128, 151,187 params, lr 3e-4, cuda).
+Training-mix win rate by half-million steps — **stable, no collapse**:
+
+```
+0.0M–0.5M  0.616   1.5M–2.0M  0.751   3.0M–3.5M  0.744   4.5M–5.0M  0.737
+0.5M–1.0M  0.731   2.0M–2.5M  0.729   3.5M–4.0M  0.739
+1.0M–1.5M  0.735   2.5M–3.0M  0.748   4.0M–4.5M  0.732
+```
+
+**Not a strength number** — half the opponent mix is self-play, which converges
+toward 0.5 by construction. The 4M steps of flat curve are consistent with this
+project's repeated finding that RL extracts little more from the v3 schema.
+
+**Deviation from M7, recorded:** `--selfplay-pool` was left at its default (this
+run's own checkpoints) instead of being seeded with M2/M3.3-best. Those are
+randbats-trained and would have sat in the p2 seat as off-format opponents for
+the whole run. The three things Phase 3 specified as "the M7 recipe" —
+opponent-mix, value warmup, KL-anchor — all match exactly.
+
+**Phase 4 (bot-eval gate): ✅ PASSED 2026-08-06 🏁 TERMINAL**
+
+Raw policy, **sampled** decoding, no search, fixed roster both sides,
+n=5,000/opponent as pre-registered.
+
+| opponent | win rate | 95% CI (Wilson) | draws | losses | gate ≥10% |
+|---|---|---|---|---|---|
+| RandomPlayerAI | **95.88%** (4794/5000) | [95.29, 96.40] | 0 | 206 | ✅ |
+| DamageFirstAI | **92.20%** (4610/5000) | [91.42, 92.91] | 0 | 390 | ✅ |
+
+Both lower bounds clear the bar by ~80pp. **What this establishes is that the
+format pivot did not cause a catastrophic regression — which is what the gate
+was explicitly designed to catch, and nothing more.** The comparison to M7's
+69.7% / 59.4% is invalid: different format, mirror roster, and the mirror
+removes the team-luck variance that dominated randbats. A strong team played by
+RandomPlayerAI is a much easier opponent than a random team played randomly.
+**Do not put these numbers in a table with M7's without this caveat.**
+
+⚠️ **The 0-draw result is unconfirmed.** `evaluate.py` had no draw handling at
+all — draws were silently counted as losses — so draw counting was added in the
+same session (commit `712cf5670`) and then never observed to increment across
+10,000 games. The branch is reachable and does not crash, but it has no positive
+test. Phase 1 measured ~6% draws on this roster in mirror self-play, where both
+sides stall competently; fast losses to bots are a plausible explanation for 0
+here, but it is not verified. The gate is unaffected — `win_rate` divides by all
+battles regardless.
+
+Opp-head top-1 accuracy: 0.259 vs Random, **0.891 vs DamageFirst** (predicting a
+deterministic heuristic). A sanity check on the aux head, not a strength signal.
+
+**Phase 5 (gen1ou ladder): ⏳ RUNNING from 2026-08-06**
+
+Optional, and user-authorized explicitly. tmux `m12ladder` on the home box,
+account Novapool, `--run-id m12-ladder`, n=356 (~24 h) — the pre-registered
+floor giving ±4.8pp single-arm precision at p≈0.30. **Decision rule is greedy**
+(`ladder-bot.js` default since 2026-08-01), which differs from Phase 4's sampled
+eval; greedy on the ladder has never been tested in this project.
+
+**This produces a standalone number, not a comparison.** The 30.5% / 26.9%
+baselines are the **gen1randombattle** ladder — a different pool, a different
+rating distribution, and no concurrent control arm. Per `LADDER-MEASUREMENT.md`,
+non-concurrent ladder readings do not support comparison. Read: `.venv/bin/python
+scripts/ladder_analysis.py --run m12-ladder`.
+
 <details>
 <summary>Original Phase 0 + Phase 1 plans (superseded by the records above)</summary>
 
