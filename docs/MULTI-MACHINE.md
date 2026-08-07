@@ -147,16 +147,33 @@ Push from the Mac *before* running it, or the fast-forward has nothing to fetch:
 
 ### The two toolchain gotchas this exists to prevent
 
-- **`ssh homebox 'node ...'` gets node v18, not v22.** nvm initializes from
-  `~/.bashrc`, which a non-interactive SSH command does not read. `./build`
-  hard-exits with "We require Node.js version 22 or later"; the gym bridge and
-  `battle-sim` are subtler. **Always wrap remote commands in `bash -lc "..."`.**
+- **Remote commands get node v18, not v22 — and `bash -lc` does NOT fix it.**
+  ⚠️ **Corrected 2026-08-07; this doc previously claimed `bash -lc` was the
+  fix.** Measured: `ssh homebox 'bash -lc "node -v"'` returns **v18.19.1**. nvm
+  initializes from `~/.bashrc:119`, and `~/.bashrc` has Ubuntu's stock
+  non-interactive guard at the top (`case $- in *i*) ;; *) return;;`). `bash -lc`
+  is a **login but non-interactive** shell, so that guard fires and nvm never
+  loads. **Only interactive shells get node 22.** The preflight passes solely
+  because it sources nvm itself (`homebox-preflight.sh:41-44`) — and its own
+  failure message still repeats the bad advice.
+
+  **The reliable fix is the absolute path:**
+  `/home/laith/.nvm/versions/node/v22.20.0/bin/node`, or prepend
+  `/home/laith/.nvm/versions/node/v22.20.0/bin` to `PATH`. `./build` hard-exits
+  with "We require Node.js version 22 or later", but the failures that cost real
+  time are the quiet ones — node 18 has **no global `WebSocket`**, so
+  `ladder-bot.js` dies at `_connect` with `ReferenceError: WebSocket is not
+  defined` *after* logging in and printing a healthy banner.
 - **`python3` on the home box has no torch.** Use `.venv/bin/python`
   explicitly in every remote command — a bare `python3 models/ppo/train.py`
-  dies on `import torch`.
+  dies on `import torch`. **`ladder-bot.js` cannot take this advice**: it spawns
+  `infer_server.py` via a hardcoded `python3` (`ladder-bot.js:143`), so the venv
+  must be on `PATH` before node starts. Nothing in the bot's own flags can fix
+  it.
 
-Both are handled inside the preflight, but they still bite every *other* remote
-command you send, so the `bash -lc` + `.venv/bin/python` habit is the rule.
+**Both bite hardest under `tmux`**, which spawns a non-interactive shell and
+inherits neither. Launch long jobs through a wrapper script that exports `PATH`
+explicitly — `scripts/run-m12-ladder.sh` is the worked example.
 
 ### Home box data state (updated 2026-08-06)
 
@@ -209,8 +226,10 @@ nothing to keep in sync conversationally.
 Long jobs go in `tmux` on the home machine so they survive a closed laptop or a
 dropped connection:
 
-Note the shape of these: `bash -lc` (for nvm/node 22), the real repo path
-`~/Projects/pokemon-showdown-ai`, and `.venv/bin/python` — not `python3`.
+Note the shape of these: the real repo path `~/Projects/pokemon-showdown-ai`,
+and `.venv/bin/python` — not `python3`. ⚠️ **`bash -lc` gets you the repo's
+login environment but NOT node 22** (see the gotchas above); anything invoking
+node inside tmux needs the absolute nvm path or a `PATH`-exporting wrapper.
 
 ```bash
 # launch a long training run, detached
@@ -254,8 +273,10 @@ rsync -avz --progress homebox:~/Projects/pokemon-showdown-ai/data/value_targets/
   exists so "always `git pull` on both ends" is enforced rather than remembered
   — committed checkpoints mean a stale checkout is now a *wrong weights* bug,
   not just old code.
-- **Wrap every remote command in `bash -lc "..."`** (node 22 via nvm) and call
-  **`.venv/bin/python`**, never `python3`.
+- **Call `.venv/bin/python`, never `python3`**, and for anything that runs node,
+  use the **absolute nvm path** (`/home/laith/.nvm/versions/node/v22.20.0/bin/node`)
+  or export it onto `PATH`. `bash -lc` alone does **not** provide node 22 —
+  measured 2026-08-07, see the gotchas section.
 - Pass `--checkpoint-dir` explicitly on training runs. `train.py`'s routing
   checks `elif args.opp_coef != 0.0` before the obs-schema branches, so runs
   land in `checkpoints/opp/` unexpectedly (this is how the M8 Phase 1A

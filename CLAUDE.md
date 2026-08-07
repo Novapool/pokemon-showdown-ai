@@ -39,8 +39,12 @@ torch+CUDA, and rebuilds `dist/` if stale. Non-zero exit ⇒ do not launch the j
 ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && scripts/homebox-preflight.sh"'
 ```
 
-Every other remote command needs `bash -lc "..."` (node 22 lives in nvm; a plain
-`ssh` gets node 18) and `.venv/bin/python` (system `python3` has no torch).
+Every other remote command needs `.venv/bin/python` (system `python3` has no
+torch). ⚠️ **`bash -lc` does NOT get you node 22** — nvm loads from `~/.bashrc`,
+which returns early for non-interactive shells, so even a login shell gets node
+18 (measured 2026-08-07). Use the absolute path
+`/home/laith/.nvm/versions/node/v22.20.0/bin/node`, or a `PATH`-exporting
+wrapper like `scripts/run-m12-ladder.sh`.
 Details + machine inventory: `docs/MULTI-MACHINE.md`. **The home box is now
 authoritative for both replay corpora** (`data/replays/gen1ou`,
 `data/replays/gen1randombattle`) — rsync back before editing them on the Mac.
