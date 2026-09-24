@@ -185,7 +185,7 @@ class PPOAgent(nn.Module):
         logits = logits.masked_fill(~mask_t, -1e9)
 
         dist = Categorical(logits=logits)
-        actions = logits.argmax(dim=-1) if self.greedy else dist.sample()
+        actions = dist.sample()
         log_probs = dist.log_prob(actions)
 
         return (
