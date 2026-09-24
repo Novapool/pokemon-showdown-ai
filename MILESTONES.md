@@ -4,59 +4,50 @@ Goal: Build a genuinely intelligent Pokemon trainer AI.
 
 ---
 
-## 🏁 PROJECT STATUS: BOUNDED FINISH (decided 2026-08-05)
+## 🏁 PROJECT STATUS: ML RESEARCH CLOSED — REPRODUCIBILITY & OPS PHASE OPEN (2026-09-24)
 
-**The project is being wound down deliberately, on a fixed scope, with one
-milestone left.** This is a decision to end on an *answer* rather than let the
-work fade out mid-blocker. It is not a failure state — see "Why" below.
+**ML research is closed.** The bounded finish decided 2026-08-05 ran to
+completion: M12's terminal bot-eval gate passed on 2026-08-06, and M12 was
+closed on 2026-09-24 with its optional Phase 5 ladder result unrecovered (the
+home box is offline; no number is claimed). The agent is mediocre — 77.7% vs
+Random as a raw greedy policy on randbats, 19.3% of contested ladder games — and
+that is the recorded answer.
 
-**The only remaining work is M12 (fixed-team Gen 1 OU), Phases 0–4.** Phase 5
-(ladder) is optional and runs only if Phase 4 surprises upward. When Phase 4
-reports, the project is done and gets archived.
+**Reopened for one bounded, non-ML milestone: M13, experiment tracking + CI.**
+MLflow tracking in the training and eval entry points, the instrumentation debt
+(`--seed`, per-step metrics, run metadata), and a GitHub Actions eval-smoke gate.
+
+**🚫 Standing rule: do not add ML scope.** No new models, training arms,
+hypotheses, observation-schema work, or "one more idea". M13 may *re-evaluate
+existing checkpoints* and run training only as a logging smoke test; it may not
+train a candidate or test a hypothesis. If M13 surfaces something interesting
+about the agent, record it as a note — it is a reason to start a new project,
+not to reopen this one.
 
 | Milestone | Disposition |
 |---|---|
-| **M12 Phases 0–4** | ✅ **THE REMAINING WORK.** Roster → plumbing → BC → PPO → bot-eval gate |
-| M12 Phase 5 (gen1ou ladder) | ⚪ Optional. Only if Phase 4 clears its gate with room to spare |
-| M10 (battle log analysis) | ❌ **CLOSED, NOT PURSUED.** ~8 days for a diagnosis nothing downstream would act on |
-| M11 Phase 1 (obs schema v4) | ❌ **CLOSED, NOT PURSUED.** Was already deferred; the pivot ends before it |
-| M11 eval battery (h128/h512) | ⚪ Optional, off the critical path. Hours of compute once SSH is back; expected null; changes no decision |
-
-**Why now.** Eight milestones, seven directly-tested hypotheses back null or
-weak, every intervention sized at 1–5pp against a ~30pp gap. The agent wins
-77.7% vs an opponent playing random legal moves and **19.3% of contested ladder
-games** — mediocre across the board. The remaining ideas are real but small, and
-the honest ceiling on M12 is "less bad in a narrower format," not "competitive."
-Meanwhile the cost per result is rising: infrastructure (multi-machine sync, SSH,
-WSL portproxy) now consumes more of a session than the ML does.
-
-**What M12 is for.** Closure with a number. Fixed teams is the one idea that
-shrinks the *problem* instead of adding another knob, and it deserves to be
-tried rather than shelved as a hypothetical. Phase 4's bot-eval gate is a real
-pre-registered go/no-go, so it terminates cleanly either way.
+| **M13 (tracking + CI)** | ⏳ **OPEN** — the only live work |
+| M12 (fixed-team Gen 1 OU) | ✅ Closed 2026-09-24. Gate passed; Phase 5 unrecovered |
+| M11 Phase 1 (obs schema v4) | ❌ Closed, not pursued — the best untested idea, left on the table |
+| M11 eval battery (h128/h512) | ⚪ Checkpoints home-box only; eligible for M13 re-evaluation if it comes back, not required |
+| M10 (battle log analysis) | ❌ Closed, not pursued |
 
 **What the project actually produced.** The agent is mediocre; the experimental
 method is not. Pre-registered gates, recorded sample-size widenings, a
 dead-ends table, four self-issued corrections invalidating the project's own
 earlier numbers, and confounds caught in M4 and M8 by its own review. That is
-the durable output, and it is written down in `docs/EVALUATION-METHODOLOGY.md`.
+the durable output, written down in `docs/EVALUATION-METHODOLOGY.md`. M13 makes
+it mechanical: tracked runs and a CI gate instead of disciplined note-taking.
 
-**Current architecture** (after nine milestones of revision): human-replay BC →
-anchored PPO fine-tune on an MLP policy/value net with structured per-Pokémon
-token observations (v3 schema) → determinized MCTS at decision time. The
-transformer was tried and retired (M3.2); MCTS is the only intervention with a
-clearly positive result (M4, though see the correction below).
-
-**Where the project actually stands:** ~93% vs training bots; on the
-gen1randombattle ladder ~27% of games and **~19–23% of the games that get played
-out** (see correction 4). Closing that gap is the whole remaining problem. Six
-hypotheses have been directly tested and come back null or weak.
+**Current architecture:** human-replay BC → anchored PPO fine-tune on an MLP
+policy/value net with structured per-Pokémon token observations (v3 schema) →
+determinized MCTS at decision time. Transformer retired (M3.2).
 
 | File | Read when |
 |---|---|
 | `docs/WHERE-WE-ARE.md` | Session start — one screen, plain language |
 | **This file** | Planning the next milestone; checking what a past one concluded |
-| `docs/MILESTONES-ARCHIVE.md` | You need M0–M9 in full: original plans, build phasing, file manifests, complete results tables |
+| `docs/MILESTONES-ARCHIVE.md` | You need M0–M12 in full: original plans, build phasing, file manifests, complete results tables |
 | `docs/EVALUATION-METHODOLOGY.md` | Before running or gating on **any** evaluation |
 | `docs/CODE-REVIEW-FINDINGS.md` | Before trusting any pre-2026-08-01 comparison |
 
@@ -103,7 +94,7 @@ the archive too; the fourth landed 2026-08-03 from the ladder-log analysis.
 
 ---
 
-## Results Ledger (M0–M9, all complete)
+## Results Ledger (M0–M12, all closed)
 
 Condensed. Each entry: what was tested, what the numbers were, and what it
 closed. Full plans, build phasing, and complete tables live in
@@ -277,6 +268,43 @@ valid per-run gate.
   and backend (`mps` vs `cuda`) at once. A seed replication put run-to-run
   spread under 1pp, which is what makes the effect real rather than noise.
 
+### M10: Battle Log Analysis ❌ CLOSED, NOT PURSUED (2026-08-05)
+~8 days for a diagnosis nothing downstream would act on. Its one throwaway probe
+fired: **wasted-turn double switches 15.7% in losses vs 6.1% in wins (+9.6pp
+[+5.9, +12.5])**, climbing with game length. A lead, not a finding — no human
+baseline, and causation may run the other way. Full plan in the archive.
+
+### M11: Observation Enrichment ❌ PHASE 1 CLOSED, NOT PURSUED (2026-08-05)
+**Phase 0 shipped (2026-08-01):** `applyStallPenalty` now charges the duration
+cost equally to wins and losses (`--stall-penalty`, default 0.001). **Phase 1
+(schema v4 — move identity, species/stats, defensive type effectiveness,
+trapping) is the project's best untested idea and was left on the table
+deliberately;** under a fixed roster it must be re-derived, not ported. Two
+width arms (`m11_h128`, `m11_h512`) were trained 2026-08-02 on the home box and
+**never evaluated**. Full text in the archive.
+
+### M12: Fixed-Team Gen 1 OU Pivot ✅ GATE PASSED; Phase 5 unrecovered (closed 2026-09-24)
+Fixed roster Tauros / Chansey / Snorlax / Exeggutor / Starmie / Alakazam
+(rank-#1 exact team in 10,101 replays ≥1300; `config/rosters/gen1ou-standard.txt`),
+same team both seats. Plumbing found a real bug: `Teams.getGenerator('gen1ou')`
+silently falls back to the random generator, so MCTS would have searched against
+an impossible bench. BC (M7 recipe) reproduced 53.1% / 55.1% val acc; PPO 5M
+steps stable. **Terminal gate, raw sampled policy, n=5,000/opponent: 95.9% vs
+Random [95.3, 96.4], 92.2% vs DamageFirst [91.4, 92.9]** (gate ≥10%). Read as
+"no catastrophic regression from the pivot" — **not comparable to M7's 69.7% on
+randbats** (mirror roster removes team-luck variance). The 0-draw count is
+unconfirmed (draw branch never observed to fire). Seat bias measured for the
+first time: none (p1 49.2%, n=600).
+
+**Phase 5 (gen1ou ladder) — UNRECOVERED, no number claimed.** Launched on the
+home box 2026-08-06 (tmux `m12ladder`, `--run-id m12-ladder`, n=356, greedy).
+At close the home box was offline and no `m12-ladder` rows exist on the Mac, so
+whether it finished is unknown. If the home box comes back:
+`rsync` `data/replays/self_ladder/ladder_results.csv` → `python3
+scripts/ladder_analysis.py --run m12-ladder` (and `--min-decisions 16` for the
+contested figure), reported as a **standalone** number — it has no concurrent
+control and does not compare to any randbats ladder figure.
+
 ---
 
 ## What has been closed
@@ -289,11 +317,11 @@ data, format alignment (small but real), and sparring partners. Plus one
 architecture retired (transformer, M3.2) and one measurement regime rebuilt
 (M9).
 
-**Still live:** observation *poverty* of a specific kind — move identity,
+**Untested when research closed (not disproven — for a future project, not
+this one):** observation *poverty* of a specific kind — move identity,
 species/base stats, trapping, and **defensive** type effectiveness (v3 encodes
-only the attacking direction) — which is M11's thesis; model capacity, which
-M9 Phase 2d pointed at; tactical blunders, which M10 will actually look for;
-and team-luck variance in randbats, still untested.
+only the attacking direction) — which was M11's thesis; model capacity, which
+M9 Phase 2d pointed at; and tactical blunders, where M10's probe left a lead.
 
 ---
 
@@ -326,669 +354,39 @@ warmup 200k, BC KL-anchor 0.05, opponent-mix 0.5/0.3/0.2, `--opp-coef 0.1`.
 
 ## Live Milestones
 
-## M10: Battle Log Analysis — Tactical Error Diagnosis ❌ CLOSED — NOT PURSUED
-
-**Status:** ❌ **Closed 2026-08-05 without execution**, as part of the project
-bounded finish (see PROJECT STATUS at the top of this file). Planned 2026-08-01,
-sharpened 2026-08-03, never built beyond the throwaway probe below.
-
-**Why closed.** M10 costs ~8 days and produces a *diagnosis*, not a fix. In a
-wind-down there is nothing downstream to act on it: M11's v4 schema is closed,
-and M12 ends at its bot-eval gate. The one thing M10 would have justified —
-targeted observation work — is exactly what the bounded finish drops.
-
-**What survives.** The preliminary probe below is the project's only behavioral
-(as opposed to aggregate) evidence, and it fires cleanly. It stays on record as a
-lead for anyone who picks this up later. It is **not** a finding: it has no human
-baseline, and causation runs either way (losing positions may *force* defensive
-shuffling). Do not cite it as a demonstrated agent error.
-
-The plan text below is preserved as-is for that future reader; **none of the
-deliverables were built.**
-
----
-
-<details>
-<summary>Original M10 plan (unexecuted) — expand if picking this up later</summary>
-
-**Status when closed:** ⏳ Planned (2026-08-01), sharpened and re-prioritised
-2026-08-03.
-
-**Motivation & Context:** After nine milestones and six directly-tested hypotheses (richer obs, value targeting, more data, unrated tournaments, format alignment, sparring partners), all null or weak, we have high confidence in what does NOT work but zero insight into *what the agent actually does wrong* on the human ladder. The agent wins 93% vs bots but ~19% of contested ladder games — a 70+ point gap. Nobody has looked at the tactical decisions themselves, only aggregate win rates.
-
-**Sharpened 2026-08-03 by the 360-game greedy run.** Three findings from that
-analysis bear directly on this milestone's design:
-
-1. **There is now a target signal to explain.** Win rate decays monotonically
-   with game length across the 326 contested games: 31.2% at 16–20 decisions,
-   24.1% at 21–25, 18.8% at 26–30, **14.6% at 31–40**. Whatever the agent does
-   wrong, it compounds with turn count. **Every metric below must be reported
-   stratified by game length**, not just wins vs losses — a blunder rate that is
-   flat in length does not explain this curve, and one that climbs does.
-2. **Stratify by opponent Elo too.** Win rate falls 34.4% → 15.3% from Elo
-   1000–1099 to 1200–1299 (r=−0.143, t=−2.72, n=360). Error rates that rise with
-   opponent strength mean the agent is being *punished* for a blunder it always
-   made; rates that are flat mean stronger opponents simply play better.
-3. **Exclude concessions from the loss/win comparison.** 34 of 97 wins in that
-   run ended under 16 decisions with the opponent quitting. Including them
-   contaminates the "wins" arm with games that were never played — precisely the
-   arm this milestone compares losses against. Use
-   `ladder_analysis.py --min-decisions 16` semantics.
-
-**Preliminary probe (2026-08-03, ~30 min, 864 logs) — the first tactical error
-metric already fires.** Definition: a *wasted-turn double switch* is a voluntary
-switch-in that we voluntarily switch back out on the very next turn, with no
-faint forcing either move — a free turn handed to the opponent, and the exact
-pattern observed live on 2026-08-02.
-
-| | double-switches / voluntary switches | rate | 95% CI |
-|---|---|---:|---|
-| our wins | 18 / 297 | 6.06% | [3.87, 9.38] |
-| our losses | 230 / 1468 | **15.67%** | [13.90, 17.62] |
-| difference | | **+9.61pp** | **[+5.85, +12.54]** ✅ excludes 0 |
-
-And it climbs with game length, tracking the win-rate decay: **3.7%** (≤20
-turns) → 13.9% (21–25) → 14.1% (26–30) → **17.1%** (31–40). Holding length
-fixed at 26–30 turns it is still 14.9% in losses vs 8.8% in wins.
-
-**This is a lead, not a finding.** Three caveats that Phase 2/3 must resolve:
-(a) **direction of causation is unresolved** — losing positions may force
-defensive shuffling, so this could be a symptom rather than a cause; (b) it
-pools the greedy and sampling eras across all 864 logs on disk, not the clean
-360-game run; (c) **it has no human baseline**, which is the only thing that
-converts "we do this 16% of the time" into "this is a mistake." **Phase 3 is
-therefore promoted from conditional to required** — the human comparison is
-what makes this metric mean anything. Probe script was throwaway; Phase 1 should
-reimplement it properly inside `models/battle_log_parser.py`.
-
-**Data confirmed usable (2026-08-03):** the logs are not just public protocol —
-they carry `|request|` lines with our exact stats, HP, PP and legal move set at
-every decision, plus the opponent's full revealed state. Ground truth for damage
-calculation and matchup evaluation is therefore already on disk; no re-simulation
-is needed to score most Tier 1 metrics. 885 logs available (the plan below says
-516; that count is stale).
-
-**Core Hypothesis:** The agent makes specific, categorical tactical errors (legal but strategically bad moves) at rates significantly higher in its losses than in its wins, or at rates higher than humans. These errors are detectable through automated analysis of the full battle logs and can guide targeted fixes or investment decisions.
-
-**Key Insight:** This is the first deep behavioral diagnostic. All prior work was aggregate-level (win rate), architecture-level (adding modules), or data-level (more games). This analysis looks at the game tree itself to ask: "What moves did the agent choose, and how often did it choose bad ones?"
-
----
-
-### Scope & Plan
-
-See `docs/BATTLE-LOG-ANALYSIS.md` for the comprehensive plan. Summary:
-
-**Phase 1: Data & Parser** (2 days)
-- Verify ladder battle logs on disk (**885** games, gzipped, full protocol
-  including `|request|` state — verified 2026-08-03)
-- Build `models/battle_log_parser.py` to extract game-state trees
-- Acceptance: 10 logs parse correctly
-
-**Phase 2: Metrics — Format-General Only** (3 days)
-- Implement Tier 1 error checkers — **format-general tactics only** (re-scoped
-  2026-08-03 for format pivot):
-  - **Included (survive format change):**
-    - Double-switch waste (voluntary switch back next turn, no faint)
-    - High-damage when priority move secures KO
-    - Attack into immunity (via type alone, not matchup)
-    - Failure to switch out of known weakness
-  - **Excluded (Gen1RandBats-specific, dropped):**
-    - Species-specific blunders (e.g., bringing Electric into Water)
-    - Matchup-specific errors (e.g., setup vs special walls)
-    - Team-roster synergy failures
-  - Rationale: Fixed-team Gen 1 OU completely changes the roster and
-    matchup space; species-specific metrics will not transfer. Format-general
-    tactics like "waste turns" or "miss priority KOs" transfer to any format.
-- Build `models/battle_log_analysis.py` to run format-general metrics only
-- Output: CSV with rates in agent-wins vs agent-losses, with 95% CIs (Wilson/Newcombe)
-- **Every metric additionally stratified by game length (16–20 / 21–25 / 26–30 /
-  31–40 / 41+) and opponent Elo band**, per the sharpening notes above. The
-  length stratification is the primary endpoint: it is the one pattern we
-  already know needs explaining.
-
-**Phase 3: Human Baseline** (2 days) — **REQUIRED, not conditional** (promoted
-2026-08-03: the double-switch probe shows a rate with no reference point, and
-without the human number every Tier 1 metric has the same problem)
-- Sync human replay corpus from home box (if not already synced)
-- Run same metrics on ~5k human games
-- Compare agent vs human error rates with CIs
-
-**Phase 4: Reporting & Interpretation** (1 day)
-- Write `results/battle_log_analysis_results_*.md`
-- Pre-registered interpretation: what each finding means and what action it triggers
-- Update `docs/WHERE-WE-ARE.md` with any findings
-- Update `IN-PROGRESS.md` with next steps
-
----
-
-### Pre-Registered Interpretation (before any result is computed)
-
-**Positive Finding:** A metric E shows error rate in losses >> wins (95% CI excludes 0) AND/OR agent >> human. 
-- Meaning: E is a measurable driver of losses.
-- Action: Document in `docs/TACTICAL-ERRORS.md`, assess fix difficulty, recommend intervention.
-- Expected value: Single-digit pp points per error; 2–3 concurrent errors could explain 1–5pp of the gap.
-
-**Null Finding:** Error rate same in losses vs wins (CI includes 0) or indistinguishable from human.
-- Meaning: E is not a driver of losses; narrows down what matters.
-- Action: Record that E was checked and found baseline. Do not pursue.
-- Expected value: This is valuable — it closes directions. The project's prior failure mode was chasing weak manipulations; null findings are findings.
-
-**Confounded Finding:** Sample too small, error doesn't occur, or metric untestable.
-- Meaning: Evidence inconclusive for this data.
-- Action: Flag for Phase 2 (larger sample or focused variant) or accept as out of scope.
-
----
-
-### Confidence & Risk Assessment
-
-**Success probability by outcome:**
-- ~40% no actionable errors found at Tier 1 → points to observation state / value function / team luck / format difference as the constraint (obs and value already tested in M8; luck and format are new hypotheses)
-- ~25% errors found but individually small (<1pp each) → multiple small errors might sum; documentation valuable
-- ~20% success: find 2–3 measurable errors explaining 1–5pp of the gap → enables targeted fix or informs bigger-picture decision
-- ~15% confounds or data issues → mitigated by stratification by opponent Elo
-
-**Why this matters:** If this analysis yields actionable errors, the project has a concrete next target (e.g., "fix observation of status state," "add reward shaping for rule violations"). If it yields nulls across the board, it's strong evidence the gap is not driven by tactical blunders, which narrows the focus to higher-level constraints (model capacity, team luck, observation richness, or the format itself).
-
----
-
-### Execution Plan
-
-**Parallelization:** Phase 1 & 2 can overlap (start writing checkers while parser finalizes).
-
-**Effort breakdown:**
-- Phase 1: 2 days
-- Phase 2: 3 days  
-- Phase 3: 2 days (required as of 2026-08-03; needs the home-box replay sync)
-- Phase 4: 1 day
-- **Total: ~8 days.** The "~5 days if agent-only metrics suffice" variant is
-  withdrawn — agent-only error rates have no reference point and cannot be
-  interpreted.
-
-**Go/no-go decisions:**
-- After Phase 1: If logs are too corrupted or incomplete, abort and document the data limitation.
-- After Phase 2: If no Tier 1 metrics fire (all null), decide whether to pursue Tier 2 (exploratory) before Phase 3.
-
-**Recommendation (updated 2026-08-03):** Execute **after M11 eval battery is
-evaluated (when home box becomes reachable) and before the pivot training**.
-This is a diagnostic that transfers across format: its findings on format-general
-blunders will apply to Gen 1 OU and will not be invalidated by the pivot.
-M10's format-general metrics can be re-run on Gen 1 OU later to track whether
-the agent's tactical profile improves post-pivot.
-
----
-
-### Deliverables Checklist
-
-- [ ] `docs/BATTLE-LOG-ANALYSIS.md` — plan document (complete)
-- [ ] `models/battle_log_parser.py` — parse gzipped logs → game trees
-- [ ] `models/battle_log_analysis.py` — apply Tier 1 rule checkers
-- [ ] `models/analyze_ladder_logs.py` — CLI driver for agent analysis
-- [ ] `models/analyze_human_replays.py` — CLI driver for human baseline (if Phase 3 runs)
-- [ ] `results/battle_log_metrics.csv` — per-metric summary (n, rate, CI)
-- [ ] `results/battle_log_analysis_results_*.md` — full report with interpretation
-- [ ] `docs/WHERE-WE-ARE.md` — updated with any findings + next-step recommendations
-- [ ] `IN-PROGRESS.md` — updated with results and blockers for M11+
-
----
-
-### Unblocks
-
-**If positive:** Concrete intervention targets; evidence that tactical fixes are high-ROI.
-
-**If null/inconclusive:** Strong evidence to deprioritize tactical optimization; redirects to capacity (M11 → bigger-brain investigation) or team luck (format re-evaluation).
-
-</details>
-
----
-
-## M12: Fixed-Team Gen 1 OU Pivot 🏁 THE FINAL MILESTONE
-
-**Status:** ⏳ Approved 2026-08-03. **Re-scoped 2026-08-05 as the project's last
-milestone** — Phases 0–4 only, Phase 5 optional. When Phase 4 reports, the
-project ends. See PROJECT STATUS at the top of this file.
-
-**Terminal condition (pre-registered 2026-08-05, before any Phase 0 work):**
-
-| Phase 4 outcome | What happens |
-|---|---|
-| Both gates pass (≥10% vs Random **and** DamageFirst) | Record the number. **Optionally** run Phase 5 for a gen1ou ladder read, then archive |
-| Either gate fails | Record it as the finding. **Do not diagnose, do not iterate, do not try a second roster.** Archive |
-
-The "try an alternative roster" mitigation under Risk 1 below is **withdrawn** —
-it was written when M12 was a platform for future work. Re-rolling the roster
-after seeing the gate result is exactly the sweep-picking this project banned in
-its own standing rules. One roster, pre-registered, one result.
-
-**Decision Context:** The project is **pivoting from gen1randombattle (random
-teams) to fixed-team Gen 1 OU**. This reduces team-luck variance and allows
-measuring whether the agent's observed weaknesses (vs. DamageFirst, team-
-composition-driven performance variance) are inherent to random teams or persist
-with a stable roster. Format move is orthogonal to observation enrichment (M11-
-deferred below); the two are bundled to avoid confounding a format change with
-observation changes. This is a deliberate choice recorded plainly: **fixed-team
-and Gen 1 OU changes are packaged together. The design cannot separate their
-effects.**
-
-**Bundles together:**
-1. Fixed roster (6 Pokémon, always the same lineup per battle format)
-2. Format switch (gen1ou instead of gen1randombattle)
-
-**Cannot be separated because:** Fixed-team plumbing (team selection, roster
-encoding, permutations in BC preprocessing) requires format decision. Format
-switch requires re-evaluation on a new ladder (slower per battle, smaller sample
-sizes). Both must land together for a clean experimental story.
-
-**Baseline reset:** Every bot-eval number and all ladder records are from
-randbats with random teams. Gen 1 OU evals will be measured from scratch against
-the same bots (Random, DamageFirst) on fixed Gen 1 OU teams. The 93.0% (Random)
-/ 84.2% (DamageFirst) v3 numbers do not transfer — they are randbats-specific.
-
-**Data note:** Gen 1 OU archive (~10.7k games at ≥1300 quality) is smaller than
-randbats (~21.6k games) and lower-quality on average (24% of gen1ou are ≥1300 vs
-100% of the scraped randbats). This is a trade-off: on-format data is more
-relevant but smaller. BC will re-train on gen1ou + tournament games as the
-primary corpus. See `docs/DATA-INVENTORY.md` for the full audit.
-
----
-
-### M12 Phases (sequential, contingency gates between them)
-
-**Phase 0 (Team and roster selection): ✅ DONE 2026-08-05**
-
-Roster locked and pre-registered: **Tauros / Chansey / Snorlax / Exeggutor /
-Starmie / Alakazam**, each slot on its modal human move set. Rank-#1 most-used
-exact team across 16,743 revealed teams from 10,101 local replays rated ≥1300
-(6.50%, vs the Rhydon variant's 6.10%). Packed team:
-`config/rosters/gen1ou-standard.txt`. Full rationale, the usage table, the
-tiebreak and two caveats: `docs/BATTLE-FORMATS.md` → THE FIXED ROSTER.
-Reproducible via `scripts/mine_gen1ou_teams.py` / `mine_gen1ou_movesets.py`.
-Design options 2 and 3 below (multi-roster averaging, permutations) were
-**withdrawn** with the bounded finish — one roster, one result.
-
-**Phase 1 (Plumbing): ✅ DONE 2026-08-05**
-
-`sim/tools/roster.ts` is the single source of truth; `--format gen1ou` threads
-the same packed team to both seats through the gym, evaluator, bridge, Python
-clients, trainer and ladder bot (`/utm`). `./build` passes, 126/126 project tool
-tests pass (14 new). **Found and fixed a real bug:** `Teams.getGenerator` does
-not throw for `gen1ou` — it silently falls back to the gen1 *random* generator,
-so MCTS would have searched against a bench the opponent cannot have. The
-determinizer now fills from the roster; the ladder path still samples on purpose.
-**BC needed no changes** (the v3 observation has no species or stats, so the
-roster is invisible to the encoder). Measured: **no seat bias** (p1 49.2%, n=600,
-CI [45.2, 53.2]) and **~6% draws / ~111-turn games** — Phase 4 must report draws.
-
-**BC corpus pre-registered:** the mixed `gen1randombattle,gen1ou` default (M7's
-recipe). Chosen for continuity, not from a result — see `IN-PROGRESS.md` → Next
-Steps item 2 for why M9 Phase 2a/2c does not cleanly transfer to a gen1ou target.
-
-**Phase 2 (BC retraining): ✅ DONE 2026-08-06**
-
-Home box SSH restored (WSL). `data/replay_trajs/v3` regenerated there first — it
-is tier-2 local-only data and was absent; `replay_adapter_cli.js --obs-v3` on
-both formats reproduced the documented coverage exactly (**gen1ou 86.4%**,
-**randbats 90.7%**; 98,961/98,985 + 21,520 battles, 9.74M decisions).
-
-Command, verbatim — the M7 Job 4.1 recipe with only `--out` changed:
-```
-.venv/bin/python models/bc_pretrain_mlp.py --epochs 5 --obs-v3 --out bc_mlp_m12.pt
-```
-5/5 epochs, 25,397,540 samples, 973s. Checkpoint `models/checkpoints/bc_mlp_m12.pt`.
-
-| format | policy acc | opp-head acc | value-sign acc | val samples |
-|---|---|---|---|---|
-| gen1randombattle | **53.1%** | 34.5% | 62.3% | 121,876 |
-| gen1ou | **55.1%** | 35.6% | 67.2% | 36,434 |
-
-**This is a replication, not an improvement.** Against M7 Job 4.1 (52.7% /
-54.0%) the deltas are +0.4pp and +1.1pp — single arm, no CI, nothing controlled.
-The supported claim is that the pipeline reproduces after a corpus regeneration
-on a different machine. **Do not quote these deltas as evidence of anything.**
-
-**Caveat on comparability:** shards are now battle-sized (50 gen1ou / 11
-randbats vs the archive's 99 / 21), so `--val-shards 1` holds out ~2× the
-validation data the archived run used. The accuracy figures rest on more data
-but are not comparable to the archive at fine precision.
-
-**No roster filtering was applied, and none is possible.** Phase 1 established
-that the v3 observation carries no species or stats, so the fixed roster is
-invisible to the encoder and there is no feature to filter the corpus on.
-
-**Phase 3 (PPO training): ✅ DONE 2026-08-06**
-
-```
-.venv/bin/python models/ppo/train.py --format gen1ou --obs-v3 --steps 5000000 \
-  --rollout-steps 512 --num-envs 8 \
-  --opponent-mix "selfplay=0.5,damagefirst=0.3,random=0.2" \
-  --pretrain-checkpoint models/checkpoints/bc_mlp_m12.pt \
-  --bc-anchor models/checkpoints/bc_mlp_m12.pt --bc-anchor-coef 0.05 \
-  --value-warmup-steps 200000 --opp-coef 0.1 \
-  --checkpoint-dir models/ppo/checkpoints/m12
-```
-
-Final: `ppo_step_5000005_final.pt` (hidden=128, 151,187 params, lr 3e-4, cuda).
-Training-mix win rate by half-million steps — **stable, no collapse**:
-
-```
-0.0M–0.5M  0.616   1.5M–2.0M  0.751   3.0M–3.5M  0.744   4.5M–5.0M  0.737
-0.5M–1.0M  0.731   2.0M–2.5M  0.729   3.5M–4.0M  0.739
-1.0M–1.5M  0.735   2.5M–3.0M  0.748   4.0M–4.5M  0.732
-```
-
-**Not a strength number** — half the opponent mix is self-play, which converges
-toward 0.5 by construction. The 4M steps of flat curve are consistent with this
-project's repeated finding that RL extracts little more from the v3 schema.
-
-**Deviation from M7, recorded:** `--selfplay-pool` was left at its default (this
-run's own checkpoints) instead of being seeded with M2/M3.3-best. Those are
-randbats-trained and would have sat in the p2 seat as off-format opponents for
-the whole run. The three things Phase 3 specified as "the M7 recipe" —
-opponent-mix, value warmup, KL-anchor — all match exactly.
-
-**Phase 4 (bot-eval gate): ✅ PASSED 2026-08-06 🏁 TERMINAL**
-
-Raw policy, **sampled** decoding, no search, fixed roster both sides,
-n=5,000/opponent as pre-registered.
-
-| opponent | win rate | 95% CI (Wilson) | draws | losses | gate ≥10% |
-|---|---|---|---|---|---|
-| RandomPlayerAI | **95.88%** (4794/5000) | [95.29, 96.40] | 0 | 206 | ✅ |
-| DamageFirstAI | **92.20%** (4610/5000) | [91.42, 92.91] | 0 | 390 | ✅ |
-
-Both lower bounds clear the bar by ~80pp. **What this establishes is that the
-format pivot did not cause a catastrophic regression — which is what the gate
-was explicitly designed to catch, and nothing more.** The comparison to M7's
-69.7% / 59.4% is invalid: different format, mirror roster, and the mirror
-removes the team-luck variance that dominated randbats. A strong team played by
-RandomPlayerAI is a much easier opponent than a random team played randomly.
-**Do not put these numbers in a table with M7's without this caveat.**
-
-⚠️ **The 0-draw result is unconfirmed.** `evaluate.py` had no draw handling at
-all — draws were silently counted as losses — so draw counting was added in the
-same session (commit `712cf5670`) and then never observed to increment across
-10,000 games. The branch is reachable and does not crash, but it has no positive
-test. Phase 1 measured ~6% draws on this roster in mirror self-play, where both
-sides stall competently; fast losses to bots are a plausible explanation for 0
-here, but it is not verified. The gate is unaffected — `win_rate` divides by all
-battles regardless.
-
-Opp-head top-1 accuracy: 0.259 vs Random, **0.891 vs DamageFirst** (predicting a
-deterministic heuristic). A sanity check on the aux head, not a strength signal.
-
-**Phase 5 (gen1ou ladder): ⏳ RUNNING from 2026-08-06**
-
-Optional, and user-authorized explicitly. tmux `m12ladder` on the home box,
-account Novapool, `--run-id m12-ladder`, n=356 (~24 h) — the pre-registered
-floor giving ±4.8pp single-arm precision at p≈0.30. **Decision rule is greedy**
-(`ladder-bot.js` default since 2026-08-01), which differs from Phase 4's sampled
-eval; greedy on the ladder has never been tested in this project.
-
-**This produces a standalone number, not a comparison.** The 30.5% / 26.9%
-baselines are the **gen1randombattle** ladder — a different pool, a different
-rating distribution, and no concurrent control arm. Per `LADDER-MEASUREMENT.md`,
-non-concurrent ladder readings do not support comparison. Read: `.venv/bin/python
-scripts/ladder_analysis.py --run m12-ladder`.
-
-<details>
-<summary>Original Phase 0 + Phase 1 plans (superseded by the records above)</summary>
-
-**Phase 0 (Team and roster selection): ~1–2 days**
-
-- **Goal:** Pick a fixed 6-Pokémon Gen 1 OU roster to use for all training and
-  evaluation. This is a one-time decision; the fixed roster is used for every
-  battle from here forward (until the next format pivot).
-- **Design options:**
-  1. Use a single canonical "competitively strong" roster (e.g., Dragonite, Alakazam, Gengar, etc.)
-  2. Use multiple roster permutations and average results (higher variance, more data)
-  3. Sample from the top-1300 replay archive (represents human play)
-- **Pre-register before the run:** which roster(s) will be used, and how many
-  permutations (if multi-roster). This choice drives BC corpus composition and
-  all downstream evals.
-- **Effort:** ~1 day for roster curation + code changes; option 2 or 3 require more iteration.
-- **Acceptance:** Roster decision recorded in `docs/BATTLE-FORMATS.md` with
-  rationale. Code passes `./build`.
-
----
-
-**Phase 1 (Plumbing & BC Corpus Decision): ~1 day**
-
-- **Goal:** Integrate fixed teams into the gym, evaluator, ladder bot, and BC
-  preprocessing. Verify that team plumbing works end-to-end.
-- **Design:** The codebase already supports fixed teams (`tools/gym.ts` can
-  toggle `--random-teams off`). Work needed:
-  1. Encode the chosen roster in `config/` or a new `rosters/` directory
-  2. Update `models/bc_pretrain_mlp.py` to accept gen1ou replays with fixed-team
-     format (BC preprocessing may assume dynamic teams)
-  3. Gym and evaluator test: verify battles run with fixed rosters
-  4. Ladder bot integration: pass roster to the bot launcher
-- **BC corpus decision:** Decide whether to re-train BC on gen1ou replays alone
-  (smaller corpus, on-format, but noisier) or mixed gen1ou+tournament
-  (current practice). Record this as a pre-registered choice.
-  - **Recommendation:** Start with gen1ou+tournament (proven mixed corpus) to
-    avoid confounding format + corpus changes. Can re-visit post-pivot if results
-    warrant.
-    > ⚠️ **Superseded and the wording was wrong.** Tournament (`smogtours-`)
-    > games are already *inside* the gen1ou corpus (74% of it), so
-    > "gen1ou+tournament" described gen1ou-**only**. The actual pre-registered
-    > choice is the mixed `gen1randombattle,gen1ou` default — see the Phase 1
-    > record above.
-- **Effort:** ~1 day (plumbing + tests).
-- **Acceptance:** `./build` passes; gym/evaluator/ladder-bot run 10 battles each with
-  fixed roster; BC starts on the chosen corpus.
-
-</details>
-
----
-
-**Phase 2 (BC Retraining on Gen 1 OU): ~2–3 hours (home box)** ⏳ NEXT — blocked on home box SSH
-
-- **Goal:** Train a fresh BC checkpoint on the gen1ou corpus with the fixed roster.
-- **Design:**
-  - Re-run `models/bc_pretrain_mlp.py` on `data/replays/gen1ou` with the
-    fixed-roster encoding
-  - Measure BC accuracy on a held-out validation set (randbats and OU both carry labels)
-  - Report: action count, label coverage %, top-1 accuracy
-- **Effort:** ~2–3 hours on home box (CPU-bound shard processing)
-- **Acceptance:** BC checkpoint saved (`bc_mlp_gen1ou_fixed.pt`). Accuracy
-  reported and compared to M7's v3 BC baseline.
-
----
-
-**Phase 3 (PPO Training on Gen 1 OU): ~2–3 hours (home box or Mac)**
-
-- **Goal:** Train a fresh policy on gen1ou with fixed teams, warm-started from
-  the Phase 2 BC checkpoint.
-- **Design:**
-  - 5M-step PPO run identical to M7 recipe (opponent-mix, value warmup, KL-anchor),
-    warm-started on gen1ou BC
-  - Single arm (randbats-to-OU is a format pivot, not a comparative A/B)
-  - Run on same machine as BC to avoid drift confounds (see EVALUATION-METHODOLOGY.md)
-- **Effort:** ~2–3 hours training + overhead
-- **Acceptance:** Checkpoint saved; training curve stable (no collapse); final step
-  ready for eval.
-
----
-
-**Phase 4 (Bot-Eval Gate on Fixed Roster): ~3–4 hours**
-
-- **Goal:** Measure raw-policy performance against bots on the new fixed-roster
-  agent. This is the go/no-go for ladder validation.
-- **Design:**
-  - **Pre-registered gate: n=5,000/opponent, baseline win rate ≥10% on both
-    Random and DamageFirst.** (The rationale: randbats agent averaged 69.7%
-    (Random) / 59.4% (DamageFirst); a fixed-team, on-format agent starting from
-    BC may be weaker initially due to smaller corpus and roster unfamiliarity.
-    Expect ≤50% vs Random as a plausible outcome. The gate is set to catch
-    catastrophic regression, not to pass M7's randbats ceiling. Specific numbers
-    can be re-visited after Phase 3 if BC accuracy is surprisingly high/low.)
-  - Decision rule: `--model ppo`, no search, `sampled` decision (same as M7
-    historical for comparability, though the format is different)
-  - Both Random and DamageFirst reported with CIs; gate is a joint rejection rule
-    (if either <10%, abort)
-- **Effort:** ~3–4 hours (27 battles/s, 5k battles, ~50 min per opponent + overhead)
-- **Acceptance criteria:**
-  - ✅ ≥10% vs Random, 95% CI lower bound > 0 (non-zero performance)
-  - ✅ ≥10% vs DamageFirst, 95% CI lower bound > 0
-  - ✅ No anomalies in action distributions (e.g., stuck in a loop)
-  - **If both pass:** Proceed to Phase 5 (ladder). If either fails, diagnose
-    (likely: BC corpus mismatch, roster too weak, observation issue) and halt.
-
----
-
-**Phase 5 (Ladder Validation on Gen 1 OU): ~24–48 hours — ⚪ OPTIONAL**
-
-> **Optional as of 2026-08-05.** Phase 4 is the project's terminal gate. Run
-> Phase 5 only if Phase 4 clears both gates with room to spare and you want a
-> live-ladder number for closure. It establishes a baseline for future work that
-> is not planned. User runs ladder sessions personally — hand over the command,
-> do not launch it in a background task.
-
-- **Goal:** Run on the live gen1ou ladder to establish a baseline for fixed-team,
-  on-format play.
-- **Design:**
-  - Fresh account per arm, `--mcts` (determinized search as shipped)
-  - Single arm only — this is a baseline establishment, not a comparative A/B.
-  - Pre-register: **n=360 games, power for detecting a +10pp effect size
-    (baseline ~30% expected from randbats transfer, but it's a format switch)**.
-  - Decision rule: `--greedy` (current ladder default)
-- **Pre-registered acceptance:** Report n, W/L, win rate with 95% CI, mean
-  opponent Elo. No threshold gate — any non-zero win rate is a baseline. Success
-  is having a measurable, interpretable number on the new format.
-- **Effort:** ~24–48h wall-clock (360 games × ~4 min/game, accounting for queue
-  and re-connects)
-- **Acceptance:** Ladder run logged. If ≥5% (sanity check; catastrophic regression
-  would read <1%), the format pivot is established and future improvements can
-  be measured against this baseline.
-
----
-
-### Pre-Registered Decision Rules
-
-**After Phase 0 (roster selection):** Record the choice plainly. No gate.
-
-**After Phase 1 (plumbing):** If tests pass, proceed. If plumbing has gaps or
-BC preprocessing fails, address before Phase 2.
-
-**After Phase 2 (BC retraining):** If BC accuracy is <30% on a held-out set,
-investigate (may indicate corpus/format mismatch). Otherwise proceed.
-
-**After Phase 3 (PPO training):** If training loss goes flat or collapses, halt
-and diagnose. Otherwise proceed.
-
-**After Phase 4 (bot-eval gate):** Gate is ≥10% on both Random and DamageFirst,
-95% CI lower bound > 0. If either fails, halt and diagnose (likely BC mismatch
-or roster weakness). If both pass, proceed to Phase 5.
-
-**After Phase 5 (ladder):** Baseline established. No gate. Future comparisons
-(e.g., observation enrichment on gen1ou, bigger models) will be measured against
-this Phase 5 number, not against the randbats M7 baseline.
-
----
-
-### What This Changes
-
-- **Observation enrichment (M11-deferred below) is re-scoped post-pivot.** With a
-  fixed roster, the observation schema calculus changes drastically: species
-  identity drops from 151 values to 6 compile-time constants; base stats are
-  static lookups instead of per-gym encodings. The v4 design should be
-  re-derived after M12, not before. The current design is randbats-specific and
-  must not ship to gen1ou unchanged.
-- **Ladder numbers reset.** The 30.5% (M7 randbats) / 22.9% (contested) are no
-  longer the active comparison baseline. Phase 5 establishes the gen1ou baseline.
-- **Team luck is removed.** Every eval and ladder number going forward is on
-  the same roster, so performance variance is agent-only, not roster-luck.
-
----
-
-### Success Criteria
-
-- ✅ Phase 0: Roster chosen and recorded
-- ✅ Phase 1: Plumbing works; `./build` passes; 10-battle tests on fixed roster run clean
-- ✅ Phase 2: BC checkpoint produced; accuracy measured
-- ✅ Phase 3: Policy checkpoint produced; stable training curve
-- ✅ Phase 4: Bot evals run; gate passed (≥10% on both opponents)
-- ✅ Phase 5: Ladder baseline established on gen1ou; at least n≥100 games logged
-
-### Risks and Mitigations
-
-**Risk 1: Roster is too weak.** Mitigated by Phase 0 curation (use proven
-competitive teams) — *before* the run, not after. ~~If Phase 4 gate fails, try an
-alternative roster.~~ **Withdrawn 2026-08-05:** re-rolling the roster after
-seeing the gate is sweep-picking. One roster, pre-registered, one result.
-
-**Risk 2: BC accuracy drops on gen1ou corpus.** Mitigated by using a mixed
-corpus (tournament games); if still weak, check corpus for parsing/encoding
-errors.
-
-**Risk 3: Ladder is much slower on gen1ou.** Expected (~4 min/game vs ~3 for
-randbats). Phase 5 will take 24–48h. Plan accordingly.
-
-**Risk 4: Performance degrades more than expected post-pivot.** This is a
-possible finding, not a bug. Record it and proceed to assess whether observation
-enrichment helps (M11-deferred).
-
-### What M12 delivers
-
-- A clean on-format number for Gen 1 OU with team-luck variance removed — an
-  answer to "does shrinking the problem help?", which is the last open question
-  this project intends to ask
-- ~~A platform for future improvements~~ — **withdrawn 2026-08-05.** There is no
-  planned work after M12. If the number is interesting, that is a reason to start
-  something new, not to reopen this
-
----
-
-## M11 (Deferred): Observation Enrichment — v4 Schema ❌ CLOSED — NOT PURSUED
-
-> **Numbering note.** M11 is the *observation enrichment* milestone, scoped
-> 2026-08-01. Its **Phase 0 (reward asymmetry) is DONE and shipped**; its
-> Phase 1 (schema v4) is what is deferred here. The **pivot is M12** — when a
-> doc says "Phase 2" or similar, check which milestone owns it.
-
-**Status:** ❌ **Closed 2026-08-05 without execution.** Deferred 2026-08-03
-pending M12; the bounded finish ends the project at M12 Phase 4, so the deferral
-becomes a closure. Its **Phase 0 (reward asymmetry) shipped** 2026-08-01 and
-carries into M12 — only the v4 schema work is closed.
-
-**This is the project's best untested idea, and it is being left on the table
-deliberately.** The evidence behind it is real: the observation encodes no move
-identity (Recover and Swords Dance are byte-identical), no species or stats, and
-type effectiveness in the attacking direction only. If anyone resumes this work,
-**start here** — the rationale below still holds, and `docs/WHERE-WE-ARE.md` →
-"What the observation poverty looks like" has the full diagnosis.
-
-**Rationale for the original deferral:** The observation schema v4 design (move identity,
-species, base stats, trapping, defensive type effectiveness) was scoped for
-gen1randombattle with 151 possible species and dynamic rosters. Fixed-team Gen 1
-OU changes the calculus drastically:
-
-- **Species identity:** Fixed roster of 6 known species instead of 151 unknowns
-  → move from a learned embedding (0–151 LUT) to compile-time constants. The
-  value proposition of adding species_id vanishes; the real cost becomes *why
-  each species is chosen* (matchup reasoning with base stats), which is
-  different from identification.
-- **Base stats:** In randbats, unknown active stats require damage estimation from
-  an opaque bulk figure (HP × Def / Spe ratio). In OU with a fixed roster,
-  active stats are determined by species alone and are static — a simple lookup.
-- **Team roster synergy:** Randbats schema did not encode team synergy (6 unknown
-  species at battle start). With a fixed roster, synergy is implicit (the same
-  6 always, every battle). Schema should encode *matchup trees* (e.g., "which of
-  my 6 beat their active?") instead of per-Pokémon properties.
-
-**Consequence:** The v4 design should be **re-derived post-M11 from first
-principles**, not ported as-is. The design work in the old v4 spec (move identity,
-defensive type effectiveness, recharge tracking) contains real insights about
-observation poverty; those findings carry forward. But the dimensionality,
-encoding, and priority of each feature should be re-evaluated for fixed-team
-play.
-
-**If revisited (not planned):** The entry point would be a gen1ou ladder
-baseline (M12 Phase 5) plus M10-style log analysis on OU logs, feeding a v4-OU
-schema derived from first principles — **not** the v4-randbats spec ported over.
-
-**Instrumentation debt — dropped 2026-08-05.** The `--seed` plumbing, per-step
-logging and `meta.json` run manifest were "cheap insurance for all future A/Bs."
-With M12 as the last milestone there are no future A/Bs to insure, and M12's
-phases are single-arm. Skip it. (Listed here rather than silently deleted, since
-it appears in `IN-PROGRESS.md` history.)
-
+## M13: Experiment Tracking + CI ⏳ OPEN (opened 2026-09-24)
+
+**Scope — ops only.** Makes the evaluation discipline mechanical. No modeling:
+see the standing rule in PROJECT STATUS.
+
+1. **MLflow tracking** in the training (`models/ppo/train.py`,
+   `models/bc_pretrain_mlp.py`) and eval (`models/evaluate.py`,
+   `scripts/bot_eval_ab.py`) entry points: params, per-step metrics, git SHA,
+   seed, checkpoint path + hash. One authoritative store on the Mac; home-box
+   runs reach it over a reverse SSH tunnel.
+2. **Instrumentation debt** (dropped 2026-08-05, reinstated here): `--seed`,
+   per-step metrics (entropy, value loss, KL — currently computed and
+   discarded), a run-metadata file next to checkpoints.
+3. **`.github/workflows/eval-smoke.yml`**: CPU torch, the tracked M7
+   checkpoint, raw policy vs Random, on every push/PR. Upstream `test.yml` is
+   left alone.
+
+**Gate (pre-registered 2026-09-24, before implementation):**
+- **(a)** An MLflow tracking store holding **≥10 real runs**, each with params,
+  metrics, git SHA, and checkpoint path. Re-evaluating existing tracked
+  checkpoints counts; typing historical numbers from the ledger in as runs does
+  **not**.
+- **(b)** A GitHub Actions workflow that runs a bot-eval smoke test on every
+  push/PR, with a pass threshold **pre-registered in
+  `docs/EVALUATION-METHODOLOGY.md`**, derived from the measured M7 or M12
+  baselines and a sample size CI can afford.
+- **(c)** That workflow has **failed on a real regression and passed after the
+  fix**, visible in Actions history. No manufactured failure: either CI catches
+  a genuine regression during this work, or a documented, already-fixed bug from
+  this repo is re-introduced on a PR and recorded explicitly as a **backtest**.
+
+**Constraints known at open:** the home box is offline, so the ≥10 runs come
+from Mac-local checkpoints (M7, `m9seed`, `m9p2c`, `m9p2d`, `v3_valft` — all
+tracked in git); M12 and the M11 width arms are added only if it returns.
+Upstream `test.yml` fails on every push (`npm ci`: `package-lock.json` out of
+sync) — a pre-existing red check, not this milestone's.
