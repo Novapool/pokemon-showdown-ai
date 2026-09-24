@@ -1,4 +1,4 @@
-# Milestone Archive — M0 through M12 (complete)
+# Milestone Archive — M0 through M13 (complete)
 
 Full historical record of every completed milestone: original plans, build
 phasing, file manifests, results tables, and post-hoc corrections, verbatim as
@@ -3891,3 +3891,87 @@ logging and `meta.json` run manifest were "cheap insurance for all future A/Bs."
 With M12 as the last milestone there are no future A/Bs to insure, and M12's
 phases are single-arm. Skip it. (Listed here rather than silently deleted, since
 it appears in `IN-PROGRESS.md` history.)
+
+---
+
+# M13 (closed 2026-09-24; moved here from MILESTONES.md)
+
+## M13: Experiment Tracking + CI ✅ GATE PASSED (2026-09-24)
+
+**Scope — ops only.** Made the evaluation discipline mechanical. No modeling.
+
+**Built** (PR #1, branch `infra/tracking-ci`):
+- **`models/tracking.py`**: MLflow runs from `ppo/train.py`, `bc_pretrain_mlp.py`
+  and `evaluate.py`.
+  - Each run logs all args, git SHA/branch/dirty, host, torch version, seed, and
+    checkpoint path + sha256.
+  - It is a no-op without mlflow or with `--no-track`, and fails soft if the store
+    drops.
+  - `bot_eval_ab.py --arm L=mlflow:<run>` reads arms from tracked runs.
+- **Instrumentation debt paid:**
+  - `--seed` covers python/numpy/torch. The Node battle RNG is **not** seeded.
+  - Per-update PPO metrics: `PPOAgent.update()` now returns the policy, value,
+    entropy, opp-CE and anchor-KL terms it used to discard.
+  - BC per-epoch and per-format metrics, and `run_meta.json` next to checkpoints.
+- **Store:** SQLite `mlflow.db` on the Mac. Home-box runs log over a reverse
+  SSH tunnel (`docs/MULTI-MACHINE.md`). The HTTP path is verified; the SSH leg
+  has not been exercised, because the home box was offline.
+- **`.github/workflows/eval-smoke.yml`:** M7 greedy vs Random, n=5,000, CPU,
+  on every push and PR. `scripts/eval_smoke_gate.py` enforces the rule.
+
+**Gate (a) ✅ 12 real runs.** `scripts/mlflow_runs.py` reports 12/12 carrying
+params, metrics, git SHA and checkpoint path. All are n=5,000 re-evaluations of
+checkpoints tracked in git, on clean commit `0d59c8621`, raw policy:
+
+| checkpoint | vs Random (sampled) | vs DamageFirst (sampled) |
+|---|---|---|
+| M7 `v3/…5000002_final` | 71.6% | 59.5% |
+| `m9seed` | 70.1% | 57.5% |
+| `m9p2c` | 61.9% | 53.0% |
+| `m9p2d` | 66.6% | 56.1% |
+| `v3_valft` | 70.7% | 58.8% |
+| M7 **greedy** | **76.8%** | **66.4%** |
+
+**The harness replicates the ledger. Every difference CI includes 0:**
+- M7 sampled vs Random: 71.6% against the ledger's 69.9%, +1.6pp [−0.1, +3.4].
+- M7 greedy vs Random: 76.8% against 77.7%, −1.0pp [−2.6, +0.7].
+- M7 greedy vs DamageFirst: +1.2pp [−0.7, +3.0].
+
+M9 Phase 2c's "better imitator, worse RL substrate" also reproduces:
+**m9p2c −8.2pp [−10.0, −6.3] vs m9seed**, against the ledger's −8.3pp. That is a
+note from re-evaluation, not new scope. The M12 and M11-width arms were not
+evaluated (home box only).
+
+**Gate (b) ✅** The threshold was pre-registered in `EVALUATION-METHODOLOGY.md`
+Part 6 in commit `dcc2291c7`, before the gate was enabled in `1e2ddbb5d`.
+- **Rule:** n=5,000, pass iff wins ≥ 3,751 (75.02%).
+- **Baseline:** M7 greedy vs Random, 77.26% (7,726/10,000, pooled from the two
+  pre-CI Mac measurements).
+- **Error rates:** false-fail ≤ 0.1% per run; 99% power against drops ≥ 3.7pp.
+- **Sizing:** from a no-gate [timing run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36067661716)
+  (17.9 battles/s on a 4-vCPU runner, win rate not read). The job takes about 7
+  min end to end.
+- **Clean-code CI runs** landed at 77.40%, 77.26%, 77.58%, 76.44%, 77.60% and
+  75.98%, all passing. The lowest is z≈−2.1 from the baseline and ~1pp above the
+  bar, which is ordinary noise at this n.
+
+**Gate (c) ✅ — BACKTEST, not an organic catch.** No genuine regression
+surfaced during the work. Instead, draft PR #2 re-introduced the documented
+greedy-decoding bug (fixed in `414966b14`): `act_batch()` sampled regardless of
+`--greedy`.
+
+| commit | eval-smoke | result |
+|---|---|---|
+| `6ebc24292` bug re-introduced | ❌ [PR run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36068657983) / [push run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36068644740) | 70.72% / 72.20% |
+| `1a1cf771f` reverted | ✅ [PR run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36069131589) / [push run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36069127797) | 77.58% / 76.44% |
+
+PR #2 was closed unmerged.
+
+**Deviations from the plan, recorded:**
+- Runs used n=5,000, not 2,000: the methodology requires 5,000 in the 0.3–0.7
+  band.
+- The CI n went 1,000 → 5,000 once the runner proved ~2× faster than assumed.
+- A/B comparisons are not themselves logged as runs: they have no checkpoint, so
+  they would fail gate (a)'s own check by construction.
+- Upstream `test.yml` stays red for its pre-existing lockfile reason and was
+  left alone.

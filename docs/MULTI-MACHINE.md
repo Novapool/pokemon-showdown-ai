@@ -260,6 +260,31 @@ git pull
 rsync -avz --progress homebox:~/Projects/pokemon-showdown-ai/data/value_targets/ data/value_targets/
 ```
 
+### MLflow: one store, on the Mac (M13)
+
+The tracking store is a single SQLite file, `mlflow.db`, at the Mac repo root
+(gitignored). Mac runs log to it directly. **Home-box runs log to the same store
+over a reverse SSH tunnel** rather than keeping a second store, because run and
+experiment ids are per-store and two stores cannot be rsync-merged. The store
+lives on the Mac because the home box is often off.
+
+```bash
+# on the Mac: serve the store (leave running)
+.venv/bin/mlflow server --backend-store-uri sqlite:///mlflow.db --host 127.0.0.1 --port 5001
+
+# on the Mac: hold a reverse tunnel open for the job's lifetime (separate terminal)
+ssh -N -R 5001:127.0.0.1:5001 homebox
+
+# the job on the home box points at the tunnel
+ssh homebox 'bash -lc "cd ~/Projects/pokemon-showdown-ai && \
+  MLFLOW_TRACKING_URI=http://127.0.0.1:5001 .venv/bin/python models/evaluate.py ..."'
+```
+
+The home box `.venv` needs `pip install mlflow` once. If the tunnel drops
+mid-run, `models/tracking.py` warns once and stops logging; the job itself keeps
+running. ⚠️ **Not yet exercised end to end:** the home box was offline when M13
+was built (2026-09-24). The first home-box run should confirm it.
+
 ### Choosing a machine
 
 - **Mac** — editing, tests, `./build`, evals, MCTS self-play collection. The M4

@@ -20,6 +20,7 @@ Usage:
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import NamedTuple
@@ -30,8 +31,12 @@ import numpy as np
 _MODELS_DIR = Path(__file__).parent
 sys.path.insert(0, str(_MODELS_DIR))
 
+import tracking  # noqa: E402
 from gym_client import GymClient, slice_structured_obs  # noqa: E402 (after sys.path patch)
 from vec_gym_client import VecGymClient  # noqa: E402
+
+sys.path.insert(0, str(_MODELS_DIR.parent / "scripts"))
+from ladder_analysis import wilson  # noqa: E402
 
 
 class BattleResult(NamedTuple):
@@ -591,6 +596,12 @@ def main():
              "(masked to legal opponent actions). 'head' auto-falls-back to "
              "'policy' when the checkpoint has no trained opponent head.",
     )
+    parser.add_argument(
+        "--json-out", default=None, metavar="PATH",
+        help="also write the result summary (counts, win rate, Wilson 95%% CI) "
+             "as JSON — what the CI eval-smoke gate reads",
+    )
+    tracking.add_args(parser)
     args = parser.parse_args()
 
     if sum([args.obs_v2, args.obs_v3, args.obs_v3_extended]) > 1:
@@ -617,6 +628,24 @@ def main():
         if args.opponent != "random":
             parser.error("--vs-checkpoint and --opponent are mutually exclusive")
 
+    seed = tracking.seed_everything(args.seed)
+    with tracking.run("eval", args, checkpoint=args.checkpoint) as t:
+        summary = _evaluate(args, parser)
+        summary["seed"] = seed
+        lo, hi = wilson(summary["wins"], summary["battles"])
+        summary["wilson_lo"], summary["wilson_hi"] = lo, hi
+        t.set_tags({k: summary[k] for k in ("model", "opponent", "decision_rule",
+                                              "format", "seed")})
+        t.log_metrics({k: v for k, v in summary.items()
+                       if k in ("win_rate", "wilson_lo", "wilson_hi", "wins",
+                                "draws", "losses", "battles", "opp_acc")})
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(summary, indent=2) + "\n")
+
+
+def _evaluate(args, parser) -> dict:
+    """Run the evaluation `args` describes, print the results header, and
+    return a summary dict (counts, rates, and what was evaluated)."""
     if args.model == "mcts":
         # The search wraps a structured PPO checkpoint (v1 780 or --obs-v2 924).
         base_agent = _load_agent("ppo", args.checkpoint, device=args.device)
@@ -661,7 +690,7 @@ def main():
         print(f"Base checkpoint: {args.checkpoint}")
         print(f"Battles: {total}")
         print(f"MCTS win rate vs {opponent_name}: {win_rate:.2f} ({wins}/{total})")
-        return
+        return _summary(args, "mcts", opponent_name, "mcts (visit-count argmax)", result)
 
     agent = _load_agent(args.model, args.checkpoint, device=args.device)
     if args.greedy:
@@ -726,6 +755,28 @@ def main():
             )
         else:
             print("Opp-prediction top-1 accuracy: n/a (no unmasked opp_action labels in info)")
+    return _summary(args, args.model, opponent_name,
+                    "greedy" if args.greedy else "sampled", result)
+
+
+def _summary(args, model: str, opponent: str, decision_rule: str,
+             result: BattleResult) -> dict:
+    total = result.total
+    summary = {
+        "model": model,
+        "checkpoint": args.checkpoint,
+        "opponent": opponent,
+        "decision_rule": decision_rule,
+        "format": args.format or "gen1randombattle",
+        "battles": total,
+        "wins": result.wins,
+        "draws": result.draws,
+        "losses": total - result.wins - result.draws,
+        "win_rate": result.wins / total if total > 0 else 0.0,
+    }
+    if result.opp_total:
+        summary["opp_acc"] = result.opp_correct / result.opp_total
+    return summary
 
 
 if __name__ == "__main__":

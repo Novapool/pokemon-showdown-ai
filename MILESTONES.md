@@ -13,7 +13,7 @@ home box is offline; no number is claimed). The agent is mediocre — 77.7% vs
 Random as a raw greedy policy on randbats, 19.3% of contested ladder games — and
 that is the recorded answer.
 
-**Reopened for one bounded, non-ML milestone: M13, experiment tracking + CI.**
+**Reopened for one bounded, non-ML milestone: M13, experiment tracking + CI — closed 2026-09-24, gate passed.**
 MLflow tracking in the training and eval entry points, the instrumentation debt
 (`--seed`, per-step metrics, run metadata), and a GitHub Actions eval-smoke gate.
 
@@ -26,7 +26,7 @@ not to reopen this one.
 
 | Milestone | Disposition |
 |---|---|
-| **M13 (tracking + CI)** | ⏳ **OPEN** — the only live work |
+| **M13 (tracking + CI)** | ✅ Closed 2026-09-24 — gate passed (12 tracked runs; CI gate red→green on a backtest) |
 | M12 (fixed-team Gen 1 OU) | ✅ Closed 2026-09-24. Gate passed; Phase 5 unrecovered |
 | M11 Phase 1 (obs schema v4) | ❌ Closed, not pursued — the best untested idea, left on the table |
 | M11 eval battery (h128/h512) | ⚪ Checkpoints home-box only; eligible for M13 re-evaluation if it comes back, not required |
@@ -94,7 +94,7 @@ the archive too; the fourth landed 2026-08-03 from the ladder-log analysis.
 
 ---
 
-## Results Ledger (M0–M12, all closed)
+## Results Ledger (M0–M13, all closed)
 
 Condensed. Each entry: what was tested, what the numbers were, and what it
 closed. Full plans, build phasing, and complete tables live in
@@ -305,6 +305,29 @@ scripts/ladder_analysis.py --run m12-ladder` (and `--min-decisions 16` for the
 contested figure), reported as a **standalone** number — it has no concurrent
 control and does not compare to any randbats ladder figure.
 
+### M13: Experiment Tracking + CI ✅ GATE PASSED (2026-09-24) — ops only
+Built MLflow tracking in the training and eval entry points:
+- **What each run logs:** args, git SHA/dirty, seed, and checkpoint path +
+  sha256.
+- **Instrumentation debt paid:** `--seed` (the Node battle RNG is not covered),
+  per-update PPO loss terms, `run_meta.json`.
+- **Store:** the Mac's SQLite store, which the home box reaches over a reverse
+  tunnel.
+- **CI:** a GitHub Actions eval-smoke gate.
+
+Gate results:
+- **(a)** 12 tracked n=5,000 re-evaluations of git-tracked checkpoints. They
+  replicate the ledger: M7 greedy vs Random 76.8% vs 77.7%, CI on the difference
+  includes 0. M9 2c's −8.3pp reappears as **−8.2pp [−10.0, −6.3]**.
+- **(b)** M7 greedy vs Random at n=5,000, pass iff ≥ 3,751 wins (75.02%). It was
+  pre-registered before the gate was enabled: ≤ 0.1% false-fail, 99% power
+  against drops ≥ 3.7pp, ~7 min per run. Six clean runs read 76.0–77.6%.
+- **(c) Backtest, not an organic catch.** Re-introducing the fixed
+  greedy-decoding bug (`414966b14`) on draft PR #2 went **red** at 70.72% /
+  72.20%. The revert went **green** at 77.58% / 76.44%.
+
+Full record, run table, CI URLs and deviations: `docs/MILESTONES-ARCHIVE.md` → M13.
+
 ---
 
 ## What has been closed
@@ -354,39 +377,4 @@ warmup 200k, BC KL-anchor 0.05, opponent-mix 0.5/0.3/0.2, `--opp-coef 0.1`.
 
 ## Live Milestones
 
-## M13: Experiment Tracking + CI ⏳ OPEN (opened 2026-09-24)
-
-**Scope — ops only.** Makes the evaluation discipline mechanical. No modeling:
-see the standing rule in PROJECT STATUS.
-
-1. **MLflow tracking** in the training (`models/ppo/train.py`,
-   `models/bc_pretrain_mlp.py`) and eval (`models/evaluate.py`,
-   `scripts/bot_eval_ab.py`) entry points: params, per-step metrics, git SHA,
-   seed, checkpoint path + hash. One authoritative store on the Mac; home-box
-   runs reach it over a reverse SSH tunnel.
-2. **Instrumentation debt** (dropped 2026-08-05, reinstated here): `--seed`,
-   per-step metrics (entropy, value loss, KL — currently computed and
-   discarded), a run-metadata file next to checkpoints.
-3. **`.github/workflows/eval-smoke.yml`**: CPU torch, the tracked M7
-   checkpoint, raw policy vs Random, on every push/PR. Upstream `test.yml` is
-   left alone.
-
-**Gate (pre-registered 2026-09-24, before implementation):**
-- **(a)** An MLflow tracking store holding **≥10 real runs**, each with params,
-  metrics, git SHA, and checkpoint path. Re-evaluating existing tracked
-  checkpoints counts; typing historical numbers from the ledger in as runs does
-  **not**.
-- **(b)** A GitHub Actions workflow that runs a bot-eval smoke test on every
-  push/PR, with a pass threshold **pre-registered in
-  `docs/EVALUATION-METHODOLOGY.md`**, derived from the measured M7 or M12
-  baselines and a sample size CI can afford.
-- **(c)** That workflow has **failed on a real regression and passed after the
-  fix**, visible in Actions history. No manufactured failure: either CI catches
-  a genuine regression during this work, or a documented, already-fixed bug from
-  this repo is re-introduced on a PR and recorded explicitly as a **backtest**.
-
-**Constraints known at open:** the home box is offline, so the ≥10 runs come
-from Mac-local checkpoints (M7, `m9seed`, `m9p2c`, `m9p2d`, `v3_valft` — all
-tracked in git); M12 and the M11 width arms are added only if it returns.
-Upstream `test.yml` fails on every push (`npm ci`: `package-lock.json` out of
-sync) — a pre-existing red check, not this milestone's.
+**None.** M13 closed 2026-09-24. ML research stays closed (see PROJECT STATUS).

@@ -398,6 +398,49 @@ Regression tests for the logging path: `test/tools/ladder-results.test.js`
 
 ---
 
+## Part 6 — The CI eval-smoke gate (M13)
+
+`.github/workflows/eval-smoke.yml` runs on every push and pull request. It
+evaluates the shipping M7 checkpoint (`models/ppo/checkpoints/v3/ppo_step_5000002_final.pt`)
+as a **raw greedy policy vs RandomPlayerAI** on randbats, on CPU, and fails the
+build below the threshold. It is a regression tripwire for the eval path
+(decoding, observation, bridge, simulator), not a strength measurement.
+
+**Pre-registered 2026-09-24, before any gated run existed.** Derived from
+measurements only. The one CI run made before this (the timing run below) was
+read for throughput, and its win rate was kept out of the log.
+
+| | |
+|---|---|
+| n | **5,000 battles** per run |
+| Pass rule | **wins ≥ 3,751 / 5,000 (win rate ≥ 75.02%)**. Decision rule must be greedy, n must be exactly 5,000 |
+| Baseline | **77.26% (7,726 / 10,000)** — M7 greedy vs Random pooled over its two pre-CI Mac measurements: 3,887/5,000 (2026-08-01, ledger) and 3,839/5,000 (2026-09-24, M13 tracked re-eval, run `efc05abe`). They agree: −1.0pp [−2.6, +0.7] |
+| False-fail rate | ≤ **0.1% per run** (one-sided, z=3.09), with the baseline's own SE (0.42pp) folded into the SD, not just the run's binomial noise |
+| Power | **99%** to fail any true win rate ≤ 73.6%, i.e. a drop of **≥ 3.7pp** |
+| Named regression | The greedy→sampled decoding bug (fixed `414966b14`): sampled M7 = **70.76%** (pooled 7,076/10,000), caught with power ≈ 1 − 10⁻⁶ |
+| Cost | Measured on `ubuntu-latest` (4 vCPU): **17.9 battles/s** (500 in 28s, [timing run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36067661716)) → ~4.7 min of eval, ~2.5 min setup |
+
+**Why these numbers.**
+- The gate runs on every push, so the false-fail rate is what makes it usable:
+  at 0.1%, a red build is a regression until proven otherwise.
+- n=5,000 costs under 5 minutes, and it is the n every bot-eval baseline in the
+  ledger was measured at.
+- At n=1,000 the same false-fail rate buys only 7.7pp of detectable drop, which
+  is too coarse to catch the decoding bug reliably (power 94%).
+
+**What it cannot see.**
+- Drops smaller than ~3.7pp.
+- Anything outside the raw-policy randbats path: MCTS, gen1ou/fixed roster,
+  training, DamageFirst.
+- The Node battle RNG is unseeded, so each run is an independent draw. That is
+  intended: the threshold is a statistical one.
+
+**Changing the gate.** Editing the threshold, n, checkpoint or opponent needs a
+dated entry here *before* the workflow changes. A threshold loosened after a red
+run is the post-hoc gate this document exists to prevent.
+
+---
+
 ## Checklist
 
 Use the `ml-experiment-reviewer` agent (`.claude/agents/ml-experiment-reviewer.md`)

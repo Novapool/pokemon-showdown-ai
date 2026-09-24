@@ -1,0 +1,60 @@
+name: Eval smoke
+
+# M13: raw-policy bot eval of the shipping M7 checkpoint vs RandomPlayerAI,
+# gated on the threshold pre-registered in docs/EVALUATION-METHODOLOGY.md →
+# Part 6 (n=5,000, pass iff wins >= 3,751). Change the doc before this file.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  eval-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash  # = bash -eo pipefail: an evaluate.py crash can't hide behind grep
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      # Not `npm ci`: package-lock.json is out of sync upstream (the reason
+      # test.yml is red), and that is not this workflow's to fix.
+      - name: Install JS deps and build the simulator
+        run: |
+          npm install --no-audit --no-fund
+          node build
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install CPU torch
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install numpy lz4
+
+      - name: Eval M7 (greedy) vs Random, n=5000
+        run: |
+          python models/evaluate.py --model ppo --obs-v3 --greedy \
+            --opponent random --battles 5000 --device cpu --no-track \
+            --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+            --json-out eval-smoke.json | grep -v '^Battle '
+
+      - name: Gate (pre-registered)
+        run: python scripts/eval_smoke_gate.py eval-smoke.json | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-smoke
+          path: eval-smoke.json

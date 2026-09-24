@@ -274,7 +274,7 @@ class PPOAgent(nn.Module):
     # Update
     # ------------------------------------------------------------------
 
-    def update(self, data, opp_coef: float | None = None) -> float:
+    def update(self, data, opp_coef: float | None = None) -> dict:
         """Run PPO_EPOCHS passes of minibatch updates over one rollout batch.
 
         Args:
@@ -287,7 +287,10 @@ class PPOAgent(nn.Module):
                   bit-for-bit (the opp head then receives no gradient).
 
         Returns:
-            Mean total loss (float) across all minibatch updates.
+            Means over all minibatch updates: "loss" (the combined objective),
+            "policy_loss" (negated clipped surrogate), "value_loss",
+            "entropy", and — only when the term is active — "opp_ce" and
+            "anchor_kl". Each term is its UNWEIGHTED value.
         """
         if hasattr(data, "get_tensors"):
             data = data.get_tensors()
@@ -318,8 +321,12 @@ class PPOAgent(nn.Module):
 
         opp_coef = self.opp_coef if opp_coef is None else opp_coef
 
-        total_loss_sum = 0.0
-        num_updates = 0
+        sums: dict[str, float] = {}
+        counts: dict[str, int] = {}
+
+        def _acc(name: str, value: torch.Tensor) -> None:
+            sums[name] = sums.get(name, 0.0) + value.item()
+            counts[name] = counts.get(name, 0) + 1
 
         for _ in range(self.ppo_epochs):
             indices = torch.randperm(n)
@@ -370,6 +377,7 @@ class PPOAgent(nn.Module):
                             opp_logits_b[valid_opp], opp_labels_b[valid_opp]
                         )
                         loss = loss + opp_coef * opp_ce
+                        _acc("opp_ce", opp_ce)
 
                 # BC KL-anchor (M3.2 recipe, M5.5 port): penalize divergence
                 # from the frozen human-cloned policy on the same minibatch.
@@ -383,16 +391,21 @@ class PPOAgent(nn.Module):
                     bc_dist = Categorical(logits=bc_logits)
                     anchor_kl = torch.distributions.kl_divergence(dist_b, bc_dist).mean()
                     loss = loss + self.bc_anchor_coef * anchor_kl
+                    _acc("anchor_kl", anchor_kl)
 
                 self.optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(self.parameters(), self.max_grad_norm)
                 self.optimizer.step()
 
-                total_loss_sum += loss.item()
-                num_updates += 1
+                _acc("loss", loss)
+                _acc("policy_loss", -surrogate_loss)
+                _acc("value_loss", value_loss)
+                _acc("entropy", entropy)
 
-        return total_loss_sum / max(num_updates, 1)
+        if not counts:
+            return {"loss": 0.0}
+        return {name: sums[name] / counts[name] for name in sums}
 
     # ------------------------------------------------------------------
     # Persistence

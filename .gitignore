@@ -86,6 +86,12 @@ models/**/checkpoints/**/*.pkl
 models/q_learning/qtable.pkl
 output/
 
+# M13: the MLflow store is Mac-local (home box logs to it over an SSH tunnel —
+# docs/MULTI-MACHINE.md). Never committed: it holds absolute paths and hosts.
+mlflow.db
+mlruns/
+mlartifacts/
+
 # Metamon (M2.5 BC pretraining) — vendored install + downloaded dataset
 vendor/
 data/metamon_cache/
