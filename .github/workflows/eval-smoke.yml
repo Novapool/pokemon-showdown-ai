@@ -1,0 +1,63 @@
+name: Eval smoke
+
+# M13: raw-policy bot eval of the shipping M7 checkpoint vs RandomPlayerAI.
+# This first version is a TIMING RUN with NO gate: it measures runner
+# throughput so n and the pass threshold can be pre-registered in
+# docs/EVALUATION-METHODOLOGY.md before any gated run exists. The win rate is
+# deliberately kept out of the log (it lands only in the uploaded artifact,
+# which is not read until the threshold is registered).
+
+on:
+  push:
+    branches: [infra/tracking-ci]
+
+env:
+  BATTLES: 500
+
+permissions:
+  contents: read
+
+jobs:
+  eval-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      # Not `npm ci`: package-lock.json is out of sync upstream (the reason
+      # test.yml is red), and that is not this workflow's to fix.
+      - name: Install JS deps and build the simulator
+        run: |
+          npm install --no-audit --no-fund
+          node build
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install CPU torch
+        run: |
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
+          pip install numpy lz4
+
+      - name: Eval M7 (greedy) vs Random
+        run: |
+          start=$(date +%s)
+          python models/evaluate.py --model ppo --obs-v3 --greedy \
+            --opponent random --battles "$BATTLES" --device cpu --no-track \
+            --checkpoint models/ppo/checkpoints/v3/ppo_step_5000002_final.pt \
+            --json-out eval-smoke.json > /dev/null
+          secs=$(( $(date +%s) - start ))
+          echo "eval wall-clock: ${secs}s for $BATTLES battles" | tee -a "$GITHUB_STEP_SUMMARY"
+          python -c "print(f'throughput: {$BATTLES/max($secs,1):.1f} battles/s')" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "nproc: $(nproc)" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eval-smoke
+          path: eval-smoke.json

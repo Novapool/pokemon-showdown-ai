@@ -25,8 +25,10 @@ using the battle count directly.
 """
 
 import argparse
+import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -34,6 +36,7 @@ import numpy as np
 # Resolve models/ directory so vec_gym_client and ppo modules are importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import tracking  # noqa: E402
 from gym_client import slice_structured_obs  # noqa: E402
 from vec_gym_client import VecGymClient   # noqa: E402
 
@@ -264,6 +267,7 @@ def parse_args() -> argparse.Namespace:
             "--checkpoint-dir and the opp/v2/structured routing)."
         ),
     )
+    tracking.add_args(parser)
     args = parser.parse_args()
     if sum([args.obs_v2, args.obs_v3, args.obs_v3_extended]) > 1:
         parser.error("--obs-v2, --obs-v3, and --obs-v3-extended are mutually exclusive")
@@ -327,8 +331,24 @@ def _push_pending(buffer: TrajectoryBuffer, pending: dict, done: bool) -> None:
     )
 
 
+def _write_run_meta(checkpoint_dir: Path, args, seed: int, run_id, resumed_from) -> None:
+    """Record what produced the checkpoints in this directory. A --resume
+    writes its own file rather than overwriting the original run's."""
+    name = f"run_meta.resume-{resumed_from}.json" if resumed_from else "run_meta.json"
+    meta = {"args": vars(args), "seed": seed, "mlflow_run_id": run_id,
+            "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"), **tracking.git_info()}
+    (checkpoint_dir / name).write_text(json.dumps(meta, indent=2) + "\n")
+
+
 def main() -> None:
     args = parse_args()
+    seed = tracking.seed_everything(args.seed)
+    with tracking.run("train", args) as t:
+        t.set_tags({"seed": seed})
+        _train(args, seed, t)
+
+
+def _train(args, seed: int, t) -> None:
     total_budget = args.steps
     rollout_steps = args.rollout_steps
     checkpoint_every = args.checkpoint_every
@@ -352,6 +372,8 @@ def main() -> None:
                else "structured" if args.structured else ".")
         )
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    _write_run_meta(checkpoint_dir, args, seed, t.run_id,
+                    _checkpoint_step(Path(args.resume)) if args.resume else None)
 
     mix = _parse_opponent_mix(args.opponent_mix) if args.opponent_mix else None
     mix_names = list(mix) if mix else None
@@ -375,7 +397,7 @@ def main() -> None:
         state["obs"] = _flatten(state["obs"])
         return state
 
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
 
     obs_batch = masks = None      # single-seat rollout state
     p1_state = p2_state = None    # dual-seat (selfplay) rollout state
@@ -509,7 +531,9 @@ def main() -> None:
 
     # Episode tracking within each rollout window
     rollout_wins = 0
+    rollout_draws = 0
     rollout_episodes = 0
+    rollout_start = time.monotonic()
 
     try:
         while total_steps < total_budget:
@@ -517,6 +541,7 @@ def main() -> None:
             # Collect one rollout across all envs
             # ----------------------------------------------------------------
             rollout_wins = 0
+            rollout_draws = 0
             rollout_episodes = 0
             steps_this_rollout = 0
 
@@ -602,6 +627,8 @@ def main() -> None:
                             rollout_episodes += 1
                             if infos[i].get("winner") == "Gym":
                                 rollout_wins += 1
+                            elif not infos[i].get("winner"):
+                                rollout_draws += 1
 
                     # Checkpoint on step boundary
                     if total_steps - last_checkpoint_step >= checkpoint_every:
@@ -650,6 +677,8 @@ def main() -> None:
                             rollout_episodes += 1
                             if infos[i].get("winner") == "Gym":
                                 rollout_wins += 1
+                            elif not infos[i].get("winner"):
+                                rollout_draws += 1
 
                     obs_batch = next_obs
                     total_steps += num_envs
@@ -681,7 +710,7 @@ def main() -> None:
                     )
 
             merged = merge_buffers(buffers)
-            loss = agent.update(merged)
+            losses = agent.update(merged)
             for b in buffers:
                 b.clear()
 
@@ -699,19 +728,28 @@ def main() -> None:
             log_line = (
                 f"Step {total_steps}/{total_budget} | "
                 f"Win rate (rollout): {win_rate:.2f} | "
-                f"Loss: {loss:.3f}"
+                f"Loss: {losses['loss']:.3f}"
             )
+            now = time.monotonic()
+            metrics = {
+                **losses,
+                "rollout_win_rate": win_rate,
+                "rollout_draws": rollout_draws,
+                "rollout_episodes": rollout_episodes,
+                "steps_per_sec": steps_this_rollout / max(now - rollout_start, 1e-9),
+                "value_warmup": float(warmup_active),
+            }
+            rollout_start = now
             if args.opp_coef != 0.0:
                 # M5: fraction of this rollout's pushed steps with a valid
-                # (unmasked) opp_action label — the aux CE only trains on
-                # these. ppo_agent.update() doesn't expose the CE term
-                # separately from the combined loss, so coverage is the only
-                # additional diagnostic available here.
+                # (unmasked) opp_action label — the aux CE only trains on these.
                 opp_actions_t = merged.get("opp_actions")
                 if opp_actions_t is not None and opp_actions_t.numel() > 0:
                     coverage = float((opp_actions_t >= 0).float().mean())
                     log_line += f" | Opp label coverage: {coverage:.2f}"
+                    metrics["opp_label_coverage"] = coverage
             print(log_line)
+            t.log_metrics(metrics, step=total_steps)
 
     finally:
         env.close()
@@ -719,6 +757,8 @@ def main() -> None:
     # Final checkpoint
     final_path = checkpoint_dir / f"ppo_step_{total_steps}_final.pt"
     agent.save(str(final_path))
+    tracking.log_checkpoint(t, final_path)
+    t.log_metrics({"total_steps": total_steps})
     print(f"\nTraining complete. Final model saved to {final_path}")
     print(f"Total steps: {total_steps}")
 

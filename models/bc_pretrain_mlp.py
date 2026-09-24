@@ -46,6 +46,7 @@ MODELS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(MODELS_DIR))
 sys.path.insert(0, str(MODELS_DIR / "ppo"))
 
+import tracking  # noqa: E402
 from ppo_agent import PPOAgent  # noqa: E402
 
 OBS_V2_SIZE = 12 * 77  # flattened schema-v2 observation
@@ -228,8 +229,16 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir", default=str(MODELS_DIR / "checkpoints"))
     parser.add_argument("--out", default="bc_mlp_gen1.pt")
     parser.add_argument("--device", default=None, choices=[None, "cpu", "mps", "cuda"])
+    tracking.add_args(parser)
     args = parser.parse_args()
+    # Data order was already seeded per epoch; this adds weight init.
+    seed = tracking.seed_everything(args.seed)
+    with tracking.run("bc", args) as t:
+        t.set_tags({"seed": seed})
+        _train(args, t)
 
+
+def _train(args, t) -> None:
     obs_size = OBS_V3_SIZE if args.obs_v3 else OBS_V2_SIZE
     traj_dir = args.traj_dir or ("data/replay_trajs/v3" if args.obs_v3 else "data/replay_trajs")
 
@@ -315,6 +324,9 @@ def main() -> None:
                 d["n"] += n
             n_batches += 1
             if n_batches % LOG_EVERY == 0:
+                t.log_metrics({"train_loss_window": win["loss"] / win["n"],
+                               "train_acc_window": win["correct"] / win["n"]},
+                              step=total + ep["n"])
                 print(f"epoch {epoch} batch {n_batches}: loss {win['loss'] / win['n']:.4f} "
                       f"acc {win['correct'] / win['n']:.3f} "
                       f"({ep['n']} samples, {time.time() - start:.0f}s)", flush=True)
@@ -325,15 +337,26 @@ def main() -> None:
         print(f"epoch {epoch}/{args.epochs} done: loss {ep['loss'] / max(ep['n'], 1):.4f} "
               f"acc {ep['correct'] / max(ep['n'], 1):.3f}{opp_msg} over {ep['n']} samples")
 
+        epoch_metrics = {"epoch_loss": ep["loss"] / max(ep["n"], 1),
+                         "epoch_acc": ep["correct"] / max(ep["n"], 1)}
+        if ep["opp_n"]:
+            epoch_metrics["epoch_opp_acc"] = ep["opp_correct"] / ep["opp_n"]
+
         val = evaluate(agent, datasets, args.batch_size, device)
         for fmt, (c, n, oc, on, vc) in val.items():
             if n:
                 opp_msg = f" opp-acc {oc / on:.3f}" if on else ""
                 print(f"  val[{fmt}]: acc {c / n:.3f}{opp_msg} "
                       f"value-sign-acc {vc / n:.3f} ({n} samples)")
+                epoch_metrics[f"val_acc_{fmt}"] = c / n
+                epoch_metrics[f"val_value_sign_acc_{fmt}"] = vc / n
+                if on:
+                    epoch_metrics[f"val_opp_acc_{fmt}"] = oc / on
+        t.log_metrics(epoch_metrics, step=epoch)
 
         agent.save(str(checkpoint_path))
         print(f"checkpoint saved: {checkpoint_path}")
+    tracking.log_checkpoint(t, checkpoint_path)
 
     print(f"finished: {total} samples in {time.time() - start:.0f}s")
 

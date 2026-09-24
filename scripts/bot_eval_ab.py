@@ -19,6 +19,9 @@ Usage:
     # 2c gate: candidate vs the M5.5 baseline, n=2000/arm vs Random
     python3 scripts/bot_eval_ab.py --arm m5.5=1802/2000 --arm cand=1871/2000
 
+    # arms straight from tracked evaluate.py runs (M13): mlflow:<run-id or prefix>
+    .venv/bin/python scripts/bot_eval_ab.py --arm m7=mlflow:521534bb --arm cand=mlflow:9f3c01aa
+
     # required n for a given effect, no data needed
     python3 scripts/bot_eval_ab.py --power --baseline-p 0.93
 """
@@ -32,8 +35,28 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from ladder_analysis import newcombe_diff, required_n, wilson  # noqa: E402
 
 
+def _mlflow_counts(ref: str) -> tuple[int, int]:
+    """(wins, battles) of the tracked eval run whose id starts with `ref`."""
+    import os
+    import mlflow
+    repo = Path(__file__).resolve().parent.parent
+    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI")
+                            or f"sqlite:///{repo / 'mlflow.db'}")
+    runs = [r for r in mlflow.search_runs(experiment_names=["pokemon-showdown"],
+                                          filter_string="tags.kind = 'eval'",
+                                          output_format="list")
+            if r.info.run_id.startswith(ref)]
+    if len(runs) != 1:
+        raise SystemExit(f"mlflow:{ref} matched {len(runs)} eval runs; need exactly 1")
+    m = runs[0].data.metrics
+    return int(m["wins"]), int(m["battles"])
+
+
 def parse_arm(spec: str) -> tuple[str, int, int]:
-    """``label=wins/n`` -> (label, wins, n)."""
+    """``label=wins/n`` or ``label=mlflow:<run-id prefix>`` -> (label, wins, n)."""
+    if "=mlflow:" in spec:
+        label, ref = spec.split("=mlflow:", 1)
+        return (label.strip(), *_mlflow_counts(ref.strip()))
     try:
         label, counts = spec.split("=", 1)
         wins_s, n_s = counts.split("/", 1)
@@ -86,8 +109,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Bot-eval A/B: win rates with CIs and a differenced endpoint.")
     parser.add_argument("--arm", action="append", default=[], metavar="LABEL=WINS/N",
-                        help="an eval arm; the first one given is the baseline "
-                             "(repeatable)")
+                        help="an eval arm, as counts or as mlflow:<run-id prefix> "
+                             "of a tracked evaluate.py run; the first one given "
+                             "is the baseline (repeatable)")
     parser.add_argument("--gate", type=float, default=None, metavar="PP",
                         help="pre-registered effect size in percentage points "
                              "(e.g. 3 for the M9 2c gate); reports PASS/FAIL "
