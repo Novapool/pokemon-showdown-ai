@@ -36,6 +36,20 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 EXPERIMENT = "pokemon-showdown"
 
 
+def tracking_uri() -> str:
+    return os.environ.get("MLFLOW_TRACKING_URI") or f"sqlite:///{REPO_ROOT / 'mlflow.db'}"
+
+
+def find_runs(kind: str | None = None) -> list:
+    """All runs in the store (optionally one `kind`), oldest first."""
+    import mlflow
+    mlflow.set_tracking_uri(tracking_uri())
+    return mlflow.search_runs(experiment_names=[EXPERIMENT],
+                              filter_string=f"tags.kind = '{kind}'" if kind else "",
+                              output_format="list",
+                              order_by=["attributes.start_time ASC"])
+
+
 def add_args(parser) -> None:
     parser.add_argument(
         "--seed", type=int, default=None,
@@ -132,8 +146,7 @@ def run(kind: str, args, checkpoint=None, name: str | None = None):
         yield _Run()
         return
 
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI")
-                            or f"sqlite:///{REPO_ROOT / 'mlflow.db'}")
+    mlflow.set_tracking_uri(tracking_uri())
     mlflow.set_experiment(EXPERIMENT)
     with mlflow.start_run(run_name=name):
         import torch

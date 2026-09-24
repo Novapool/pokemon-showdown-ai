@@ -21,6 +21,8 @@ GATE_N = 5000
 GATE_MIN_WINS = 3751          # win rate >= 75.02%
 BASELINE = (7726, 10000)      # M7 greedy vs Random, pooled pre-CI measurements
 DECISION_RULE = "greedy"
+CHECKPOINT = "models/ppo/checkpoints/v3/ppo_step_5000002_final.pt"   # M7
+OPPONENT = "RandomPlayerAI"
 
 
 def main() -> None:
@@ -37,6 +39,10 @@ def main() -> None:
     problems = []
     if n != GATE_N:
         problems.append(f"ran {n} battles; the pre-registered n is {GATE_N}")
+    if not r["checkpoint"].endswith(CHECKPOINT):
+        problems.append(f"evaluated {r['checkpoint']!r}; the gate is pinned to {CHECKPOINT}")
+    if r["opponent"] != OPPONENT:
+        problems.append(f"opponent {r['opponent']!r}; the gate is pinned to {OPPONENT}")
     if r["decision_rule"] != DECISION_RULE:
         problems.append(f"decision rule {r['decision_rule']!r}, gate is for {DECISION_RULE!r}")
     if wins < GATE_MIN_WINS:

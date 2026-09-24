@@ -12,11 +12,12 @@ Usage:
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "models"))
+import tracking  # noqa: E402
+
 REQUIRED_TAGS = ("git_sha", "checkpoint_path")
 
 
@@ -25,12 +26,7 @@ def main() -> None:
     parser.add_argument("--kind", default=None, help="train | bc | eval | ab")
     args = parser.parse_args()
 
-    import mlflow
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI")
-                            or f"sqlite:///{REPO_ROOT / 'mlflow.db'}")
-    runs = mlflow.search_runs(experiment_names=["pokemon-showdown"],
-                              filter_string=f"tags.kind = '{args.kind}'" if args.kind else "",
-                              output_format="list", order_by=["attributes.start_time ASC"])
+    runs = tracking.find_runs(args.kind)
 
     bad = 0
     for r in runs:

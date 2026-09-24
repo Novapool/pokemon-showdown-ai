@@ -37,15 +37,10 @@ from ladder_analysis import newcombe_diff, required_n, wilson  # noqa: E402
 
 def _mlflow_counts(ref: str) -> tuple[int, int]:
     """(wins, battles) of the tracked eval run whose id starts with `ref`."""
-    import os
-    import mlflow
-    repo = Path(__file__).resolve().parent.parent
-    mlflow.set_tracking_uri(os.environ.get("MLFLOW_TRACKING_URI")
-                            or f"sqlite:///{repo / 'mlflow.db'}")
-    runs = [r for r in mlflow.search_runs(experiment_names=["pokemon-showdown"],
-                                          filter_string="tags.kind = 'eval'",
-                                          output_format="list")
-            if r.info.run_id.startswith(ref)]
+    # Imported here so the counts-only path stays stdlib-only.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "models"))
+    import tracking
+    runs = [r for r in tracking.find_runs("eval") if r.info.run_id.startswith(ref)]
     if len(runs) != 1:
         raise SystemExit(f"mlflow:{ref} matched {len(runs)} eval runs; need exactly 1")
     m = runs[0].data.metrics
