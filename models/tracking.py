@@ -88,21 +88,33 @@ def sha256(path) -> str:
 
 
 class _Run:
-    """Handle yielded by run(); every method is a no-op when not tracking."""
+    """Handle yielded by run(); every method is a no-op when not tracking.
+
+    A logging failure (e.g. the home box's SSH tunnel to the Mac's store
+    dropping) warns once and disables tracking for the rest of the run — a
+    tracking hiccup must never kill a multi-hour training job.
+    """
 
     def __init__(self, mlflow=None):
         self._mlflow = mlflow
         self.run_id = mlflow.active_run().info.run_id if mlflow else None
 
+    def _call(self, fn, *args, **kwargs) -> None:
+        if not self._mlflow:
+            return
+        try:
+            fn(*args, **kwargs)
+        except Exception as e:  # noqa: BLE001 — any store failure, by design
+            print(f"[tracking] MLflow logging failed, disabled for this run: {e}", flush=True)
+            self._mlflow = None
+
     def log_metrics(self, metrics: dict, step: int | None = None) -> None:
-        if self._mlflow:
-            clean = {k: float(v) for k, v in metrics.items()
-                     if v is not None and np.isfinite(v)}
-            self._mlflow.log_metrics(clean, step=step)
+        clean = {k: float(v) for k, v in metrics.items()
+                 if v is not None and np.isfinite(v)}
+        self._call(lambda: self._mlflow.log_metrics(clean, step=step))
 
     def set_tags(self, tags: dict) -> None:
-        if self._mlflow:
-            self._mlflow.set_tags({k: str(v) for k, v in tags.items()})
+        self._call(lambda: self._mlflow.set_tags({k: str(v) for k, v in tags.items()}))
 
 
 @contextmanager
