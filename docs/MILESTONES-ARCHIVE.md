@@ -3951,8 +3951,9 @@ Part 6 in commit `dcc2291c7`, before the gate was enabled in `1e2ddbb5d`.
 - **Sizing:** from a no-gate [timing run](https://github.com/Novapool/pokemon-showdown-ai/actions/runs/36067661716)
   (17.9 battles/s on a 4-vCPU runner, win rate not read). The job takes about 7
   min end to end.
-- **Clean-code CI runs** landed at 77.40%, 77.26%, 77.58% and 76.44%, all on
-  the Mac baseline.
+- **Clean-code CI runs** landed at 77.40%, 77.26%, 77.58%, 76.44%, 77.60% and
+  75.98%, all passing. The lowest is z≈−2.1 from the baseline and ~1pp above the
+  bar, which is ordinary noise at this n.
 
 **Gate (c) ✅ — BACKTEST, not an organic catch.** No genuine regression
 surfaced during the work. Instead, draft PR #2 re-introduced the documented

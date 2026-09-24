@@ -321,7 +321,7 @@ Gate results:
   includes 0. M9 2c's −8.3pp reappears as **−8.2pp [−10.0, −6.3]**.
 - **(b)** M7 greedy vs Random at n=5,000, pass iff ≥ 3,751 wins (75.02%). It was
   pre-registered before the gate was enabled: ≤ 0.1% false-fail, 99% power
-  against drops ≥ 3.7pp, ~7 min per run. Clean runs read 76.4–77.6%.
+  against drops ≥ 3.7pp, ~7 min per run. Six clean runs read 76.0–77.6%.
 - **(c) Backtest, not an organic catch.** Re-introducing the fixed
   greedy-decoding bug (`414966b14`) on draft PR #2 went **red** at 70.72% /
   72.20%. The revert went **green** at 77.58% / 76.44%.

@@ -62,7 +62,7 @@ Measured, with confidence intervals, at sample sizes that support the claim.
 - **Training and eval are reproducible.** Re-running the 5M-step recipe lands
   within **0.6pp**, even across Mac → GPU. M13's tracked re-evaluations
   reproduced the ledger (M7 greedy 76.8% vs 77.7%; M9 2c −8.2pp vs −8.3pp), and
-  CI on Linux reads 76.4–77.6% against the Mac's 77.3%.
+  CI on Linux reads 76.0–77.6% (six clean runs) against the Mac's 77.3%.
 - **A better imitator can be a worse learner.** Randbats-only BC was a +5.6pp
   better mimic and finished 8.3pp worse after RL.
 - **There is no more Gen 1 human data to get.** The replay archive is exhausted.
