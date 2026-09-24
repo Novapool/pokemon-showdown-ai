@@ -12,21 +12,23 @@ Last updated: **2026-09-24**
 
 ---
 
-## Read this first: research is closed, an ops phase is open
+## Read this first: research is closed, the tooling is done
 
 **The ML research is finished.** The bounded finish ran to its end: M12's
 terminal gate passed, and M12 is closed. The answer on record is that the agent
 is **mediocre**, and the method that measured it is the durable output.
 
-**One bounded, non-ML milestone is open: M13, experiment tracking + CI.** It
-covers MLflow runs for training and eval, `--seed` and per-step metrics, and a
-GitHub Actions eval-smoke gate that fails the build when the shipping
-checkpoint's win rate regresses. It makes the evaluation discipline mechanical.
-It does not try to make the agent stronger.
+**M13 (experiment tracking + CI) is also done, closed 2026-09-24 with its gate
+passed.**
+- Every training and eval run now lands in an MLflow store with its git SHA,
+  seed and checkpoint hash.
+- A GitHub Actions gate fails any push that regresses the shipping checkpoint.
+  It was proven by re-introducing a real, previously fixed bug: the build went
+  red, and the revert went green.
 
 **🚫 Do not add ML scope.** No new models, arms, hypotheses or schema work.
-M13 re-evaluates existing checkpoints. Anything interesting it turns up is a
-note for a future project, not a reason to reopen this one.
+Tracked re-evaluations of existing checkpoints are fine. Anything interesting
+they turn up is a note for a future project, not a reason to reopen this one.
 
 ## The one-paragraph version
 
@@ -55,10 +57,12 @@ Measured, with confidence intervals, at sample sizes that support the claim.
   rate falls 34.4% → 15.3% across opponent Elo 1000 → 1299, and 31.2% → 14.6%
   from 16–20 to 31–40 decisions.
 - **Greedy decoding beats sampling offline:** +7.8pp vs Random [+6.1, +9.5] and
-  +5.0pp vs DamageFirst, n=5,000/arm. It is the ladder default, and it is what the
-  M13 CI gate is powered to catch if it silently breaks.
-- **Training is reproducible.** Re-running the 5M-step recipe lands within
-  **0.6pp**, even across Mac → GPU. Differences >~3pp are real.
+  +5.0pp vs DamageFirst, n=5,000/arm. It is the ladder default. The CI gate
+  caught exactly this bug when it was re-introduced as a backtest.
+- **Training and eval are reproducible.** Re-running the 5M-step recipe lands
+  within **0.6pp**, even across Mac → GPU. M13's tracked re-evaluations
+  reproduced the ledger (M7 greedy 76.8% vs 77.7%; M9 2c −8.2pp vs −8.3pp), and
+  CI on Linux reads 76.4–77.6% against the Mac's 77.3%.
 - **A better imitator can be a worse learner.** Randbats-only BC was a +5.6pp
   better mimic and finished 8.3pp worse after RL.
 - **There is no more Gen 1 human data to get.** The replay archive is exhausted.
@@ -93,9 +97,13 @@ These are for a *future* project; M13 does not touch them.
 
 ## The live menu
 
-**Only M13.** Recommendation: build it as planned in `IN-PROGRESS.md` → Active
-Plan. The home box being offline does not block it. The ≥10 tracked runs use
-checkpoints already in git (M7, the M9 arms, `v3_valft`), and CI runs on GitHub.
+**Nothing is planned, and that is the recommendation.** Optional, if the home
+box comes back:
+- Recover the M12 Phase 5 ladder number.
+- Log tracked re-evaluations of the M12 and M11-width checkpoints. That is also
+  the first real test of the reverse-tunnel recipe.
+
+Neither changes any conclusion.
 
 ## What this project actually produced
 
@@ -103,5 +111,5 @@ The agent is mediocre. The method is not: pre-registered gates, sample-size
 widenings recorded rather than quietly applied, a dead-ends table, four
 self-issued corrections invalidating its own earlier numbers, and confounds
 caught in M4 and M8 by its own review. Most of the value is in
-`docs/EVALUATION-METHODOLOGY.md`, and M13 turns it into tooling: tracked runs
+`docs/EVALUATION-METHODOLOGY.md`, and M13 turned it into tooling: tracked runs
 and a pre-registered CI gate.

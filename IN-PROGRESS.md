@@ -6,109 +6,86 @@ Last updated: 2026-09-24
 
 ## Where we are
 
-**ML research is closed. One bounded ops milestone is open: M13, experiment
-tracking + CI.** M12 closed 2026-09-24 (gate passed 2026-08-06; Phase 5 ladder
-result unrecovered because the home box is offline). Full status:
+**ML research is closed. M13 (experiment tracking + CI) closed 2026-09-24 with
+its gate passed. There is no live milestone.** Status:
 `MILESTONES.md` → PROJECT STATUS. Orientation: `docs/WHERE-WE-ARE.md`.
 
 **🚫 Do not add ML scope.** No new models, training arms, hypotheses or schema
-work. M13 re-evaluates existing checkpoints and runs training only as a logging
-smoke test. Anything interesting it surfaces about the agent is a note, not a
-reason to reopen research.
+work. Tracked re-evaluations of existing checkpoints are fine. Anything
+interesting they surface is a note, not a reason to reopen research.
 
 **Shipping agent: unchanged M7 checkpoint** (`models/ppo/checkpoints/v3/ppo_step_5000002_final.pt`,
-tracked in git). Raw policy on randbats, n=5,000: **77.7% vs Random greedy,
-69.9% sampled**. That greedy number is the CI gate's baseline.
+tracked in git). Raw greedy vs Random: **77.26%** (7,726/10,000 pooled). That
+number is the CI gate's baseline.
 
 ---
 
-## Active Plan — M13: Experiment Tracking + CI
+## How the tooling works now (M13)
 
-Gate (a)/(b)/(c) is pre-registered in `MILESTONES.md` → M13. Work happens on
-branch `infra/tracking-ci`, merged by PR.
-
-```
-Step 1  close M12, refocus docs (master)            ✅ 2026-09-24
-        │
-2.1     MLflow store: SQLite on the Mac (mlflow.db, gitignored);
-        home box logs via reverse SSH tunnel to `mlflow server` on the Mac
-        │
-2.2     models/tracking.py (no-op without mlflow / with --no-track)
-        --seed + per-step metrics + run_meta.json in train.py / bc_pretrain_mlp.py
-        PPOAgent.update() returns a metrics dict
-        evaluate.py: tracked run + --json-out;  bot_eval_ab.py: --from-mlflow
-        │
-2.3     .github/workflows/eval-smoke.yml   (test.yml untouched)
-        1. workflow_dispatch timing run, n=500 → throughput only
-        2. threshold from the ledger baseline only (77.7%, n=5,000):
-           α≤0.1% false-fail, ≥99% power vs −7.8pp → planned n≈1,000, ~73.6%
-        3. pre-register in EVALUATION-METHODOLOGY.md, THEN enable the gate
-        │
-2.4     gate (c) BACKTEST: re-introduce the greedy-decoding bug (414966b14)
-        on a draft PR → red; revert → green; close unmerged; record URLs
-        │
-2.5     ≥10 tracked re-evaluations, Mac-local, raw policy, n=2,000:
-        {M7, m9seed, m9p2c, m9p2d, v3_valft} × {Random, DamageFirst} sampled
-        + M7 greedy × 2  (+ one ~20k-step train.py logging smoke)
-        │
-2.6     merge PR; M13 ledger entry; docs + Obsidian note; code-simplifier pass
-```
+- **Every train/BC/eval run is tracked** in `mlflow.db` at the repo root
+  (Mac-local, gitignored). Browse it with
+  `.venv/bin/mlflow ui --backend-store-uri sqlite:///mlflow.db`. Check it with
+  `.venv/bin/python scripts/mlflow_runs.py`. `--no-track` opts out, and every
+  script runs without mlflow installed.
+- **Always pass `--seed`** for anything you might want to repeat. It covers
+  python/numpy/torch. The Node battle RNG is not seeded, so evals are
+  independent draws by design.
+- **A/Bs from tracked runs:** `.venv/bin/python scripts/bot_eval_ab.py --arm base=mlflow:<id> --arm cand=mlflow:<id>`.
+- **Home-box runs** log to the Mac's store over a reverse tunnel
+  (`docs/MULTI-MACHINE.md` → MLflow). That route hasn't been exercised yet.
+- **CI:** `eval-smoke.yml` fails any push or PR where M7 greedy vs Random drops
+  below 3,751/5,000. The gate is pre-registered in `EVALUATION-METHODOLOGY.md`
+  Part 6. Change the doc first, dated, before touching the workflow or
+  `scripts/eval_smoke_gate.py`.
 
 ---
 
 ## Current Work
 
-Step 1 done: M12 closed, M10–M12 full text moved to `docs/MILESTONES-ARCHIVE.md`,
-M13 opened with its gate. Next: branch `infra/tracking-ci` and build 2.1–2.2.
+None. M13 is merged and closed.
 
 ---
 
 ## Blockers
 
-- **Home box offline (2026-09-24)** — SSH times out, Tailscale stopped on the
-  Mac. **Not blocking M13**: the ≥10 runs use Mac-local tracked checkpoints and
-  CI runs on GitHub. It blocks only the M12 Phase 5 recovery and the optional
-  M12 / M11-width re-evaluations. Before any home-box command, follow the
-  preflight in `CLAUDE.md`.
+- **Home box offline (since at least 2026-09-24).** It blocks only optional work:
+  M12 Phase 5 recovery, tracked re-evaluation of the M12 / M11-width
+  checkpoints, and the first end-to-end test of the tunnel. Before any home-box
+  command, follow the preflight in `CLAUDE.md`.
 - **Upstream `test.yml` is red on every push** (`npm ci`: `package-lock.json`
-  out of sync — missing `pg@8.22.0`). Pre-existing, left alone by decision;
-  `eval-smoke.yml` uses `npm install` instead so it doesn't inherit it.
+  out of sync, missing `pg@8.22.0`). Pre-existing and left alone by decision.
+  `eval-smoke.yml` uses `npm install`, so it's unaffected.
 
 ---
 
 ## Next Steps
 
-1. Branch `infra/tracking-ci`; add `mlflow` dependency; `models/tracking.py`.
-2. Wire `--seed`, per-step metrics, `run_meta.json` into `train.py` and
-   `bc_pretrain_mlp.py`; tracked runs + `--json-out` in `evaluate.py`;
-   `--from-mlflow` in `bot_eval_ab.py`.
-3. Log the ≥10 re-evaluations (2.5); check M7 sampled vs Random lands within CI
-   of the ledger's 69.9%.
-4. `eval-smoke.yml`: timing run → pre-register n + threshold → enable gate →
-   green on the PR.
-5. Backtest PR (2.4) → red → green. Record URLs.
-6. Merge; close M13 per the lifecycle rule.
+Nothing is planned. Optional, if the home box comes back:
+1. Recover M12 Phase 5 (recipe in `MILESTONES.md` → M12). This gives a
+   standalone number.
+2. Run tracked n=5,000 re-evaluations of `m12/ppo_step_5000005_final.pt`
+   (`--format gen1ou`) and `m11_h128` / `m11_h512`, which exercises the tunnel
+   recipe.
 
 ---
 
 ## Recently Completed
 
-- **M12 closed (2026-09-24).** Phase 5 recorded as **unrecovered, no number
-  claimed**. It ran on the home box from 2026-08-06 (`--run-id m12-ladder`,
-  n=356 target), but the box is offline and no `m12-ladder` rows exist on the
-  Mac. Recovery recipe in `MILESTONES.md` → M12. Project status changed from
-  "bounded finish / archive" to "ML research closed; reproducibility & ops
+- **M13 — experiment tracking + CI (✅ 2026-09-24, PR #1).** Gate passed:
+  - **(a)** 12 tracked n=5,000 re-evaluations, which replicate the ledger (M7
+    greedy vs Random 76.8% vs 77.7%; m9p2c −8.2pp vs the ledger's −8.3pp).
+  - **(b)** The CI gate was pre-registered before it was enabled.
+  - **(c)** Backtest on PR #2: re-introducing the greedy-decoding bug went
+    **red** (70.72% / 72.20%), and the revert went **green**.
+
+  Record: `MILESTONES.md` → M13. Full detail: archive.
+- **M12 closed (2026-09-24).** Phase 5 is recorded as **unrecovered, no number
+  claimed**. Project status became "ML research closed; reproducibility & ops
   phase open".
 - **M12 Phases 3 + 4 — PPO and the terminal gate (✅ 2026-08-06, home box).**
-  5M steps, M7 recipe, warm-started from `bc_mlp_m12.pt`; training-mix win rate
-  flat ~0.74 from 1M steps, no collapse. **Gate PASSED**, raw sampled policy,
-  n=5,000/opponent: **95.88% vs Random [95.29, 96.40]; 92.20% vs DamageFirst
-  [91.42, 92.91]**. Not comparable to M7's randbats numbers (mirror roster).
-  The 0-draw count is unconfirmed. Checkpoint
-  `models/ppo/checkpoints/m12/ppo_step_5000005_final.pt` is **home box only**.
-- **M12 Phase 2 — BC retrain (✅ 2026-08-06, home box).** M7 recipe verbatim;
-  53.1% randbats / 55.1% gen1ou val acc. A replication of M7 Job 4.1, not an
-  improvement. `bc_mlp_m12.pt` is home box only.
+  Gate PASSED: 95.88% vs Random, 92.20% vs DamageFirst, n=5,000, raw sampled.
+  Not comparable to M7's randbats numbers (mirror roster). The checkpoint is
+  home box only.
 
 ---
 
